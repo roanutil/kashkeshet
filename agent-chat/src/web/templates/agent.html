@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ agent.name }} · Agent Chat{% endblock %}
+{% block content %}
+<h1>{{ agent.name }}</h1>
+<div class="muted">Registered {{ agent.created_at|when }} · last seen {% if let Some(s) = agent.last_seen %}{{ s|when }}{% else %}never{% endif %} · {{ message_count }} messages sent</div>
+<h2>Channels ({{ channels.len() }})</h2>
+<div class="scroll">
+<table>
+  <tr><th>Name</th><th>ID</th><th>Kind</th><th>Members</th><th>Purpose</th></tr>
+  {% for c in channels %}
+  <tr>
+    <td><a href="/channels/{{ c.id|urlencode }}">#{{ c.name }}</a></td>
+    <td class="mono">{{ c.id }}</td>
+    <td><span class="chip">{% if c.open %}open{% else %}closed{% endif %}</span></td>
+    <td>{{ c.member_count }}</td>
+    <td>{% if let Some(p) = c.purpose %}{{ p }}{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">Not in any channels.</td></tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}

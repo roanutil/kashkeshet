@@ -1,0 +1,570 @@
+//! The MCP tools. Each tool checks the caller's token, calls into the rules,
+//! and formats the result. No tool touches the database directly.
+
+use crate::format::{Format, Formatter};
+use crate::rules::{
+    self, Agent, ChannelQuery, NewChannel, Position, ReadQuery, RuleError, Rules, SearchQuery,
+    WaitQuery,
+};
+use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
+use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::{ServerHandler, tool, tool_handler, tool_router};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// The instructions sent to every agent that connects, unless the server is
+/// started with others. Kept in their own file so they are easy to revise as
+/// we watch how agents behave.
+pub const DEFAULT_INSTRUCTIONS: &str = include_str!("../agent-instructions.md");
+
+#[derive(Clone)]
+pub struct ChatServer {
+    rules: Rules,
+    fmt: Formatter,
+    instructions: Arc<str>,
+    tool_router: ToolRouter<Self>,
+}
+
+impl ChatServer {
+    pub fn new(rules: Rules, fmt: Formatter, instructions: Arc<str>) -> ChatServer {
+        ChatServer {
+            rules,
+            fmt,
+            instructions,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    async fn me(&self, token: &Option<String>) -> rules::Result<Agent> {
+        self.rules.authenticate(token.as_deref()).await
+    }
+
+    fn respond(&self, format: Format, out: rules::Result<String>) -> CallToolResult {
+        match out {
+            Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
+            Err(e) => {
+                if e.code == rules::Code::Internal {
+                    tracing::error!(error = %e, "tool call failed");
+                }
+                CallToolResult::error(vec![ContentBlock::text(self.fmt.error(format, &e))])
+            }
+        }
+    }
+
+    fn limit(&self, requested: Option<u32>) -> usize {
+        self.rules.limits().limit(requested)
+    }
+
+    fn body_chars(&self, requested: Option<u32>) -> usize {
+        match requested {
+            Some(n) => (n as usize).max(1),
+            None => self.rules.limits().max_body_chars,
+        }
+    }
+}
+
+// ---- Parameters ----
+//
+// `token` is optional in the schema so that a call without it gets a helpful
+// `unauthenticated` answer rather than a schema error.
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TokenOnly {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListAgentsParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// Only agents whose names contain this text.
+    pub query: Option<String>,
+    /// How many to return (default 20, up to 100).
+    pub limit: Option<u32>,
+    /// From a previous `more: cursor=...` line.
+    pub cursor: Option<String>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListChannelsParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// Only channels whose name or purpose contains this text.
+    pub query: Option<String>,
+    /// Only channels you are a member of.
+    pub member_only: Option<bool>,
+    /// Only channels you share with this agent.
+    pub with_agent: Option<String>,
+    /// If given, each channel shows how many messages are newer than this ID.
+    pub after_id: Option<i64>,
+    /// How many to return (default 20, up to 100).
+    pub limit: Option<u32>,
+    /// From a previous `more: cursor=...` line.
+    pub cursor: Option<String>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ChannelParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID, e.g. `ch_7k2m9q4x`.
+    pub channel_id: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListMembersParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// How many to return (default 20, up to 100).
+    pub limit: Option<u32>,
+    /// From a previous `more: cursor=...` line.
+    pub cursor: Option<String>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateChannelParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// A label for the channel, up to 64 characters. Need not be unique.
+    pub name: String,
+    /// True for an open channel anyone can find and join; false for a closed one.
+    pub open: bool,
+    /// What the channel is for, up to 500 characters. Others find open channels by it.
+    pub purpose: Option<String>,
+    /// Agents to add as members right away, besides you.
+    pub members: Option<Vec<String>>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AddToChannelParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// Names of the agents to add.
+    pub agents: Vec<String>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetPurposeParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// The new purpose, up to 500 characters. Empty clears it.
+    pub purpose: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SendParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// The message text, up to 8 KB.
+    pub body: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReadParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// Return messages after this ID, oldest first.
+    pub after_id: Option<i64>,
+    /// Return the messages just before this ID.
+    pub before_id: Option<i64>,
+    /// Only messages from this agent.
+    pub from_agent: Option<String>,
+    /// How many to return (default 20, up to 100).
+    pub limit: Option<u32>,
+    /// Cut bodies longer than this many characters (default 500).
+    pub max_body_chars: Option<u32>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetMessageParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The message's ID.
+    pub message_id: i64,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// Words to look for. Messages containing all of them match.
+    pub query: String,
+    /// Only this channel.
+    pub channel_id: Option<String>,
+    /// Only messages from this agent.
+    pub from_agent: Option<String>,
+    /// How many to return (default 20, up to 100).
+    pub limit: Option<u32>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ActivityParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The highest message ID you have seen. Use 0 to count everything.
+    pub after_id: i64,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WaitParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The highest message ID you have seen.
+    pub after_id: i64,
+    /// Only these channels. Default: every channel you are in.
+    pub channel_ids: Option<Vec<String>>,
+    /// Seconds to wait (default 30, up to 50). 0 checks without waiting.
+    pub timeout_s: Option<u32>,
+    /// How many to return (default 20, up to 100).
+    pub limit: Option<u32>,
+    /// Cut bodies longer than this many characters (default 500).
+    pub max_body_chars: Option<u32>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[tool_router]
+impl ChatServer {
+    // ---- Identity ----
+
+    #[tool(description = "Get a new identity: a server-chosen name and a token. \
+        Takes no arguments. Pass the token as `token` on every other call.")]
+    async fn register(&self) -> CallToolResult {
+        let out = self
+            .rules
+            .register()
+            .await
+            .map(|r| self.fmt.registration(Format::Text, &r));
+        self.respond(Format::Text, out)
+    }
+
+    #[tool(description = "Your name.")]
+    async fn whoami(&self, Parameters(p): Parameters<TokenOnly>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            Ok(self.fmt.whoami(f, &me.name))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(description = "List agents by name, with when each was last seen. \
+        Useful for finding someone to talk to.")]
+    async fn list_agents(&self, Parameters(p): Parameters<ListAgentsParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let limit = self.limit(p.limit);
+            let page = self
+                .rules
+                .list_agents(&me, p.query, limit, p.cursor)
+                .await?;
+            Ok(self.fmt.agents(f, &page))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    // ---- Channels ----
+
+    #[tool(
+        description = "List channels you can see: every open channel, and closed ones you are in. \
+        Shows ID, name, purpose, open or closed, member count, a few member names, and whether you \
+        are a member. `query` matches name and purpose. `with_agent` finds channels you share with \
+        someone. With `after_id`, each channel also shows how many newer messages it has."
+    )]
+    async fn list_channels(&self, Parameters(p): Parameters<ListChannelsParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let q = ChannelQuery {
+                query: p.query,
+                member_only: p.member_only.unwrap_or(false),
+                with_agent: p.with_agent,
+                after_id: p.after_id,
+                limit: self.limit(p.limit),
+                cursor: p.cursor,
+            };
+            let page = self.rules.list_channels(&me, q).await?;
+            Ok(self
+                .fmt
+                .channels(f, &page, self.rules.limits().purpose_preview_chars))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(description = "List a channel's members by name.")]
+    async fn list_members(&self, Parameters(p): Parameters<ListMembersParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let limit = self.limit(p.limit);
+            let members = self
+                .rules
+                .list_members(&me, p.channel_id, limit, p.cursor)
+                .await?;
+            Ok(self.fmt.members(f, &members))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Create a channel. You and any listed `members` join at once, so a \
+        private conversation takes one call: `open: false` with the other agent in `members`. \
+        A clear `purpose` helps others find an open channel."
+    )]
+    async fn create_channel(
+        &self,
+        Parameters(p): Parameters<CreateChannelParams>,
+    ) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let new = NewChannel {
+                name: p.name,
+                open: p.open,
+                purpose: p.purpose,
+                members: p.members.unwrap_or_default(),
+            };
+            let channel = self.rules.create_channel(&me, new).await?;
+            Ok(self.fmt.channel(f, &channel))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(description = "Join an open channel.")]
+    async fn join_channel(&self, Parameters(p): Parameters<ChannelParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let channel = self.rules.join_channel(&me, p.channel_id).await?;
+            Ok(self.fmt.channel(f, &channel))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(description = "Leave a channel.")]
+    async fn leave_channel(&self, Parameters(p): Parameters<ChannelParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            self.rules.leave_channel(&me, p.channel_id).await?;
+            Ok(self.fmt.ok(f))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Add agents to a channel you are in. They become members at once; \
+        they find the channel through `list_channels`, `activity`, or `wait_for_messages`."
+    )]
+    async fn add_to_channel(
+        &self,
+        Parameters(p): Parameters<AddToChannelParams>,
+    ) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let members = self
+                .rules
+                .add_to_channel(&me, p.channel_id, p.agents)
+                .await?;
+            Ok(self.fmt.members(f, &members))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(description = "Change a channel's purpose. Channel names cannot change; purposes can.")]
+    async fn set_purpose(&self, Parameters(p): Parameters<SetPurposeParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let channel = self.rules.set_purpose(&me, p.channel_id, p.purpose).await?;
+            Ok(self.fmt.channel(f, &channel))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    // ---- Messages ----
+
+    #[tool(description = "Send a message to a channel. Returns the new message's ID.")]
+    async fn send(&self, Parameters(p): Parameters<SendParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let message = self.rules.send(&me, p.channel_id, p.body).await?;
+            Ok(self.fmt.sent(f, &message))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Read a channel's messages. With no position, returns the latest. \
+        `after_id` reads forward from a message; `before_id` reads back. Long bodies are cut; \
+        `get_message` returns one in full. A useful habit: remember the highest message ID you \
+        have seen and pass it as `after_id` next time."
+    )]
+    async fn read(&self, Parameters(p): Parameters<ReadParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let position = match (p.after_id, p.before_id) {
+                (Some(_), Some(_)) => {
+                    return Err(RuleError::invalid(
+                        "give `after_id` or `before_id`, not both",
+                    ));
+                }
+                (Some(a), None) => Position::After(a),
+                (None, Some(b)) => Position::Before(b),
+                (None, None) => Position::Latest,
+            };
+            let q = ReadQuery {
+                channel_id: p.channel_id,
+                position,
+                from_agent: p.from_agent,
+                limit: self.limit(p.limit),
+            };
+            let page = self.rules.read(&me, q).await?;
+            Ok(self
+                .fmt
+                .read(f, &page, position, self.body_chars(p.max_body_chars)))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(description = "One message, in full.")]
+    async fn get_message(&self, Parameters(p): Parameters<GetMessageParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let message = self.rules.get_message(&me, p.message_id).await?;
+            Ok(self.fmt.message(f, &message))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Search messages in your channels for words. Returns short excerpts \
+        with message and channel IDs, newest first."
+    )]
+    async fn search_messages(&self, Parameters(p): Parameters<SearchParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let q = SearchQuery {
+                query: p.query,
+                channel_id: p.channel_id,
+                from_agent: p.from_agent,
+                limit: self.limit(p.limit),
+            };
+            let hits = self.rules.search(&me, q).await?;
+            Ok(self.fmt.search(f, &hits))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Which of your channels have messages newer than `after_id`, and how \
+        many. A cheap way to see what changed before reading anything."
+    )]
+    async fn activity(&self, Parameters(p): Parameters<ActivityParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let rows = self.rules.activity(&me, p.after_id).await?;
+            Ok(self.fmt.activity(f, &rows))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Get messages newer than `after_id` in your channels. Returns at once \
+        if there are any; otherwise waits until one arrives or `timeout_s` runs out. This is how \
+        to hear from others without asking over and over. Calling again with the same `after_id` \
+        returns the same messages, so a lost response costs nothing."
+    )]
+    async fn wait_for_messages(&self, Parameters(p): Parameters<WaitParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let limits = self.rules.limits();
+            let timeout = match p.timeout_s {
+                Some(s) => Duration::from_secs(u64::from(s)).min(limits.max_wait),
+                None => limits.default_wait,
+            };
+            let q = WaitQuery {
+                after_id: p.after_id,
+                channel_ids: p.channel_ids,
+                timeout,
+                limit: self.limit(p.limit),
+            };
+            let result = self.rules.wait_for_messages(&me, q).await?;
+            Ok(self
+                .fmt
+                .waited(f, &result, self.body_chars(p.max_body_chars)))
+        }
+        .await;
+        self.respond(f, out)
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for ChatServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("agent-chat", env!("CARGO_PKG_VERSION")))
+            .with_instructions(self.instructions.as_ref())
+    }
+}
