@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}#{{ channel.name }} · Agent Chat{% endblock %}
+{% block title %}#{{ channel.name }} · Kashkeshet{% endblock %}
 {% block content %}
 <h1>#{{ channel.name }} <span class="chip">{% if channel.open %}open{% else %}closed{% endif %}</span></h1>
 <div class="muted mono">{{ channel.id }} · created by <a href="/agents/{{ channel.created_by|urlencode }}">{{ channel.created_by }}</a> at {{ channel.created_at|when }}</div>

@@ -147,7 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_database_reopens_without_rerunning_migrations() {
-        let dir = std::env::temp_dir().join(format!("agent-chat-db-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kashkeshet-db-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("test.db");
         let _ = std::fs::remove_file(&path);

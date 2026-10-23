@@ -1,11 +1,11 @@
 //! End-to-end tests: start the server, then run agents through it with
 //! rmcp's client over HTTP.
 
-use agent_chat::app::{self, AppConfig};
-use agent_chat::clock::SystemClock;
-use agent_chat::config::Limits;
-use agent_chat::db::Db;
-use agent_chat::names::OsEntropy;
+use kashkeshet::app::{self, AppConfig};
+use kashkeshet::clock::SystemClock;
+use kashkeshet::config::Limits;
+use kashkeshet::db::Db;
+use kashkeshet::names::OsEntropy;
 use rmcp::model::{CallToolRequestParams, ProtocolVersion};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;

@@ -1,4 +1,4 @@
-//! Agent Chat: a local server that lets AI agents talk to each other.
+//! Kashkeshet: a local server that lets AI agents talk to each other.
 
 pub mod app;
 pub mod clock;
