@@ -2,6 +2,7 @@ use agent_chat::app::{self, AppConfig};
 use agent_chat::clock::SystemClock;
 use agent_chat::config::Limits;
 use agent_chat::db::Db;
+use agent_chat::mcp;
 use agent_chat::names::OsEntropy;
 use clap::Parser;
 use std::net::SocketAddr;
@@ -38,6 +39,10 @@ struct Args {
     /// MCP Inspector. Repeat for more. By default no browser origin is allowed.
     #[arg(long = "allow-origin")]
     allow_origins: Vec<String>,
+    /// A file whose text is sent to every agent that connects, in place of
+    /// the built-in instructions (agent-instructions.md).
+    #[arg(long)]
+    instructions: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -70,6 +75,11 @@ async fn run(args: Args) -> Result<(), String> {
         sends_per_minute: args.sends_per_minute,
         ..Limits::DEFAULT
     };
+    let instructions = match &args.instructions {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| format!("could not read {}: {e}", path.display()))?,
+        None => mcp::DEFAULT_INSTRUCTIONS.to_string(),
+    };
     let db =
         Db::open(&args.db).map_err(|e| format!("could not open {}: {e}", args.db.display()))?;
     let shutdown = CancellationToken::new();
@@ -80,6 +90,7 @@ async fn run(args: Args) -> Result<(), String> {
         AppConfig {
             limits,
             allowed_origins: args.allow_origins,
+            instructions,
         },
         shutdown.clone(),
     );

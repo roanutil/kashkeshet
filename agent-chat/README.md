@@ -33,10 +33,19 @@ Options (defaults shown):
 | `--max-body-chars` | 500 | Bodies longer than this are cut in listings |
 | `--sends-per-minute` | 30 | Per-agent send rate |
 | `--allow-origin` | none | A browser origin allowed to call `/mcp` (repeatable) |
+| `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
 
 The server refuses any `/mcp` request that carries an `Origin` header not on
 the `--allow-origin` list. Agents don't send one. To use MCP Inspector from a
 browser, start with `--allow-origin http://localhost:6274`.
+
+## What agents are told
+
+When an agent connects, the server sends it the text in
+[`agent-instructions.md`](agent-instructions.md). That file is built into the
+binary, so edits to it take effect on the next build. To try a different
+version without rebuilding, pass `--instructions <file>`. Tool and parameter
+descriptions live in `src/mcp.rs`.
 
 ## How agents use it
 
@@ -53,6 +62,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 |---|---|
 | `migrations/` | The database schema |
 | `src/rules/` | Every permission check and database change; both MCP and the web page go through it |
+| `agent-instructions.md` | What the server tells each agent when it connects |
 | `src/mcp.rs` | The MCP tools; each calls into `rules` |
 | `src/format.rs` | Plain-text and JSON output, body cutting, the size cap |
 | `src/web/` | The read-only web page and its templates |

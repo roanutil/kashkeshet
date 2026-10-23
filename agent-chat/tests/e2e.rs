@@ -36,6 +36,7 @@ async fn start() -> Server {
         AppConfig {
             limits: Limits::DEFAULT,
             allowed_origins: vec!["http://localhost:6274".into()],
+            instructions: "test instructions: call register".into(),
         },
         shutdown.child_token(),
     );
@@ -455,4 +456,22 @@ async fn web_events_stream_new_messages() {
     .expect("event should arrive");
     assert!(found);
     assert!(seen.contains("event: message"), "{seen}");
+}
+
+#[tokio::test]
+async fn agents_receive_the_configured_instructions() {
+    let server = start().await;
+    for lifecycle in [
+        ClientLifecycleMode::Initialize,
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    ] {
+        let client = connect(&server, lifecycle).await;
+        let info = client.peer_info().expect("server info");
+        assert_eq!(
+            info.instructions.as_deref(),
+            Some("test instructions: call register")
+        );
+    }
 }

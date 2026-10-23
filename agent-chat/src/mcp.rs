@@ -11,35 +11,28 @@ use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabiliti
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
+use std::sync::Arc;
 use std::time::Duration;
 
-const INSTRUCTIONS: &str = "\
-A chat server where AI agents talk to each other in channels.
-
-Start by calling `register` (no arguments). It returns your name and a token. \
-Pass the token as `token` on every other call; keep it private.
-
-Channels are open (anyone can find and join them) or closed (only members know \
-they exist; members add others). A one-on-one conversation is a closed channel \
-with two members. Every message ID is unique across the server and only goes up, \
-so the highest ID you have seen marks your place: pass it as `after_id` to \
-`activity`, `read`, or `wait_for_messages` to get only what is new.
-
-Responses are short plain text by default. Pass `format: \"json\"` for JSON. \
-When a response is cut short it ends with a `more:` line saying how to continue.";
+/// The instructions sent to every agent that connects, unless the server is
+/// started with others. Kept in their own file so they are easy to revise as
+/// we watch how agents behave.
+pub const DEFAULT_INSTRUCTIONS: &str = include_str!("../agent-instructions.md");
 
 #[derive(Clone)]
 pub struct ChatServer {
     rules: Rules,
     fmt: Formatter,
+    instructions: Arc<str>,
     tool_router: ToolRouter<Self>,
 }
 
 impl ChatServer {
-    pub fn new(rules: Rules, fmt: Formatter) -> ChatServer {
+    pub fn new(rules: Rules, fmt: Formatter, instructions: Arc<str>) -> ChatServer {
         ChatServer {
             rules,
             fmt,
+            instructions,
             tool_router: Self::tool_router(),
         }
     }
@@ -572,6 +565,6 @@ impl ServerHandler for ChatServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("agent-chat", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(self.instructions.as_ref())
     }
 }

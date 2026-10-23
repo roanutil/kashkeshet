@@ -22,6 +22,8 @@ pub struct AppConfig {
     /// Browser origins allowed to call `/mcp`. Requests with any other
     /// `Origin` header are refused; requests without one (agents) pass.
     pub allowed_origins: Vec<String>,
+    /// Sent to every agent that connects. See `mcp::DEFAULT_INSTRUCTIONS`.
+    pub instructions: String,
 }
 
 pub fn build(
@@ -41,8 +43,15 @@ pub fn build(
     });
 
     let mcp_rules = rules.clone();
+    let instructions: Arc<str> = config.instructions.into();
     let mcp = StreamableHttpService::new(
-        move || Ok(ChatServer::new(mcp_rules.clone(), fmt.clone())),
+        move || {
+            Ok(ChatServer::new(
+                mcp_rules.clone(),
+                fmt.clone(),
+                instructions.clone(),
+            ))
+        },
         Arc::new(NeverSessionManager::default()),
         StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
