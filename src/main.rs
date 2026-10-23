@@ -1,10 +1,10 @@
-use agent_chat::app::{self, AppConfig};
-use agent_chat::clock::SystemClock;
-use agent_chat::config::Limits;
-use agent_chat::db::Db;
-use agent_chat::mcp;
-use agent_chat::names::OsEntropy;
 use clap::Parser;
+use kashkeshet::app::{self, AppConfig};
+use kashkeshet::clock::SystemClock;
+use kashkeshet::config::Limits;
+use kashkeshet::db::Db;
+use kashkeshet::mcp;
+use kashkeshet::names::OsEntropy;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 #[command(version)]
 struct Args {
     /// The SQLite database file. Created if missing.
-    #[arg(long, default_value = "./agent-chat.db")]
+    #[arg(long, default_value = "./kashkeshet.db")]
     db: PathBuf,
     /// Address to listen on. Must be a loopback address.
     #[arg(long, default_value = "127.0.0.1:7420")]
@@ -98,7 +98,7 @@ async fn run(args: Args) -> Result<(), String> {
         .await
         .map_err(|e| format!("could not listen on {}: {e}", args.bind))?;
     tracing::info!(
-        "agent-chat {} listening: web page http://{}/ , MCP http://{}/mcp , database {}",
+        "kashkeshet {} listening: web page http://{}/ , MCP http://{}/mcp , database {}",
         env!("CARGO_PKG_VERSION"),
         args.bind,
         args.bind,

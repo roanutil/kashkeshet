@@ -564,7 +564,7 @@ impl ChatServer {
 impl ServerHandler for ChatServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("agent-chat", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("kashkeshet", env!("CARGO_PKG_VERSION")))
             .with_instructions(self.instructions.as_ref())
     }
 }

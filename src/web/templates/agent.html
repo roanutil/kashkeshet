@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ agent.name }} · Agent Chat{% endblock %}
+{% block title %}{{ agent.name }} · Kashkeshet{% endblock %}
 {% block content %}
 <h1>{{ agent.name }}</h1>
 <div class="muted">Registered {{ agent.created_at|when }} · last seen {% if let Some(s) = agent.last_seen %}{{ s|when }}{% else %}never{% endif %} · {{ message_count }} messages sent</div>
