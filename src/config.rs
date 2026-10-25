@@ -3,7 +3,6 @@
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
-use tracing::level_filters::LevelFilter;
 
 // ---- Fixed settings ----
 //
@@ -192,11 +191,56 @@ pub const DEFAULT_LOG_LINES: usize = 100;
 
 // ---- Logging ----
 
-/// The level logged for kkt's own code.
-pub const LOG_LEVEL_OWN: LevelFilter = LevelFilter::INFO;
-/// The level logged for the libraries kkt uses. Above INFO, because the MCP
-/// library logs several lines for every request.
-pub const LOG_LEVEL_LIBRARIES: LevelFilter = LevelFilter::WARN;
+/// How much is logged: the named level and everything more severe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    /// Every level, least verbose first, as named in flags and the config file.
+    pub const ALL: [(LogLevel, &'static str); 5] = [
+        (LogLevel::Error, "error"),
+        (LogLevel::Warn, "warn"),
+        (LogLevel::Info, "info"),
+        (LogLevel::Debug, "debug"),
+        (LogLevel::Trace, "trace"),
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
+
+    /// The level named `text`, or an error naming `setting` and the choices.
+    pub fn parse(setting: &'static str, text: &str) -> Result<LogLevel, InvalidSetting> {
+        LogLevel::ALL
+            .iter()
+            .find(|(_, name)| *name == text)
+            .map(|(level, _)| *level)
+            .ok_or_else(|| {
+                InvalidSetting::new(
+                    setting,
+                    format!("must be one of error, warn, info, debug, trace, not {text:?}"),
+                )
+            })
+    }
+}
+
+/// The level logged for kkt's own code (`log_level`).
+pub const DEFAULT_LOG_LEVEL: LogLevel = LogLevel::Info;
+/// The level logged for the libraries kkt uses (`dependency_log_level`).
+/// Above info, because the MCP library logs several lines for every request.
+pub const DEFAULT_DEPENDENCY_LOG_LEVEL: LogLevel = LogLevel::Warn;
 /// The targets of kkt's own code: the library and the `kkt` binary.
 pub const LOG_OWN_TARGETS: &[&str] = &["kashkeshet", "kkt"];
 /// Smallest allowed [`LogPolicy::max_bytes`].
@@ -594,5 +638,16 @@ mod tests {
         for (policy, name) in cases {
             assert_eq!(policy.check().map_err(|e| e.name), Err(name));
         }
+    }
+
+    #[test]
+    fn log_levels_parse_by_name_and_refuse_others() {
+        for (level, name) in LogLevel::ALL {
+            assert_eq!(LogLevel::parse("log_level", name), Ok(level));
+            assert_eq!(level.name(), name);
+        }
+        let err = LogLevel::parse("dependency_log_level", "verbose").expect_err("unknown");
+        assert_eq!(err.name, "dependency_log_level");
+        assert!(LogLevel::parse("log_level", "INFO").is_err());
     }
 }

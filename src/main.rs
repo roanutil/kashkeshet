@@ -4,8 +4,8 @@ use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clients::{self, Client, Setup};
 use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::{
-    self, DEFAULT_BIND, InvalidSetting, LOG_LEVEL_LIBRARIES, LOG_LEVEL_OWN, LOG_OWN_TARGETS,
-    Limits, LogPolicy,
+    self, DEFAULT_BIND, DEFAULT_DEPENDENCY_LOG_LEVEL, DEFAULT_LOG_LEVEL, InvalidSetting,
+    LOG_OWN_TARGETS, Limits, LogLevel, LogPolicy,
 };
 use kashkeshet::diagnostics;
 use kashkeshet::hosts::AllowedHosts;
@@ -21,6 +21,7 @@ use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tracing::level_filters::LevelFilter;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -253,6 +254,15 @@ struct ServeFlags {
     /// 30 days.
     #[arg(long)]
     log_file: Option<PathBuf>,
+    /// How much kkt's own code logs: error, warn, info, debug or trace
+    /// [default: info]
+    #[arg(long, value_parser = |text: &str| LogLevel::parse("log_level", text))]
+    log_level: Option<LogLevel>,
+    /// How much the libraries kkt uses (the MCP library, the web server)
+    /// log: error, warn, info, debug or trace. At info, the MCP library logs
+    /// several lines for every request [default: warn]
+    #[arg(long, value_parser = |text: &str| LogLevel::parse("dependency_log_level", text))]
+    dependency_log_level: Option<LogLevel>,
 }
 
 impl ServeFlags {
@@ -274,6 +284,8 @@ impl ServeFlags {
             access_key_file: self.access_key_file,
             no_access_key: self.no_access_key.then_some(true),
             log_file: self.log_file,
+            log_level: self.log_level,
+            dependency_log_level: self.dependency_log_level,
         }
     }
 }
@@ -285,7 +297,7 @@ async fn main() -> std::process::ExitCode {
     // `serve` starts logging once its settings say where the log goes.
     let logging = match &cli.command {
         Command::Serve { .. } => Ok(()),
-        _ => init_logging(None),
+        _ => init_logging(None, DEFAULT_LOG_LEVEL, DEFAULT_DEPENDENCY_LOG_LEVEL),
     };
     let result = match (logging, cli.command) {
         (Err(e), _) => Err(e),
@@ -295,7 +307,9 @@ async fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             // An error from before logging started still needs saying.
-            if tracing::dispatcher::has_been_set() || init_logging(None).is_ok() {
+            if tracing::dispatcher::has_been_set()
+                || init_logging(None, DEFAULT_LOG_LEVEL, DEFAULT_DEPENDENCY_LOG_LEVEL).is_ok()
+            {
                 tracing::error!("{e}");
             } else {
                 eprintln!("error: {e}");
@@ -455,12 +469,16 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
 }
 
 /// Sends the log to stdout, or to `log_file`, kept within
-/// [`LogPolicy::DEFAULT`]. kkt's own code logs at INFO; the libraries it
-/// uses only log warnings and errors.
-fn init_logging(log_file: Option<&Path>) -> Result<(), String> {
+/// [`LogPolicy::DEFAULT`]. kkt's own code logs at `own`, the libraries it
+/// uses at `dependencies`.
+fn init_logging(
+    log_file: Option<&Path>,
+    own: LogLevel,
+    dependencies: LogLevel,
+) -> Result<(), String> {
     let filter = LOG_OWN_TARGETS.iter().fold(
-        Targets::new().with_default(LOG_LEVEL_LIBRARIES),
-        |filter, target| filter.with_target(*target, LOG_LEVEL_OWN),
+        Targets::new().with_default(level_filter(dependencies)),
+        |filter, target| filter.with_target(*target, level_filter(own)),
     );
     let format = tracing_subscriber::fmt::layer().with_target(false);
     let started = match log_file {
@@ -488,6 +506,16 @@ fn init_logging(log_file: Option<&Path>) -> Result<(), String> {
         }
     };
     started.map_err(|e| format!("could not start logging: {e}"))
+}
+
+fn level_filter(level: LogLevel) -> LevelFilter {
+    match level {
+        LogLevel::Error => LevelFilter::ERROR,
+        LogLevel::Warn => LevelFilter::WARN,
+        LogLevel::Info => LevelFilter::INFO,
+        LogLevel::Debug => LevelFilter::DEBUG,
+        LogLevel::Trace => LevelFilter::TRACE,
+    }
 }
 
 /// The environment values that decide default paths.
@@ -532,7 +560,11 @@ async fn serve_from_config(
         .resolve(default_db, env.access_key_file())
         .map_err(|e| sources.invalid(e))?;
     let log_file = settings.log_file.clone();
-    init_logging(log_file.as_deref())?;
+    init_logging(
+        log_file.as_deref(),
+        settings.log_level,
+        settings.dependency_log_level,
+    )?;
     let served = serve(settings, &sources).await;
     if let (Some(file), Err(e)) = (&log_file, &served) {
         // Someone at a terminal reads stderr, not the log file.
@@ -699,6 +731,8 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         instructions,
         access_key,
         log_file,
+        log_level,
+        dependency_log_level,
     } = settings;
     config::check_bind(bind).map_err(|e| sources.invalid(e))?;
     limits.check().map_err(|e| sources.invalid(e))?;
@@ -724,6 +758,8 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         instructions,
         config_file: sources.file.as_ref().map(|(p, _)| p.display().to_string()),
         log_file: log_file.map(|p| p.display().to_string()),
+        log_level,
+        dependency_log_level,
     };
     Ok(Checked {
         db_path,

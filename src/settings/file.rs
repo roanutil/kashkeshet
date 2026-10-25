@@ -15,7 +15,7 @@
 //! value of the wrong kind is refused, naming the key.
 
 use super::{Env, ServeOptions};
-use crate::config::InvalidSetting;
+use crate::config::{InvalidSetting, LogLevel};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -49,6 +49,10 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
             }
             "no_access_key" => options.no_access_key = Some(value.boolean("no_access_key")?),
             "log_file" => options.log_file = Some(value.path("log_file", dir, env)?),
+            "log_level" => options.log_level = Some(value.log_level("log_level")?),
+            "dependency_log_level" => {
+                options.dependency_log_level = Some(value.log_level("dependency_log_level")?)
+            }
             _ => {
                 return Err(InvalidSetting::new(
                     "config",
@@ -90,6 +94,13 @@ impl Value {
             };
         }
         Ok(dir.join(text))
+    }
+
+    fn log_level(&self, name: &'static str) -> Result<LogLevel, InvalidSetting> {
+        LogLevel::parse(
+            name,
+            self.string(name, "a level in quotes, such as \"info\"")?,
+        )
     }
 
     fn boolean(&self, name: &'static str) -> Result<bool, InvalidSetting> {
@@ -169,6 +180,8 @@ mod tests {
             access_key_file = "/keys/kkt"
             no_access_key = false
             log_file = "~/logs/kkt.log"
+            log_level = "debug"
+            dependency_log_level = "info"
             "#,
         )
         .expect("valid file");
@@ -188,6 +201,8 @@ mod tests {
                 access_key_file: Some(PathBuf::from("/keys/kkt")),
                 no_access_key: Some(false),
                 log_file: Some(PathBuf::from("/home/sam/logs/kkt.log")),
+                log_level: Some(LogLevel::Debug),
+                dependency_log_level: Some(LogLevel::Info),
             }
         );
     }
@@ -213,6 +228,8 @@ mod tests {
             ("allow_hosts = \"one.example\"", "allow_hosts"),
             ("allow_origins = [1]", "allow_origins"),
             ("no_access_key = \"yes\"", "no_access_key"),
+            ("log_level = \"loud\"", "log_level"),
+            ("dependency_log_level = 3", "dependency_log_level"),
             ("db = \"\"", "db"),
             ("access_key_file = 3", "access_key_file"),
         ];

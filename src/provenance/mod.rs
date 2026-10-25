@@ -53,6 +53,11 @@ impl ServerRun {
                     config.config_file.as_deref(),
                     config.admission.key_source(),
                 );
+                settings.push_str(&format!(
+                    "\nlog_level={}\ndependency_log_level={}",
+                    config.log_level.name(),
+                    config.dependency_log_level.name()
+                ));
                 if let Some(file) = &config.log_file {
                     settings.push('\n');
                     settings.push_str(&log_text(file, &LogPolicy::DEFAULT));
@@ -183,6 +188,8 @@ mod tests {
             instructions: instructions.into(),
             config_file: None,
             log_file: None,
+            log_level: crate::config::DEFAULT_LOG_LEVEL,
+            dependency_log_level: crate::config::DEFAULT_DEPENDENCY_LOG_LEVEL,
         }
     }
 
@@ -359,6 +366,13 @@ mod tests {
             run.settings
         );
         let without = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
-        assert!(!without.settings.contains("log_"));
+        assert!(!without.settings.contains("log_file"));
+        assert!(
+            without
+                .settings
+                .ends_with("\nlog_level=info\ndependency_log_level=warn"),
+            "{}",
+            without.settings
+        );
     }
 }

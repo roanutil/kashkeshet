@@ -179,3 +179,96 @@ async fn a_log_file_that_cannot_be_opened_stops_the_server() {
     assert!(!home.join("kkt.db").exists());
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Starts `kkt serve` with `args` and no key, logging to `log`, and waits
+/// until it answers (not for a log line, which a level may leave out).
+async fn start_with(home: &Path, bind: &str, log: &Path, args: &[&str]) -> Child {
+    let child = Command::new(KKT)
+        .arg("serve")
+        .arg("--db")
+        .arg(home.join("kkt.db"))
+        .args(["--bind", bind, "--no-access-key", "--log-file"])
+        .arg(log)
+        .args(args)
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("start kkt");
+    tokio::time::timeout(TIMEOUT, async {
+        while reqwest::get(format!("http://{bind}/")).await.is_err() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("kkt did not start answering");
+    child
+}
+
+/// One MCP request and one web request naming a host that isn't allowed.
+async fn make_some_noise(bind: &str) {
+    let client = reqwest::Client::new();
+    client
+        .post(format!("http://{bind}/mcp"))
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"register","arguments":{}}}"#)
+        .send()
+        .await
+        .expect("post /mcp");
+    client
+        .get(format!("http://{bind}/"))
+        .header("host", "evil.example")
+        .send()
+        .await
+        .expect("get /");
+}
+
+#[tokio::test]
+async fn dependency_log_level_info_brings_back_the_mcp_librarys_lines() {
+    let home = temp_home("deps-info");
+    let log = home.join("kkt.log");
+    let bind = free_bind();
+    let mut child = start_with(&home, &bind, &log, &["--dependency-log-level", "info"]).await;
+    make_some_noise(&bind).await;
+    child.kill().await.expect("stop kkt");
+    let text = read(&log);
+    assert!(text.contains("Service initialized"), "{text}");
+    assert!(text.contains("listening"), "{text}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn log_level_warn_in_the_config_file_leaves_out_info_lines() {
+    let home = temp_home("own-warn");
+    let log = home.join("kkt.log");
+    let config = home.join("kkt.toml");
+    std::fs::write(&config, "log_level = \"warn\"\n").expect("config");
+    let bind = free_bind();
+    let config_arg = config.display().to_string();
+    let mut child = start_with(&home, &bind, &log, &["--config", &config_arg]).await;
+    make_some_noise(&bind).await;
+    child.kill().await.expect("stop kkt");
+    let text = read(&log);
+    assert!(!text.contains("listening"), "{text}");
+    assert!(text.contains("refused a web request"), "{text}");
+    assert!(!text.contains("Service initialized"), "{text}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn an_unknown_level_is_refused_naming_the_setting() {
+    let home = temp_home("bad-level");
+    let out = Command::new(KKT)
+        .args(["serve", "--log-level", "loud"])
+        .env("HOME", &home)
+        .kill_on_drop(true)
+        .output()
+        .await
+        .expect("run kkt");
+    assert!(!out.status.success());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("log_level must be one of"), "{said}");
+    let _ = std::fs::remove_dir_all(&home);
+}

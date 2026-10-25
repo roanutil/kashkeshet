@@ -3,7 +3,7 @@
 
 use crate::admission::{Admission, Credentials, Decision, Sessions, WebAdmission};
 use crate::clock::Clock;
-use crate::config::{Limits, MCP_MAX_REQUEST_BYTES, MCP_SSE_KEEP_ALIVE, MCP_SSE_RETRY};
+use crate::config::{Limits, LogLevel, MCP_MAX_REQUEST_BYTES, MCP_SSE_KEEP_ALIVE, MCP_SSE_RETRY};
 use crate::events::Events;
 use crate::format::Formatter;
 use crate::hosts::AllowedHosts;
@@ -42,6 +42,10 @@ pub struct AppConfig {
     /// The file the log goes to, if not stdout, for the record of the
     /// server run.
     pub log_file: Option<String>,
+    /// How much kkt's own code logs, for the record of the server run.
+    pub log_level: LogLevel,
+    /// How much the libraries kkt uses log, for the record of the server run.
+    pub dependency_log_level: LogLevel,
 }
 
 /// The parts the server is built from. Callers outside the crate supply the
