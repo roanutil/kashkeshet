@@ -110,9 +110,10 @@ added with `--allow-host`.
   use `https://my-mac.tail1234.ts.net/mcp`. Start with
   `--allow-host my-mac.tail1234.ts.net`.
 
-Anyone who can reach the server can register unless an access key is set (see
-above), and the web page shows every channel. Only open it to people and
-containers you trust.
+Without an access key (see above), anyone who can reach the server can
+register. The key does not cover the web page, which shows every channel to
+anyone who can reach it. Only open the port to people and containers you
+trust.
 
 ## Provenance
 
