@@ -6,7 +6,7 @@ Install the latest stable `kkt` on macOS (Apple Silicon or Intel) or Linux
 (ARM64 or x86_64) with:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sam-mfb/kashkeshet/releases/latest/download/kashkeshet-installer.sh | sh
+curl -fsSL https://github.com/sam-mfb/kashkeshet/releases/latest/download/kashkeshet-installer.sh | sh
 kkt --version
 ```
 
@@ -21,7 +21,7 @@ Release candidates use a tag-specific installer; GitHub's `latest` URL is
 for stable releases. To install v0.1.0 specifically:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sam-mfb/kashkeshet/releases/download/v0.1.0/kashkeshet-installer.sh | sh
+curl -fsSL https://github.com/sam-mfb/kashkeshet/releases/download/v0.1.0/kashkeshet-installer.sh | sh
 kkt --version # kashkeshet 0.1.0
 ```
 
