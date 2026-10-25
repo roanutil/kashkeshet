@@ -23,7 +23,10 @@ def check(root, target, expected):
                 raise ValueError(f"{command}: archive must contain an executable file")
             # Check the compiled artifact as well as Cargo's build-script output.
             with package.extractfile(member) as binary:
-                if expected.encode() not in binary.read():
+                content = binary.read()
+                if (expected + "-dirty").encode() in content:
+                    raise ValueError(f"{command}: binary records a dirty release commit")
+                if expected.encode() not in content:
                     raise ValueError(f"{command}: release commit absent from binary")
 
 

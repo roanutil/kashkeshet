@@ -64,6 +64,11 @@ class ReleaseChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             CHECK.check(self.root, self.target, self.commit)
 
+    def test_dirty_binary_fails_even_with_clean_build_output(self):
+        self.archive(embedded=self.commit + "-dirty")
+        with self.assertRaisesRegex(ValueError, "binary records a dirty"):
+            CHECK.check(self.root, self.target, self.commit)
+
     def test_cargo_wrapper_locks_builds_and_preserves_arguments(self):
         cargo = self.root / "real-cargo"
         cargo.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
