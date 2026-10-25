@@ -1,6 +1,7 @@
 //! One key shared by every caller, kept only as a hash.
 
-use crate::config::{self, InvalidSetting};
+use crate::config::{self, InvalidSetting, NEW_ACCESS_KEY_CHARS};
+use crate::names::{Entropy, random_chars};
 use sha2::{Digest, Sha256};
 
 /// The shared access key. It keeps a SHA-256 of the key, not the key, and
@@ -22,6 +23,12 @@ impl SharedKey {
             digest: Sha256::digest(key.as_bytes()).into(),
             source: source.into(),
         })
+    }
+
+    /// A new random key, such as `kkt key create` writes. It passes
+    /// `config::check_access_key`.
+    pub fn generate(entropy: &dyn Entropy) -> String {
+        random_chars(entropy, NEW_ACCESS_KEY_CHARS)
     }
 
     /// Where the key came from.
@@ -70,6 +77,18 @@ mod tests {
             let err = SharedKey::new(text, "file").expect_err(text);
             assert_eq!(err.name, "access_key_file");
         }
+    }
+
+    #[test]
+    fn generated_keys_are_accepted_and_differ() {
+        use crate::names::testing::SeqEntropy;
+        let entropy = SeqEntropy::new(3);
+        let first = SharedKey::generate(&entropy);
+        let second = SharedKey::generate(&entropy);
+        assert_eq!(first.len(), NEW_ACCESS_KEY_CHARS);
+        assert_ne!(first, second);
+        let key = SharedKey::new(&first, "file").expect("a generated key is valid");
+        assert!(key.matches(first.as_bytes()));
     }
 
     #[test]

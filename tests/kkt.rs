@@ -24,7 +24,11 @@ async fn kkt_has_the_same_flags_and_defaults() {
     let kkt = help(KKT).await;
     let long = help(KASHKESHET).await;
     assert!(kkt.contains("Usage: kkt "), "{kkt}");
-    assert_eq!(kkt.replace("Usage: kkt ", "Usage: kashkeshet "), long);
+    // Usage lines name the binary: one for flags, one for subcommands.
+    let renamed = kkt
+        .replace("Usage: kkt ", "Usage: kashkeshet ")
+        .replace("\n       kkt ", "\n       kashkeshet ");
+    assert_eq!(renamed, long);
 }
 
 /// With two binaries, `cargo run` (as the README says to start the server)

@@ -36,6 +36,9 @@ pub struct AppConfig {
     pub allowed_hosts: AllowedHosts,
     /// Sent to every agent that connects. See [`crate::DEFAULT_INSTRUCTIONS`].
     pub instructions: String,
+    /// The config file the settings were read from, if any, for the record
+    /// of the server run.
+    pub config_file: Option<String>,
 }
 
 /// The parts the server is built from. Callers outside the crate supply the

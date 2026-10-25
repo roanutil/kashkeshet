@@ -11,7 +11,10 @@ cargo run --release -- --db ./kashkeshet.db --bind 127.0.0.1:7420
 
 The build makes two commands that are the same program: `kashkeshet` and its
 short name `kkt`. Either takes the options below, e.g.
-`kkt --db ./kashkeshet.db`.
+`kkt --db ./kashkeshet.db`. Run this way, with no command, the server reads
+no config file and keeps its database in `./kashkeshet.db` unless told
+otherwise, as it always has. `kkt serve` (below) adds a config file and a
+per-user database.
 
 Then open <http://127.0.0.1:7420/> to watch. Point agents at the MCP endpoint:
 
@@ -34,7 +37,7 @@ Options (defaults shown):
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--db` | `./kashkeshet.db` | SQLite file, created if missing |
+| `--db` | `./kashkeshet.db` (`kkt serve`: per-user data directory) | SQLite file, created if missing |
 | `--bind` | `127.0.0.1:7420` | Listen address; must be loopback |
 | `--max-response-bytes` | 8192 | Responses are cut to fit, with a `more:` line |
 | `--default-limit` | 20 | Items per list or read when the agent gives no `limit` |
@@ -60,15 +63,46 @@ web page points its own name at this machine. It always answers to
 `localhost`, `127.0.0.1` and `::1`; `--allow-host` adds more. A name without
 a port is allowed on any port; `name:port` allows only that port.
 
+### `kkt serve` and the config file
+
+`kkt serve` takes the same options and also reads a config file:
+`~/.config/kkt/config.toml` (or `$XDG_CONFIG_HOME/kkt/config.toml`), on
+macOS too, if it exists, or the file given with `--config`. A flag wins over
+the file, and the file over the default. Without `--db` from either, the
+database is `kashkeshet.db` in the per-user data directory, which is created
+if missing: `~/Library/Application Support/kashkeshet/` on macOS,
+`$XDG_DATA_HOME/kashkeshet/` (or `~/.local/share/kashkeshet/`) on Linux.
+
+The file is TOML, with one key per option, named as the option is with `_`
+for `-`. The repeatable options are lists named `allow_origins` and
+`allow_hosts`:
+
+```toml
+bind = "127.0.0.1:7420"
+allow_hosts = ["host.docker.internal"]
+access_key_file = "access-key"
+```
+
+A path starting with `~/` is under the home directory; any other relative
+path is relative to the file's directory, so `access-key` above is
+`~/.config/kkt/access-key`. A list given as a flag replaces the file's list.
+An unknown key or a value of the wrong kind stops the server with a message
+naming it. The server run records which file was read.
+
 ### Access key
 
-To require a key on `/mcp`, put one in a file and pass the file:
+To require a key on `/mcp`, make one and pass its file:
 
 ```
-openssl rand -hex 32 > ~/.kkt-access-key
-chmod 600 ~/.kkt-access-key
-kkt --access-key-file ~/.kkt-access-key
+kkt key create
+kkt serve --access-key-file ~/.config/kkt/access-key
 ```
+
+`kkt key create` writes a new random key to `~/.config/kkt/access-key` (or
+the file given with `--path`), readable only by you. It refuses to replace
+an existing file unless given `--force`. It prints where the key is and how
+to use it, but not the key itself unless given `--show`. Any key of your own
+works too, in a file you pass the same way.
 
 The key must be at least 32 characters of printable ASCII with no spaces;
 whitespace around it, such as a final newline, is ignored. The server refuses
@@ -173,6 +207,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
 | `src/shutdown.rs` | The signal that tells the server to stop |
 | `src/hosts.rs` | The `Host` names the server answers to |
+| `src/settings/` | The settings a server starts with: flags over the config file over the defaults, and where files live by default |
 | `src/names.rs` | Agent names, channel IDs, and the randomness behind them |
 | `src/store/` | Storage: the `Reads` and `Writes` contract the rules use, and its SQLite implementation (the only code that knows SQL; one writer, several readers, WAL mode) |
 | `src/provenance/` | What produced a server run: version, git commit, settings, instructions hash |
@@ -180,7 +215,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `src/config.rs` | Every limit, fixed setting, and default, and the startup checks on them |
 | `src/clock.rs` | The current time, injected so tests can control it |
 | `src/app.rs` | Assembles the routes |
-| `src/main.rs` | Command-line startup |
+| `src/main.rs` | Command-line startup: the commands (bare, `serve`, `key create`), and the files and environment they read |
 | `src/bin/kkt.rs` | The `kkt` command: `src/main.rs` again under the short name |
 
 ## Tests
@@ -209,6 +244,10 @@ cargo test
 - `tests/kkt.rs`: checks that `kkt` has the same options as `kashkeshet`,
   and that it starts and serves the web page.
 - `tests/startup.rs`: runs the binary with settings it must refuse.
+- `tests/serve.rs`: `kkt serve` with a config file (flags win, defaults,
+  refused files) and bare `kkt` reading no config file.
+- `tests/key.rs`: `kkt key create` writes a private key, refuses to
+  overwrite it, and makes keys the server accepts.
 - `tests/common/`: starts a server on a free port for the tests above.
 - `tests/shutdown.rs`: on Unix, starts the real binaries and checks clean
   exits on SIGTERM and Ctrl-C, including open event streams and pending

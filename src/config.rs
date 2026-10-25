@@ -1,7 +1,7 @@
 //! Server limits and fixed settings. Every default is written out here, in
 //! one place, along with the checks a server's settings must pass at startup.
 
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
 
 // ---- Fixed settings ----
@@ -40,13 +40,46 @@ pub const WEB_SESSION_ID_CHARS: usize = 32;
 pub const WEB_SESSION_COOKIE: &str = "kkt_session";
 /// Shortest access key, in bytes. 32 random hex digits carry 128 bits.
 pub const MIN_ACCESS_KEY_BYTES: usize = 32;
+/// Characters in a key made by `kkt key create`, from the 36-character
+/// alphabet: about 258 bits.
+pub const NEW_ACCESS_KEY_CHARS: usize = 50;
+const _: () = assert!(NEW_ACCESS_KEY_CHARS >= MIN_ACCESS_KEY_BYTES);
+/// Unix permissions of a key file `kkt key create` writes: only the owner
+/// may read or write it.
+pub const ACCESS_KEY_FILE_MODE: u32 = 0o600;
 /// Smallest allowed `max_response_bytes`. A smaller cap could cut a
 /// registration answer, and with it the agent's token.
 pub const MIN_RESPONSE_BYTES: usize = 1024;
 
+// ---- Server defaults and where files live ----
+//
+// What a server uses when neither a flag nor the config file says otherwise.
+
+/// Address to listen on.
+pub const DEFAULT_BIND: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7420));
+/// Database file for bare `kashkeshet` or `kkt` (no subcommand), relative to
+/// the working directory, as it has always been.
+pub const LEGACY_DB_PATH: &str = "./kashkeshet.db";
+/// Database file name in the per-user data directory, for `kkt serve`.
+pub const DB_FILE_NAME: &str = "kashkeshet.db";
+/// The per-user data directory on macOS, under the home directory.
+pub const MACOS_DATA_DIR: &str = "Library/Application Support/kashkeshet";
+/// The per-user data directory elsewhere, under `$XDG_DATA_HOME`.
+pub const XDG_DATA_DIR: &str = "kashkeshet";
+/// `$XDG_DATA_HOME` when it is not set, under the home directory.
+pub const XDG_DATA_HOME_DEFAULT: &str = ".local/share";
+/// The config directory, under `$XDG_CONFIG_HOME`, on every platform.
+pub const CONFIG_DIR: &str = "kkt";
+/// `$XDG_CONFIG_HOME` when it is not set, under the home directory.
+pub const XDG_CONFIG_HOME_DEFAULT: &str = ".config";
+/// The config file `kkt serve` reads, in the config directory, if it exists.
+pub const CONFIG_FILE_NAME: &str = "config.toml";
+/// Where `kkt key create` writes a key, in the config directory.
+pub const ACCESS_KEY_FILE_NAME: &str = "access-key";
+
 // ---- Limits ----
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Limits {
     /// Largest response, in bytes, before the server cuts it and says how to get the rest.
     pub max_response_bytes: usize,
