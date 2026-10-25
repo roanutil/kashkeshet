@@ -1,6 +1,7 @@
 //! Puts the parts together: the rules, the MCP endpoint at `/mcp`, and the
 //! web page at `/`.
 
+use crate::admission::{Admission, Credentials, Decision};
 use crate::clock::Clock;
 use crate::config::{
     Limits, MCP_ALLOWED_HOSTS, MCP_MAX_REQUEST_BYTES, MCP_SSE_KEEP_ALIVE, MCP_SSE_RETRY,
@@ -14,12 +15,19 @@ use crate::shutdown::Shutdown;
 use crate::store::Db;
 use crate::web;
 use axum::Router;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
 };
 use std::sync::Arc;
 
 pub struct AppConfig {
+    /// Who may call `/mcp` at all. The web page is not covered.
+    pub admission: Admission,
     pub limits: Limits,
     /// Browser origins allowed to call `/mcp`. Requests with any other
     /// `Origin` header are refused; requests without one (agents) pass.
@@ -95,7 +103,29 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
         mcp_transport(config.allowed_origins, shutdown),
     );
 
-    web::router(rules).nest_service("/mcp", mcp)
+    let mcp = Router::new()
+        .nest_service("/mcp", mcp)
+        .route_layer(middleware::from_fn_with_state(
+            Arc::new(config.admission),
+            admit,
+        ));
+    web::router(rules).merge(mcp)
+}
+
+/// Lets a request through to `/mcp` only if admission lets its caller in.
+/// Refusals get `401` with `WWW-Authenticate: Bearer` and the reason.
+async fn admit(State(admission): State<Arc<Admission>>, request: Request, next: Next) -> Response {
+    let credentials =
+        Credentials::from_authorization(request.headers().get(AUTHORIZATION).map(|v| v.as_bytes()));
+    match admission.decide(&credentials) {
+        Decision::Admitted(_) => next.run(request).await,
+        Decision::Refused(refusal) => (
+            StatusCode::UNAUTHORIZED,
+            [(WWW_AUTHENTICATE, "Bearer")],
+            refusal.to_string(),
+        )
+            .into_response(),
+    }
 }
 
 /// The MCP transport settings. Every option is set here by name, so a change

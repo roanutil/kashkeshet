@@ -33,6 +33,8 @@ pub const MCP_MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 /// `Host` header values the MCP endpoint accepts. Only loopback names, which
 /// blocks DNS rebinding from a web page.
 pub const MCP_ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "::1"];
+/// Shortest access key, in bytes. 32 random hex digits carry 128 bits.
+pub const MIN_ACCESS_KEY_BYTES: usize = 32;
 /// Smallest allowed `max_response_bytes`. A smaller cap could cut a
 /// registration answer, and with it the agent's token.
 pub const MIN_RESPONSE_BYTES: usize = 1024;
@@ -161,6 +163,29 @@ pub fn check_bind(addr: SocketAddr) -> Result<(), InvalidSetting> {
     }
 }
 
+/// Checks an access key, as read from `--access-key-file` without
+/// surrounding whitespace. It must be at least [`MIN_ACCESS_KEY_BYTES`] long
+/// and only printable ASCII with no spaces, so it can be sent in an HTTP
+/// header as written.
+pub fn check_access_key(key: &str) -> Result<(), InvalidSetting> {
+    if key.is_empty() {
+        return Err(InvalidSetting::new("access_key_file", "must not be empty"));
+    }
+    if !key.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(InvalidSetting::new(
+            "access_key_file",
+            "must hold only printable ASCII with no spaces",
+        ));
+    }
+    if key.len() < MIN_ACCESS_KEY_BYTES {
+        return Err(InvalidSetting::new(
+            "access_key_file",
+            format!("must hold a key of at least {MIN_ACCESS_KEY_BYTES} characters"),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +260,18 @@ mod tests {
         assert_eq!(check_bind("[::1]:7420".parse().expect("addr")), Ok(()));
         let err = check_bind("0.0.0.0:7420".parse().expect("addr")).expect_err("refused");
         assert_eq!(err.name, "bind");
+    }
+
+    #[test]
+    fn access_keys_must_be_long_printable_and_unspaced() {
+        let long = "k".repeat(MIN_ACCESS_KEY_BYTES);
+        assert_eq!(check_access_key(&long), Ok(()));
+        let short = "k".repeat(MIN_ACCESS_KEY_BYTES - 1);
+        let spaced = format!("{long} {long}");
+        let accented = format!("{long}é");
+        for bad in ["", short.as_str(), spaced.as_str(), accented.as_str()] {
+            let err = check_access_key(bad).expect_err(bad);
+            assert_eq!(err.name, "access_key_file");
+        }
     }
 }

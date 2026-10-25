@@ -1,4 +1,5 @@
 use clap::Parser;
+use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::{self, Limits};
@@ -43,6 +44,10 @@ struct Args {
     /// the built-in instructions (agent-instructions.md).
     #[arg(long)]
     instructions: Option<PathBuf>,
+    /// A file holding the access key. When set, every /mcp request must send
+    /// `Authorization: Bearer <key>`. By default /mcp needs no key.
+    #[arg(long)]
+    access_key_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -75,15 +80,34 @@ async fn run(args: Args) -> Result<(), String> {
             .map_err(|e| format!("could not read {}: {e}", path.display()))?,
         None => kashkeshet::DEFAULT_INSTRUCTIONS.to_string(),
     };
+    let admission = match &args.access_key_file {
+        Some(path) => {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                format!(
+                    "invalid setting: access_key_file could not be read from {}: {e}",
+                    path.display()
+                )
+            })?;
+            let key = SharedKey::new(&text, path.display().to_string())
+                .map_err(|e| format!("invalid setting: {e}"))?;
+            Admission::SharedKey(key)
+        }
+        None => Admission::Open,
+    };
     let db =
         Db::open(&args.db).map_err(|e| format!("could not open {}: {e}", args.db.display()))?;
     let config = AppConfig {
+        admission,
         limits,
         allowed_origins: args.allow_origins,
         instructions,
     };
     let clock = Arc::new(SystemClock);
     let run = ServerRun::new(Build::CURRENT, &config);
+    let access = match config.admission.key_source() {
+        Some(file) => format!("access key from {file}"),
+        None => "no access key".to_string(),
+    };
     let run_id = provenance::record(&db, &run, clock.now())
         .await
         .map_err(|e| format!("could not record this server run: {e}"))?;
@@ -94,7 +118,7 @@ async fn run(args: Args) -> Result<(), String> {
         .await
         .map_err(|e| format!("could not listen on {}: {e}", args.bind))?;
     tracing::info!(
-        "kashkeshet {} (commit {}, run {run_id}) listening: web page http://{}/ , MCP http://{}/mcp , database {}",
+        "kashkeshet {} (commit {}, run {run_id}) listening: web page http://{}/ , MCP http://{}/mcp ({access}), database {}",
         run.version,
         run.commit,
         args.bind,

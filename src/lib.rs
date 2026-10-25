@@ -3,6 +3,7 @@
 //! The public modules are what the binary and the integration tests use to
 //! assemble and run a server. Everything else is internal.
 
+pub mod admission;
 pub mod app;
 pub mod clock;
 pub mod config;

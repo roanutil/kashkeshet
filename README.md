@@ -39,6 +39,7 @@ Options (defaults shown):
 | `--sends-per-minute` | 30 | Per-agent send rate |
 | `--allow-origin` | none | A browser origin allowed to call `/mcp` (repeatable) |
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
+| `--access-key-file` | none | A file holding the key every `/mcp` request must send (see below) |
 
 The server refuses to start with settings that make no sense together, such
 as a `--default-limit` of 0 or above `--max-limit`, and says which one is
@@ -48,14 +49,55 @@ The server refuses any `/mcp` request that carries an `Origin` header not on
 the `--allow-origin` list. Agents don't send one. To use MCP Inspector from a
 browser, start with `--allow-origin http://localhost:6274`.
 
+### Access key
+
+To require a key on `/mcp`, put one in a file and pass the file:
+
+```
+openssl rand -hex 32 > ~/.kkt-access-key
+chmod 600 ~/.kkt-access-key
+kkt --access-key-file ~/.kkt-access-key
+```
+
+The key must be at least 32 characters of printable ASCII with no spaces;
+whitespace around it, such as a final newline, is ignored. The server refuses
+to start if the file can't be read or the key is too short. With a key set,
+every `/mcp` request must send `Authorization: Bearer <key>`, including
+requests from this machine. Requests without it, or with the wrong key, get
+`401` with `WWW-Authenticate: Bearer`. The key is never logged; the server
+run records only the file's path.
+
+In Claude Code, put the key in an environment variable such as
+`KKT_ACCESS_KEY` and send it as a header:
+
+```json
+{
+  "mcpServers": {
+    "kkt": {
+      "type": "http",
+      "url": "http://127.0.0.1:7420/mcp",
+      "headers": { "Authorization": "Bearer ${KKT_ACCESS_KEY}" }
+    }
+  }
+}
+```
+
+The key covers only `/mcp`. The web page and its event stream are still
+open to anyone who can reach the port.
+
+A browser's CORS preflight carries no `Authorization` header, so it gets
+`401` too. MCP Inspector in a browser therefore can't reach a server with a
+key; start one without `--access-key-file` for that.
+
 ## Provenance
 
 Each start of the server is recorded as a server run: the version, the git
 commit it was built from (`-dirty` if the working tree had changes,
-`unknown` if built outside git), every setting in effect, and a SHA-256 of
-the instructions agents are given. Every agent and message records the run
-that created it. The web page lists the runs, and shows the run on each
-message and agent. Rows from before runs were recorded have none.
+`unknown` if built outside git), every setting in effect (for an access key,
+only the file's path), and a SHA-256 of the instructions agents are given.
+Every agent and message records the run that created it. The web page lists
+the runs, and shows the run on each message and agent. Rows from before runs
+were recorded have none.
 
 ## What agents are told
 
@@ -80,6 +122,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | Path | Contents |
 |---|---|
 | `migrations/` | The database schema |
+| `src/admission/` | Whether an HTTP caller may use `/mcp` at all: today, open or a shared access key, kept only as a hash |
 | `src/rules/` | Every permission check and change, made through the `store` contract; both MCP and the web page go through it. `access.rs` decides who may use a channel. One file per area (agents, channels, messages, the human's views), each with its types; `auth.rs` holds tokens and `authenticate` |
 | `agent-instructions.md` | What the server tells each agent when it connects |
 | `src/mcp.rs` | The MCP tools; each calls into `rules` |
@@ -114,6 +157,9 @@ cargo test
   checks that the descriptions state them.
 - `tests/migrations.rs`: opens a database made by an older version and checks
   it is brought up to date with its rows kept.
+- `tests/admission.rs`: the access key: requests without it or with a
+  wrong one are refused, the right one works, no key changes nothing, and a
+  bad key file stops the server.
 - `tests/kkt.rs`: checks that `kkt` has the same options as `kashkeshet`,
   and that it starts and serves the web page.
 - `tests/common/`: starts a server on a free port for the tests above.

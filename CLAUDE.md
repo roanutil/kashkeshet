@@ -11,6 +11,7 @@ require reading another's internals.
 
 | Part | Owns | Must not |
 |---|---|---|
+| `admission/` | Whether an HTTP caller is let in to `/mcp` at all, from credentials in our own type | Know about agents, agent tokens or channels; import axum |
 | `rules/` | Every permission decision and every change, for both MCP and the web page | Import rusqlite or write SQL; format output; log |
 | `rules/access.rs` | Who may use a channel, as the pure function `decide` | Touch storage |
 | `store/` | The `Reads`/`Writes` contract and its SQLite implementation | Decide permissions; know about agents' requests |
