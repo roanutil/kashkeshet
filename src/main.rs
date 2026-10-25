@@ -2,7 +2,6 @@ use clap::Parser;
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::{self, Limits};
-use kashkeshet::mcp;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::shutdown::Shutdown;
@@ -74,7 +73,7 @@ async fn run(args: Args) -> Result<(), String> {
     let instructions = match &args.instructions {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|e| format!("could not read {}: {e}", path.display()))?,
-        None => mcp::DEFAULT_INSTRUCTIONS.to_string(),
+        None => kashkeshet::DEFAULT_INSTRUCTIONS.to_string(),
     };
     let db =
         Db::open(&args.db).map_err(|e| format!("could not open {}: {e}", args.db.display()))?;
