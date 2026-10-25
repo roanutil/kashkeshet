@@ -19,8 +19,7 @@ kkt serve --allow-host host.docker.internal
 
 This is a Docker Desktop feature. Docker Engine on Linux doesn't forward
 `host.docker.internal` to the host's loopback, so a loopback-only server
-can't be reached that way there. Run `kkt doctor` from the container's side
-if a connection fails.
+can't be reached that way there.
 
 ## Tailscale
 
