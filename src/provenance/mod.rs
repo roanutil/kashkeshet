@@ -93,6 +93,8 @@ pub fn settings_text(
         max_channel_name_chars,
         max_purpose_chars,
         sends_per_minute,
+        registrations_per_minute,
+        max_agents,
         default_wait,
         max_wait,
         last_seen_interval,
@@ -109,6 +111,8 @@ pub fn settings_text(
         format!("max_channel_name_chars={max_channel_name_chars}"),
         format!("max_purpose_chars={max_purpose_chars}"),
         format!("sends_per_minute={sends_per_minute}"),
+        format!("registrations_per_minute={registrations_per_minute}"),
+        format!("max_agents={max_agents}"),
         format!("default_wait_ms={}", default_wait.as_millis()),
         format!("max_wait_ms={}", max_wait.as_millis()),
         format!("last_seen_interval_ms={}", last_seen_interval.as_millis()),
@@ -193,6 +197,8 @@ mod tests {
              max_channel_name_chars=64\n\
              max_purpose_chars=500\n\
              sends_per_minute=30\n\
+             registrations_per_minute=20\n\
+             max_agents=1000\n\
              default_wait_ms=30000\n\
              max_wait_ms=50000\n\
              last_seen_interval_ms=60000\n\

@@ -25,6 +25,7 @@ mod channels;
 mod error;
 mod human;
 mod messages;
+mod operator;
 mod rate;
 
 #[cfg(test)]
@@ -38,7 +39,8 @@ pub use messages::{
     ActivityRow, Message, MessagePage, Position, ReadQuery, SearchHit, SearchQuery, WaitQuery,
     WaitResult,
 };
-pub use rate::SendLimiter;
+pub use operator::{AgentStatus, Operator, Revoked};
+pub use rate::{RegisterLimiter, SendLimiter};
 
 use crate::clock::{self, Clock};
 use crate::config::Limits;
@@ -70,6 +72,8 @@ pub struct Deps {
     pub entropy: Arc<dyn Entropy>,
     /// Counts each agent's sends against `limits.sends_per_minute`.
     pub sends: SendLimiter,
+    /// Counts registrations against `limits.registrations_per_minute`.
+    pub registrations: RegisterLimiter,
     /// This server run, from `provenance::record`. New agents and messages
     /// are stamped with it.
     pub run_id: i64,

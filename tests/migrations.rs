@@ -57,13 +57,14 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
     assert_eq!(runs, 0);
     assert!(column_exists(&conn, "agents", "run_id"));
     assert!(column_exists(&conn, "messages", "run_id"));
+    assert!(column_exists(&conn, "agents", "revoked_at"));
 
     let agent_run: Option<i64> = conn
         .query_row(
@@ -73,6 +74,14 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
         )
         .expect("old agent kept");
     assert_eq!(agent_run, None);
+    let revoked: Option<String> = conn
+        .query_row(
+            "SELECT revoked_at FROM agents WHERE name = 'amber-falcon'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("old agent kept");
+    assert_eq!(revoked, None, "existing agents stay in use");
     let (body, message_run): (String, Option<i64>) = conn
         .query_row("SELECT body, run_id FROM messages", [], |r| {
             Ok((r.get(0)?, r.get(1)?))

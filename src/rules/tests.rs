@@ -10,6 +10,8 @@ struct World {
     rules: Rules,
     clock: Arc<FixedClock>,
     run_id: i64,
+    /// The operator, on the same database.
+    operator: Operator,
 }
 
 /// The run every test world records, so stamped rows can be checked.
@@ -34,12 +36,14 @@ async fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
         })
         .await
         .expect("record run");
+    let operator = Operator::new(db.clone(), clock.clone());
     let rules = Rules::new(Deps {
         db,
         events: Events::new(),
         clock: clock.clone(),
         entropy,
         sends: SendLimiter::new(limits.sends_per_minute),
+        registrations: RegisterLimiter::new(limits.registrations_per_minute),
         run_id,
         limits,
     });
@@ -47,6 +51,7 @@ async fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
         rules,
         clock,
         run_id,
+        operator,
     }
 }
 
@@ -999,4 +1004,124 @@ async fn new_agents_and_messages_record_the_server_run() {
         .map(|r| (r.id, r.version.as_str()))
         .collect();
     assert_eq!(runs, [(w.run_id, TEST_RUN)]);
+}
+
+// ---- registration caps and revocation ----
+
+#[tokio::test]
+async fn registration_is_rate_limited_across_the_server() {
+    let limits = Limits {
+        registrations_per_minute: 2,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    w.rules.register().await.expect("first");
+    w.rules.register().await.expect("second");
+    let err = w.rules.register().await.expect_err("third");
+    assert_eq!(err.code, Code::RateLimited);
+    w.clock.advance(chrono::Duration::seconds(30));
+    w.rules.register().await.expect("refilled");
+}
+
+#[tokio::test]
+async fn registration_stops_at_the_agent_cap_and_revoking_frees_room() {
+    let limits = Limits {
+        max_agents: 2,
+        registrations_per_minute: 3,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    w.agent().await;
+    let err = w.rules.register().await.expect_err("over the cap");
+    assert_eq!(err.code, Code::LimitReached);
+    w.operator.revoke(a.name.clone()).await.expect("revoke");
+    // The refused registration gave back its use of the rate limit, so this
+    // is the third of three.
+    w.rules.register().await.expect("room after revoking");
+}
+
+#[tokio::test]
+async fn a_revoked_token_is_refused_like_an_unknown_one() {
+    let w = world().await;
+    let reg = w.rules.register().await.expect("register");
+    let me = w.rules.authenticate(Some(&reg.token)).await.expect("auth");
+    let other = w.agent().await;
+    let ch = w.channel(&me, "general", true, &[&other]).await;
+    w.rules
+        .send(&me, ch.clone(), "before".into())
+        .await
+        .expect("send");
+
+    let revoked = w.operator.revoke(me.name.clone()).await.expect("revoke");
+    assert_eq!(
+        revoked,
+        Revoked::Now {
+            at: "2026-10-23T14:00:00Z".into()
+        }
+    );
+    let refused = w
+        .rules
+        .authenticate(Some(&reg.token))
+        .await
+        .expect_err("revoked");
+    let unknown = w
+        .rules
+        .authenticate(Some("act_00000000000000000000000000"))
+        .await
+        .expect_err("unknown");
+    assert_eq!(refused, unknown);
+
+    // The agent's messages and membership stay for everyone else.
+    let page = w
+        .rules
+        .read(
+            &other,
+            ReadQuery {
+                channel_id: ch.clone(),
+                position: Position::Latest,
+                from_agent: None,
+                limit: 10,
+            },
+        )
+        .await
+        .expect("read");
+    assert_eq!(page.messages[0].agent, me.name);
+}
+
+#[tokio::test]
+async fn revoking_twice_or_an_unknown_agent_is_reported() {
+    let w = world().await;
+    let a = w.agent().await;
+    w.operator.revoke(a.name.clone()).await.expect("revoke");
+    w.clock.advance(chrono::Duration::minutes(5));
+    assert_eq!(
+        w.operator.revoke(a.name.clone()).await.expect("again"),
+        Revoked::Already {
+            at: "2026-10-23T14:00:00Z".into()
+        }
+    );
+    let err = w
+        .operator
+        .revoke("no-such-agent".into())
+        .await
+        .expect_err("unknown");
+    assert_eq!(err.code, Code::NotFound);
+}
+
+#[tokio::test]
+async fn the_operator_lists_agents_with_their_revocations() {
+    let w = world().await;
+    let a = w.agent().await;
+    w.clock.advance(chrono::Duration::minutes(5));
+    let b = w.agent().await;
+    w.operator.revoke(a.name.clone()).await.expect("revoke");
+    let agents = w.operator.agents().await.expect("list");
+    let names: Vec<_> = agents.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, [b.name.as_str(), a.name.as_str()]);
+    assert_eq!(agents[0].revoked_at, None);
+    assert_eq!(
+        agents[1].revoked_at.as_deref(),
+        Some("2026-10-23T14:05:00Z")
+    );
 }

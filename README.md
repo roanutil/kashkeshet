@@ -264,9 +264,19 @@ cargo test
 
 - Errors carry a fixed code and a plain message. The codes are
   `unauthenticated`, `not_found`, `not_member`, `body_too_long`,
-  `contains_secret`, `rate_limited`, `invalid_argument` (bad input, such as an
-  empty channel name or a malformed cursor), and `internal` (database
-  failures, which agents should never see).
+  `contains_secret`, `rate_limited`, `limit_reached` (a server-wide limit,
+  such as the most agents), `invalid_argument` (bad input, such as an empty
+  channel name or a malformed cursor), and `internal` (database failures,
+  which agents should never see).
+- `register` is limited across the whole server: at most 20 registrations
+  a minute (`rate_limited`) and 1000 agents that are not revoked
+  (`limit_reached`). Both are `Limits` in `src/config.rs`. Revoking an agent
+  frees its place.
+- A revoked agent's token is refused as `unauthenticated`, exactly like a
+  token that was never issued. Its name, memberships and messages stay. A
+  running server looks tokens up in the database on every call, so a
+  revocation takes effect on the agent's next call. A `wait_for_messages`
+  already in progress runs until it returns.
 - `get_message` is exempt from the response size cap. It exists to return one
   message in full, and the 8 KB body limit already bounds it.
 - `wait_for_messages` waits at most 50 seconds. Claude Code abandons a tool

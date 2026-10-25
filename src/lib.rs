@@ -21,3 +21,5 @@ mod rules;
 mod web;
 
 pub use mcp::DEFAULT_INSTRUCTIONS;
+/// The operator's commands against the database, for `kkt agent`.
+pub use rules::{AgentStatus, Operator, Revoked, RuleError};

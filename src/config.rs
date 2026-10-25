@@ -97,6 +97,10 @@ pub struct Limits {
     pub max_purpose_chars: usize,
     /// Messages one agent may send per minute.
     pub sends_per_minute: u32,
+    /// Agents the whole server may register per minute.
+    pub registrations_per_minute: u32,
+    /// Most agents that may exist at once, not counting revoked ones.
+    pub max_agents: usize,
     /// How long `wait_for_messages` waits when the agent gives no `timeout_s`.
     pub default_wait: Duration,
     /// Longest wait an agent may ask for.
@@ -121,6 +125,8 @@ impl Limits {
         max_channel_name_chars: 64,
         max_purpose_chars: 500,
         sends_per_minute: 30,
+        registrations_per_minute: 20,
+        max_agents: 1000,
         default_wait: Duration::from_secs(30),
         // Common MCP clients give up on a tool call after about 60 seconds.
         max_wait: Duration::from_secs(50),
@@ -140,6 +146,11 @@ impl Limits {
             ("max_channel_name_chars", self.max_channel_name_chars),
             ("max_purpose_chars", self.max_purpose_chars),
             ("sends_per_minute", self.sends_per_minute as usize),
+            (
+                "registrations_per_minute",
+                self.registrations_per_minute as usize,
+            ),
+            ("max_agents", self.max_agents),
         ];
         if let Some((name, _)) = at_least_one.iter().find(|(_, value)| *value == 0) {
             return Err(InvalidSetting::new(name, "must be at least 1"));
@@ -245,13 +256,17 @@ mod tests {
     #[test]
     fn zero_is_refused_for_every_count() {
         type SetZero = fn(&mut Limits);
-        let cases: [(&str, SetZero); 6] = [
+        let cases: [(&str, SetZero); 8] = [
             ("default_limit", |l| l.default_limit = 0),
             ("max_body_chars", |l| l.max_body_chars = 0),
             ("max_body_bytes", |l| l.max_body_bytes = 0),
             ("max_channel_name_chars", |l| l.max_channel_name_chars = 0),
             ("max_purpose_chars", |l| l.max_purpose_chars = 0),
             ("sends_per_minute", |l| l.sends_per_minute = 0),
+            ("registrations_per_minute", |l| {
+                l.registrations_per_minute = 0
+            }),
+            ("max_agents", |l| l.max_agents = 0),
         ];
         for (name, set_zero) in cases {
             let mut limits = Limits::DEFAULT;

@@ -54,8 +54,12 @@ impl Rules {
             .db()
             .read(move |store| store.agent_by_token_hash(&hash).map_err(RuleError::from))
             .await?;
+        // A revoked token is refused exactly like one that was never issued.
         let Some(AgentRecord {
-            name, last_seen, ..
+            name,
+            last_seen,
+            revoked_at: None,
+            ..
         }) = found
         else {
             return Err(RuleError::unauthenticated());
