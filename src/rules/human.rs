@@ -2,11 +2,13 @@
 //! including closed channels, and changes nothing.
 
 use super::*;
-use crate::config::{WEB_CHANNEL_PAGE_MESSAGES, WEB_RECENT_MESSAGES};
+use crate::config::WEB_RECENT_MESSAGES;
 
 impl Rules {
     pub async fn overview(&self) -> Result<Overview> {
         let preview = self.limits().member_preview;
+        // The front page's list keeps at most a page of messages.
+        let recent_count = WEB_RECENT_MESSAGES.min(self.limits().web_page_messages);
         self.db()
             .read(move |store| {
                 let channels = store
@@ -20,7 +22,7 @@ impl Rules {
                     .map(AgentInfo::from)
                     .collect();
                 let mut recent: Vec<Message> = store
-                    .recent_messages(WEB_RECENT_MESSAGES)?
+                    .recent_messages(recent_count)?
                     .into_iter()
                     .map(Message::from)
                     .collect();
@@ -42,6 +44,7 @@ impl Rules {
 
     pub async fn channel_view(&self, id: String, before_id: Option<i64>) -> Result<ChannelView> {
         let preview = self.limits().member_preview;
+        let page_messages = self.limits().web_page_messages;
         self.db()
             .read(move |store| {
                 if store.channel(&id)?.is_none() {
@@ -55,7 +58,7 @@ impl Rules {
                         channel_id: id.clone(),
                         position: before_id.map_or(Position::Latest, Position::Before),
                         from_agent: None,
-                        limit: WEB_CHANNEL_PAGE_MESSAGES,
+                        limit: page_messages,
                     },
                 )?;
                 let older_before_id = match page.more {

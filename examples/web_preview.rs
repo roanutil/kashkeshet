@@ -2,7 +2,7 @@
 //! working on the page's look and live behavior.
 //!
 //! ```text
-//! cargo run --example web_preview -- --bind 127.0.0.1:7421 --seed 7 --rate 60
+//! cargo run --example web_preview -- --bind 127.0.0.1:7421 --seed 7 --rate 60 --page-messages 30
 //! ```
 //!
 //! The same seed gives the same world and the same feed. Pass
@@ -11,7 +11,7 @@
 use clap::Parser;
 use kashkeshet::admission::{Admission, Sessions, SharedKey, WebAdmission};
 use kashkeshet::clock::SystemClock;
-use kashkeshet::config::{self, Limits, PREVIEW_BIND, PREVIEW_SEED, PreviewSettings};
+use kashkeshet::config::{Limits, PREVIEW_BIND, PREVIEW_SEED, PreviewSettings};
 use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::{OsEntropy, SeededEntropy};
 use kashkeshet::shutdown::{Shutdown, StopSignals};
@@ -23,7 +23,10 @@ use std::sync::Arc;
 #[derive(Parser, Debug)]
 #[command(about = "The kashkeshet web page with simulated data")]
 struct Args {
-    #[arg(long, help = format!("Address to listen on. Must be loopback [default: {PREVIEW_BIND}]"))]
+    #[arg(long, help = format!(
+        "Address to listen on [default: {PREVIEW_BIND}]. A non-loopback address, such as \
+         0.0.0.0:3013, lets other machines see the preview; it has only simulated data"
+    ))]
     bind: Option<SocketAddr>,
     #[arg(long, help = format!("Seed for the simulated world and feed [default: {PREVIEW_SEED}]"))]
     seed: Option<u64>,
@@ -32,9 +35,18 @@ struct Args {
         PreviewSettings::DEFAULT.steps_per_minute
     ))]
     rate: Option<u32>,
+    #[arg(long, help = format!(
+        "The most messages one page shows; small values show the live view dropping old ones [default: {}]",
+        PreviewSettings::DEFAULT.page_messages
+    ))]
+    page_messages: Option<usize>,
     /// A host name to answer to besides loopback. Repeat for more.
     #[arg(long = "allow-host")]
     allow_hosts: Vec<String>,
+    /// Answer to any host name, for viewing from another machine. Only the
+    /// preview has this; it serves only simulated data.
+    #[arg(long, conflicts_with = "allow_hosts")]
+    any_host: bool,
     /// A file holding an access key, to preview the login page.
     #[arg(long)]
     access_key_file: Option<PathBuf>,
@@ -59,13 +71,25 @@ async fn run(args: Args) -> Result<(), String> {
         steps_per_minute: args
             .rate
             .unwrap_or(PreviewSettings::DEFAULT.steps_per_minute),
+        page_messages: args
+            .page_messages
+            .unwrap_or(PreviewSettings::DEFAULT.page_messages),
     };
-    config::check_bind(bind).map_err(|e| format!("invalid setting: {e}"))?;
+    // Unlike the server, the preview may listen beyond loopback: it holds no
+    // real data. Say so when it does.
+    if !bind.ip().is_loopback() {
+        tracing::warn!(
+            "listening on {bind}, beyond this machine; the preview has only simulated data"
+        );
+    }
     settings
         .check()
         .map_err(|e| format!("invalid setting: {e}"))?;
-    let hosts =
-        AllowedHosts::new(&args.allow_hosts).map_err(|e| format!("invalid setting: {e}"))?;
+    let hosts = if args.any_host {
+        AllowedHosts::any()
+    } else {
+        AllowedHosts::new(&args.allow_hosts).map_err(|e| format!("invalid setting: {e}"))?
+    };
     let admission = match &args.access_key_file {
         Some(path) => {
             let text = std::fs::read_to_string(path)

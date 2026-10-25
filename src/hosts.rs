@@ -13,6 +13,9 @@ use std::net::Ipv6Addr;
 /// The host names the server answers to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AllowedHosts {
+    /// Every `Host` is accepted. Only for the web preview, which has no real
+    /// data; never for the server.
+    any: bool,
     /// The loopback names followed by the operator's.
     hosts: Vec<Host>,
     /// The operator's names as given, for the record of the server run.
@@ -52,13 +55,27 @@ impl AllowedHosts {
             }
         }
         Ok(AllowedHosts {
+            any: false,
             hosts,
             extra: extra.to_vec(),
         })
     }
 
+    /// Accepts every `Host`. For the web preview only, so it can be viewed
+    /// from another machine under any name; it serves only simulated data.
+    pub fn any() -> AllowedHosts {
+        AllowedHosts {
+            any: true,
+            hosts: Vec::new(),
+            extra: Vec::new(),
+        }
+    }
+
     /// True if a request whose `Host` header is `header` may be served.
     pub fn allows(&self, header: &str) -> bool {
+        if self.any {
+            return true;
+        }
         let Some(asked) = parse(header) else {
             return false;
         };
@@ -237,6 +254,15 @@ mod tests {
             let err = AllowedHosts::new(&[bad.to_string()]).expect_err(bad);
             assert_eq!(err.name, "allow_host", "{bad:?}");
         }
+    }
+
+    #[test]
+    fn any_accepts_every_host() {
+        let h = AllowedHosts::any();
+        for header in ["evil.example", "192.168.1.20:3013", "", "not a host"] {
+            assert!(h.allows(header), "{header:?}");
+        }
+        assert!(!hosts(&[]).allows("evil.example"));
     }
 
     #[test]

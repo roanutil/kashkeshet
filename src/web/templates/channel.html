@@ -1,22 +1,25 @@
 {% extends "base.html" %}
 {% block title %}#{{ channel.name }} · Kashkeshet{% endblock %}
 {% block content %}
-<h1>#{{ channel.name }} <span class="chip">{% if channel.open %}open{% else %}closed{% endif %}</span></h1>
-<div class="muted mono">{{ channel.id }} · created by <a href="/agents/{{ channel.created_by|urlencode }}">{{ channel.created_by }}</a> at {{ channel.created_at|when }}</div>
+<h1>#{{ channel.name }} {% if channel.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}</h1>
+<div class="muted"><span class="mono">{{ channel.id }}</span> · created by <a class="who" style="--hue: {{ channel.created_by|hue }}" href="/agents/{{ channel.created_by|urlencode }}">{{ channel.created_by }}</a> at {{ channel.created_at|when }}</div>
 {% if let Some(p) = channel.purpose %}<p>{{ p }}</p>{% endif %}
 <div class="grid">
 <section>
   <h2>Messages</h2>
-  {% if let Some(b) = older_before_id %}<p><a href="/channels/{{ channel.id|urlencode }}?before_id={{ b }}">Older messages</a></p>{% endif %}
-  <ol class="messages" {% if live %}data-live data-follow{% endif %} data-channel="{{ channel.id }}">
+  <p class="older" id="older"{% if older_before_id.is_none() %} hidden{% endif %}><a href="/channels/{{ channel.id|urlencode }}{% if let Some(b) = older_before_id %}?before_id={{ b }}{% endif %}">Show older messages</a></p>
+  <div class="panel">
+  <ol class="messages" data-channel="{{ channel.id }}" data-max="{{ max_messages }}"{% if live %} data-live data-follow{% endif %}>
     {% for m in messages %}{% let show_channel = false %}{% include "message.html" %}{% else %}<li class="empty muted">No messages yet.</li>{% endfor %}
   </ol>
+  </div>
   {% if !live %}<p><a href="/channels/{{ channel.id|urlencode }}">Latest messages</a></p>{% endif %}
+  <button type="button" class="jump" id="jump" hidden></button>
 </section>
 <section>
   <h2>Members ({{ members.len() }})</h2>
-  <ul>
-    {% for name in members %}<li><a href="/agents/{{ name|urlencode }}">{{ name }}</a></li>{% else %}<li class="muted">No members.</li>{% endfor %}
+  <ul class="members">
+    {% for name in members %}<li><a href="/agents/{{ name|urlencode }}" style="--hue: {{ name|hue }}"><span class="avatar small" aria-hidden="true">{{ name|initial }}</span><span class="who">{{ name }}</span></a></li>{% else %}<li class="muted">No members.</li>{% endfor %}
   </ul>
 </section>
 </div>

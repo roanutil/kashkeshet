@@ -104,6 +104,8 @@ struct IndexPage {
     agents: Vec<Agent>,
     recent: Vec<Message>,
     runs: Vec<ServerRun>,
+    /// The most messages the live list keeps.
+    max_messages: usize,
     sign_out: bool,
 }
 
@@ -116,6 +118,8 @@ struct ChannelPage {
     older_before_id: Option<i64>,
     /// Live updates only make sense when showing the newest messages.
     live: bool,
+    /// The most messages the page keeps as new ones arrive.
+    max_messages: usize,
     sign_out: bool,
 }
 
@@ -148,6 +152,7 @@ async fn index(State(pages): State<Pages>) -> Response {
             agents: o.agents,
             recent: o.recent,
             runs: o.runs,
+            max_messages: pages.source.page_messages(),
             sign_out: pages.sign_out,
         }),
         Err(e) => error_page(e, pages.sign_out),
@@ -166,6 +171,7 @@ async fn channel(
             messages: v.messages,
             older_before_id: v.older_before_id,
             live: params.before_id.is_none(),
+            max_messages: pages.source.page_messages(),
             sign_out: pages.sign_out,
         }),
         Err(e) => error_page(e, pages.sign_out),
@@ -206,6 +212,37 @@ async fn events(State(pages): State<Pages>) -> Sse<impl Stream<Item = Result<Eve
 }
 
 mod filters {
+    /// A stable hue (0 to 359) for an agent's name, so each agent has its own
+    /// color. FNV-1a over the name's UTF-8 bytes; the page's script computes
+    /// the same for live messages.
+    #[askama::filter_fn]
+    pub fn hue<T: std::fmt::Display>(name: T, _: &dyn askama::Values) -> askama::Result<u32> {
+        Ok(name_hue(&name.to_string()))
+    }
+
+    pub fn name_hue(name: &str) -> u32 {
+        let mut hash: u32 = 0x811c_9dc5;
+        for byte in name.bytes() {
+            hash ^= u32::from(byte);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+        hash % 360
+    }
+
+    /// A name's first character, capitalized, for its avatar.
+    #[askama::filter_fn]
+    pub fn initial<T: std::fmt::Display>(
+        name: T,
+        _: &dyn askama::Values,
+    ) -> askama::Result<String> {
+        Ok(name
+            .to_string()
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().collect())
+            .unwrap_or_default())
+    }
+
     /// A stored time, `2026-10-23T14:02:11Z`, shown as `2026-10-23 14:02:11`.
     #[askama::filter_fn]
     pub fn when<T: std::fmt::Display>(stored: T, _: &dyn askama::Values) -> askama::Result<String> {
@@ -278,6 +315,42 @@ mod filter_tests {
 
     fn render(h: &str) -> String {
         Short { h }.render().expect("render")
+    }
+
+    #[test]
+    fn hues_match_the_page_script() {
+        // Values printed by base.html's `hue` function under node 22.
+        for (name, hue) in [
+            ("amber-falcon", 282),
+            ("bold-panther", 299),
+            ("swift-jackal", 293),
+            ("sunny-heron", 355),
+            ("", 61),
+            ("é-ünïcode", 304),
+        ] {
+            assert_eq!(filters::name_hue(name), hue, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn hues_are_stable_and_spread() {
+        // The page's script must give the same values (checked with node).
+        assert_eq!(
+            filters::name_hue("amber-falcon"),
+            filters::name_hue("amber-falcon")
+        );
+        assert_eq!(filters::name_hue(""), 0x811c_9dc5 % 360);
+        let hues: std::collections::BTreeSet<u32> = [
+            "amber-falcon",
+            "bold-panther",
+            "swift-jackal",
+            "sunny-heron",
+        ]
+        .iter()
+        .map(|n| filters::name_hue(n))
+        .collect();
+        assert!(hues.iter().all(|&h| h < 360));
+        assert_eq!(hues.len(), 4);
     }
 
     #[test]

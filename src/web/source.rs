@@ -28,6 +28,10 @@ pub trait Source: Send + Sync {
 
     /// Everything that happens from now on, until the server stops.
     fn live(&self) -> BoxStream<'static, LiveEvent>;
+
+    /// The most messages one page shows. [`Source::channel`] returns no more
+    /// than this, and the live view keeps no more than this on the page.
+    fn page_messages(&self) -> usize;
 }
 
 /// Whether a viewer may see the pages, and signing in and out.
