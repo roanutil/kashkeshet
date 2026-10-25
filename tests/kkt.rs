@@ -1,5 +1,5 @@
-//! `kkt` is the short name for the kashkeshet command: same flags, same
-//! defaults, same server.
+//! The `kkt` command: on its own it explains itself, and `kkt serve` starts
+//! and serves the web page.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -7,46 +7,22 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 const KKT: &str = env!("CARGO_BIN_EXE_kkt");
-const KASHKESHET: &str = env!("CARGO_BIN_EXE_kashkeshet");
-
-async fn help(bin: &str) -> String {
-    let out = Command::new(bin)
-        .arg("--help")
-        .output()
-        .await
-        .expect("run --help");
-    assert!(out.status.success(), "{bin} --help failed");
-    String::from_utf8(out.stdout).expect("utf-8 help")
-}
 
 #[tokio::test]
-async fn kkt_has_the_same_flags_and_defaults() {
-    let kkt = help(KKT).await;
-    let long = help(KASHKESHET).await;
-    assert!(kkt.contains("Usage: kkt "), "{kkt}");
-    // Usage lines name the binary: one for flags, one for subcommands.
-    let renamed = kkt
-        .replace("Usage: kkt ", "Usage: kashkeshet ")
-        .replace("\n       kkt ", "\n       kashkeshet ");
-    assert_eq!(renamed, long);
-}
-
-/// With two binaries, `cargo run` (as the README says to start the server)
-/// fails unless the package names a default. Running cargo from inside
-/// `cargo test` would wait on the build lock, so this checks the manifest.
-#[test]
-fn cargo_run_starts_kashkeshet() {
-    let manifest = include_str!("../Cargo.toml");
-    assert!(
-        manifest
-            .lines()
-            .any(|l| l.trim() == r#"default-run = "kashkeshet""#),
-        "Cargo.toml must set default-run = \"kashkeshet\""
+async fn kkt_alone_prints_help() {
+    let out = Command::new(KKT).output().await.expect("run kkt");
+    assert!(!out.status.success());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
+    assert!(text.contains("Usage: kkt <COMMAND>"), "{text}");
+    assert!(text.contains("kkt serve"), "{text}");
 }
 
 #[tokio::test]
-async fn kkt_starts_and_serves() {
+async fn kkt_serve_starts_and_serves() {
     let dir = std::env::temp_dir().join(format!("kashkeshet-kkt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -57,10 +33,13 @@ async fn kkt_starts_and_serves() {
         .port();
     let bind = format!("127.0.0.1:{port}");
     let mut child = Command::new(KKT)
+        .arg("serve")
         .arg("--db")
         .arg(dir.join("kkt.db"))
-        .arg("--bind")
-        .arg(&bind)
+        .args(["--bind", &bind, "--no-access-key"])
+        .env("HOME", &dir)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)

@@ -1,6 +1,6 @@
-//! `kkt serve` and its config file, and that bare `kkt` is unchanged. Each
-//! test runs the real binary with its own home directory, so no test reads
-//! or writes the real one.
+//! `kkt serve`: its config file, its defaults, and the access key it makes
+//! on first start. Each test runs the real binary with its own home
+//! directory, so no test reads or writes the real one.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -159,28 +159,6 @@ async fn serve_reads_the_default_config_file_and_keeps_data_per_user() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
-/// Operators run bare `kkt` and `kashkeshet` today: no config file is read,
-/// and the database is ./kashkeshet.db in the working directory.
-#[tokio::test]
-async fn bare_kkt_ignores_the_config_file_and_uses_the_old_database_path() {
-    let home = temp_home("bare");
-    let config_dir = home.join(".config/kkt");
-    std::fs::create_dir_all(&config_dir).expect("config dir");
-    // A file serve would refuse; bare kkt must not read it.
-    std::fs::write(config_dir.join("config.toml"), "not_a_setting = 1\n").expect("write config");
-    let bind = free_bind();
-    let mut command = kkt(&home, &["--bind", &bind]);
-    command.current_dir(&home);
-    let (mut child, line) = start(command).await;
-
-    assert!(line.contains("database ./kashkeshet.db"), "{line}");
-    assert!(!line.contains("config "), "{line}");
-    assert!(home.join("kashkeshet.db").exists());
-
-    child.kill().await.expect("stop kkt");
-    let _ = std::fs::remove_dir_all(&home);
-}
-
 #[tokio::test]
 async fn a_bad_config_file_stops_serve_naming_the_setting() {
     let home = temp_home("bad");
@@ -221,10 +199,10 @@ async fn a_bad_config_file_stops_serve_naming_the_setting() {
 }
 
 #[tokio::test]
-async fn flags_and_subcommands_do_not_mix() {
+async fn server_flags_belong_to_serve() {
     let home = temp_home("mix");
     let out = refused(kkt(&home, &["--bind", "127.0.0.1:1", "serve"])).await;
-    assert!(out.contains("cannot be used with"), "{out}");
+    assert!(out.contains("unexpected argument '--bind'"), "{out}");
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -276,5 +254,124 @@ async fn serve_stops_cleanly_on_sigterm() {
         .expect("kkt serve did not stop in time")
         .expect("wait");
     assert!(status.success(), "{status}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+/// With no key setting, the first start makes a key at the default path,
+/// says where (never what), and requires it; later starts reuse it.
+#[tokio::test]
+async fn the_first_start_creates_the_default_key_and_requires_it() {
+    let home = temp_home("default-key");
+    let key_file = home.join(".config/kkt/access-key");
+    let bind = free_bind();
+    let mut command = kkt(&home, &["serve", "--bind", &bind]);
+    command.stdout(Stdio::piped());
+    let mut child = command.spawn().expect("start kkt");
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    let log = tokio::time::timeout(TIMEOUT, async {
+        let mut log = String::new();
+        while let Some(line) = lines.next_line().await.expect("read stdout") {
+            log.push_str(&line);
+            log.push('\n');
+            if line.contains("listening") {
+                return log;
+            }
+        }
+        panic!("kkt exited before listening: {log}");
+    })
+    .await
+    .expect("kkt did not start in time");
+
+    let key = std::fs::read_to_string(&key_file).expect("key created");
+    let key = key.trim();
+    assert!(
+        log.contains(&format!(
+            "created a new access key at {}",
+            key_file.display()
+        )),
+        "{log}"
+    );
+    assert!(
+        log.contains(&format!("access key from {}", key_file.display())),
+        "{log}"
+    );
+    assert!(!log.contains(key), "the key must not be logged");
+    #[cfg(unix)]
+    assert_eq!(mode(&key_file), 0o600);
+
+    let http = reqwest::Client::new();
+    let mcp = |auth: Option<String>| {
+        let mut request = http.post(format!("http://{bind}/mcp"));
+        if let Some(auth) = auth {
+            request = request.header("Authorization", auth);
+        }
+        async move { request.send().await.expect("post /mcp").status().as_u16() }
+    };
+    assert_eq!(mcp(None).await, 401);
+    assert_ne!(mcp(Some(format!("Bearer {key}"))).await, 401);
+    child.kill().await.expect("stop kkt");
+
+    // A second start uses the same key and makes no new one.
+    let (mut child, line) = start(kkt(&home, &["serve", "--bind", &free_bind()])).await;
+    assert!(line.contains("access key from"), "{line}");
+    assert_eq!(std::fs::read_to_string(&key_file).expect("key").trim(), key);
+    child.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn no_access_key_runs_open_and_makes_no_key() {
+    let home = temp_home("no-key");
+    let bind = free_bind();
+    let (mut child, line) = start(kkt(&home, &["serve", "--bind", &bind, "--no-access-key"])).await;
+    assert!(line.contains("no access key"), "{line}");
+    assert!(!home.join(".config/kkt/access-key").exists());
+    let status = reqwest::Client::new()
+        .post(format!("http://{bind}/mcp"))
+        .send()
+        .await
+        .expect("post /mcp")
+        .status()
+        .as_u16();
+    assert_ne!(status, 401);
+    child.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn no_access_key_and_a_key_file_together_are_refused() {
+    let home = temp_home("both");
+    let config = home.join("kkt.toml");
+    std::fs::write(&config, "no_access_key = true\n").expect("write config");
+    let config_arg = config.display().to_string();
+    let db = home.join("never.db").display().to_string();
+    let out = refused(kkt(
+        &home,
+        &[
+            "serve",
+            "--config",
+            &config_arg,
+            "--db",
+            &db,
+            "--access-key-file",
+            "/keys/k",
+        ],
+    ))
+    .await;
+    assert!(
+        out.contains("invalid setting: no_access_key cannot be set together with access_key_file"),
+        "{out}"
+    );
+    assert!(!home.join("never.db").exists());
     let _ = std::fs::remove_dir_all(&home);
 }

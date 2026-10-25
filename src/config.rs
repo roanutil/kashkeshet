@@ -57,9 +57,6 @@ pub const MIN_RESPONSE_BYTES: usize = 1024;
 
 /// Address to listen on.
 pub const DEFAULT_BIND: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7420));
-/// Database file for bare `kashkeshet` or `kkt` (no subcommand), relative to
-/// the working directory, as it has always been.
-pub const LEGACY_DB_PATH: &str = "./kashkeshet.db";
 /// Database file name in the per-user data directory, for `kkt serve`.
 pub const DB_FILE_NAME: &str = "kashkeshet.db";
 /// The per-user data directory on macOS, under the home directory.

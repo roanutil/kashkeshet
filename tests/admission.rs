@@ -83,18 +83,23 @@ async fn without_a_key_file_nothing_changes() {
 /// Starts the server with `--access-key-file <file>` and returns what it
 /// printed, expecting it to refuse to start.
 async fn refused_start(file: &std::path::Path, db: &std::path::Path) -> String {
-    let child = Command::new(env!("CARGO_BIN_EXE_kashkeshet"))
+    let home = db.parent().expect("temp dir");
+    let child = Command::new(env!("CARGO_BIN_EXE_kkt"))
+        .arg("serve")
         .arg("--db")
         .arg(db)
         .arg("--bind")
         .arg("127.0.0.1:0")
         .arg("--access-key-file")
         .arg(file)
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .expect("start kashkeshet");
+        .expect("start kkt");
     let out = tokio::time::timeout(Duration::from_secs(20), child.wait_with_output())
         .await
         .expect("server should exit, not start")

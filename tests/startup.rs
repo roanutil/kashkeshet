@@ -3,7 +3,7 @@
 use std::time::Duration;
 use tokio::process::Command;
 
-const KASHKESHET: &str = env!("CARGO_BIN_EXE_kashkeshet");
+const KKT: &str = env!("CARGO_BIN_EXE_kkt");
 
 /// Long enough for a refusal; a server that wrongly starts is killed then.
 const REFUSAL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -19,17 +19,25 @@ async fn a_bad_allowed_host_stops_the_server_naming_the_setting() {
         .local_addr()
         .expect("addr")
         .port();
-    let run = Command::new(KASHKESHET)
+    let run = Command::new(KKT)
+        .arg("serve")
         .arg("--db")
         .arg(dir.join("startup.db"))
         .args(["--bind", &format!("127.0.0.1:{port}")])
-        .args(["--allow-host", "http://host.docker.internal"])
+        .args([
+            "--allow-host",
+            "http://host.docker.internal",
+            "--no-access-key",
+        ])
+        .env("HOME", &dir)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
         .kill_on_drop(true)
         .output();
     let out = tokio::time::timeout(REFUSAL_TIMEOUT, run)
         .await
         .expect("the server should refuse to start, not run")
-        .expect("run kashkeshet");
+        .expect("run kkt");
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!out.status.success());
     let text = format!(

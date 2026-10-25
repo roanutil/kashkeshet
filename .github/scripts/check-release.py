@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Check build.rs provenance and both commands in a native dist archive."""
+"""Check build.rs provenance and the kkt command in a native dist archive."""
 
 import pathlib
 import subprocess
 import sys
 import tarfile
+
+
+# The executables every archive must hold. kkt is the only one.
+COMMANDS = ("kkt",)
 
 
 def check(root, target, expected):
@@ -17,7 +21,7 @@ def check(root, target, expected):
             raise ValueError(f"{output}: expected clean release commit {expected}")
     archive = root / "target" / "distrib" / f"kashkeshet-{target}.tar.xz"
     with tarfile.open(archive) as package:
-        for command in ("kashkeshet", "kkt"):
+        for command in COMMANDS:
             member = package.getmember(f"kashkeshet-{target}/{command}")
             if not member.isfile() or not member.mode & 0o111:
                 raise ValueError(f"{command}: archive must contain an executable file")
@@ -34,4 +38,4 @@ if __name__ == "__main__":
     root = pathlib.Path(__file__).resolve().parents[2]
     expected = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     check(root, sys.argv[1], expected)
-    print(f"Both packaged commands record clean commit {expected}")
+    print(f"The packaged command records clean commit {expected}")

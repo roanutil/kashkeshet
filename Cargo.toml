@@ -3,9 +3,12 @@ name = "kashkeshet"
 version = "0.1.0"
 edition = "2024"
 repository = "https://github.com/sam-mfb/kashkeshet"
-# Two binaries (kashkeshet and its short name kkt) are built; `cargo run`
-# runs this one.
-default-run = "kashkeshet"
+# The only binary is `kkt`, declared below; nothing is found by file layout.
+autobins = false
+
+[[bin]]
+name = "kkt"
+path = "src/main.rs"
 
 [dependencies]
 askama = "0.16.1"

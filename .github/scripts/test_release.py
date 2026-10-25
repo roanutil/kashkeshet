@@ -28,7 +28,7 @@ class ReleaseChecks(unittest.TestCase):
         self.output = output
         self.archive()
 
-    def archive(self, commands=("kashkeshet", "kkt"), embedded=None):
+    def archive(self, commands=("kkt",), embedded=None):
         path = self.root / "target/distrib" / f"kashkeshet-{self.target}.tar.xz"
         path.parent.mkdir(exist_ok=True)
         with tarfile.open(path, "w:xz") as package:
@@ -54,7 +54,7 @@ class ReleaseChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             CHECK.check(self.root, self.target, self.commit)
 
-    def test_missing_short_command_fails(self):
+    def test_missing_kkt_fails(self):
         self.archive(commands=("kashkeshet",))
         with self.assertRaises(KeyError):
             CHECK.check(self.root, self.target, self.commit)

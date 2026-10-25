@@ -2,12 +2,12 @@ use clap::{Args, Parser, Subcommand};
 use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
-use kashkeshet::config::{self, DEFAULT_BIND, InvalidSetting, LEGACY_DB_PATH, Limits};
+use kashkeshet::config::{self, DEFAULT_BIND, InvalidSetting, Limits};
 use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::service::{DryRun, Manager, OsSystem, Spec};
-use kashkeshet::settings::{self, Env, Platform, ServeOptions, ServeSettings};
+use kashkeshet::settings::{self, AccessKey, Env, Platform, ServeOptions, ServeSettings};
 use kashkeshet::shutdown::{Shutdown, StopSignals};
 use kashkeshet::store::Db;
 use kashkeshet::{Operator, Revoked};
@@ -16,16 +16,13 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// A local server that lets AI agents talk to each other over MCP.
-///
-/// With no command, runs the server with the flags below, as it always has.
+/// Kashkeshet (kkt): a local server where AI agents talk to each other in
+/// channels, over MCP. Start it with `kkt serve`.
 #[derive(Parser, Debug)]
-#[command(version, args_conflicts_with_subcommands = true)]
+#[command(version, arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
-    #[command(flatten)]
-    flags: ServeFlags,
+    command: Command,
 }
 
 // Parsed once at startup, so the size of the largest variant costs nothing.
@@ -36,6 +33,8 @@ enum Command {
     ///
     /// Flags win over the file, and the file over the defaults. Without
     /// --db, the database is kashkeshet.db in the per-user data directory.
+    /// Without --access-key-file, the key is ~/.config/kkt/access-key,
+    /// created on first start; --no-access-key runs with none.
     Serve {
         /// The config file. By default ~/.config/kkt/config.toml
         /// ($XDG_CONFIG_HOME/kkt/config.toml), if it exists.
@@ -56,7 +55,7 @@ enum Command {
         command: AgentCommand,
         /// The server's database file. By default the one `kkt serve` uses:
         /// the config file's `db`, else kashkeshet.db in the per-user data
-        /// directory. A server started without `serve` uses ./kashkeshet.db.
+        /// directory.
         #[arg(long, global = true)]
         db: Option<PathBuf>,
         /// The config file, as for `kkt serve`.
@@ -101,6 +100,10 @@ enum ServiceCommand {
         /// The access key file, in place of the config file's.
         #[arg(long)]
         access_key_file: Option<PathBuf>,
+        /// Run the service with no access key: anyone who can reach it can
+        /// use it.
+        #[arg(long)]
+        no_access_key: bool,
         /// Show what would be written and run, and change nothing.
         #[arg(long)]
         dry_run: bool,
@@ -145,10 +148,9 @@ enum KeyCommand {
 /// given here can come from the config file or the default.
 #[derive(Args, Debug)]
 struct ServeFlags {
-    #[arg(long, help = format!(
-        "The SQLite database file. Created if missing [default: {LEGACY_DB_PATH}; \
-         with `serve`, kashkeshet.db in the per-user data directory]"
-    ))]
+    /// The SQLite database file. Created if missing [default: kashkeshet.db
+    /// in the per-user data directory]
+    #[arg(long)]
     db: Option<PathBuf>,
     #[arg(long, help = format!(
         "Address to listen on. Must be a loopback address [default: {DEFAULT_BIND}]"
@@ -192,10 +194,14 @@ struct ServeFlags {
     /// the built-in instructions (agent-instructions.md).
     #[arg(long)]
     instructions: Option<PathBuf>,
-    /// A file holding the access key. When set, every /mcp request must send
-    /// `Authorization: Bearer <key>`. By default /mcp needs no key.
+    /// A file holding the access key. Every /mcp request must send
+    /// `Authorization: Bearer <key>`, and the web page asks for it [default:
+    /// ~/.config/kkt/access-key, created if missing]
     #[arg(long)]
     access_key_file: Option<PathBuf>,
+    /// Run with no access key: anyone who can reach the server can use it.
+    #[arg(long)]
+    no_access_key: bool,
 }
 
 impl ServeFlags {
@@ -215,6 +221,7 @@ impl ServeFlags {
             allow_hosts: list(self.allow_hosts),
             instructions: self.instructions,
             access_key_file: self.access_key_file,
+            no_access_key: self.no_access_key.then_some(true),
         }
     }
 }
@@ -230,20 +237,16 @@ async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     let env = process_env();
     let result = match cli.command {
-        None => {
-            let settings = cli.flags.options().resolve(PathBuf::from(LEGACY_DB_PATH));
-            serve(settings, &Sources::FLAGS_ONLY).await
-        }
-        Some(Command::Serve { config, flags }) => serve_from_config(&env, config, flags).await,
-        Some(Command::Key {
+        Command::Serve { config, flags } => serve_from_config(&env, config, flags).await,
+        Command::Key {
             command: KeyCommand::Create { path, force, show },
-        }) => create_key(&env, path, force, show),
-        Some(Command::Agent {
+        } => create_key(&env, path, force, show),
+        Command::Agent {
             command,
             db,
             config,
-        }) => agent(&env, command, db, config).await,
-        Some(Command::Service { command }) => service(&env, command),
+        } => agent(&env, command, db, config).await,
+        Command::Service { command } => service(&env, command),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -292,7 +295,9 @@ async fn serve_from_config(
             db
         }
     };
-    let settings = options.resolve(default_db);
+    let settings = options
+        .resolve(default_db, env.access_key_file())
+        .map_err(|e| sources.invalid(e))?;
     serve(settings, &sources).await
 }
 
@@ -423,12 +428,6 @@ struct Sources {
 }
 
 impl Sources {
-    /// Bare `kkt`: flags and defaults only.
-    const FLAGS_ONLY: Sources = Sources {
-        flags: ServeOptions::NONE,
-        file: None,
-    };
-
     /// The message for a bad setting, naming the config file if the setting
     /// came from there.
     fn invalid(&self, e: InvalidSetting) -> String {
@@ -458,7 +457,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         allow_origins,
         allow_hosts,
         instructions,
-        access_key_file,
+        access_key,
     } = settings;
     config::check_bind(bind).map_err(|e| sources.invalid(e))?;
     limits.check().map_err(|e| sources.invalid(e))?;
@@ -468,19 +467,13 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
             .map_err(|e| format!("could not read {}: {e}", path.display()))?,
         None => kashkeshet::DEFAULT_INSTRUCTIONS.to_string(),
     };
-    let admission = match &access_key_file {
-        Some(path) => {
-            let text = std::fs::read_to_string(path).map_err(|e| {
-                format!(
-                    "invalid setting: access_key_file could not be read from {}: {e}",
-                    path.display()
-                )
-            })?;
-            let key = SharedKey::new(&text, path.display().to_string())
-                .map_err(|e| sources.invalid(e))?;
-            Admission::SharedKey(key)
+    // Only reads the key: `serve` makes a missing default key first, and
+    // `kkt service install` checks settings without making anything.
+    let admission = match access_key {
+        AccessKey::None => Admission::Open,
+        AccessKey::File(path) | AccessKey::Default(path) => {
+            Admission::SharedKey(read_key(&path, sources)?)
         }
-        None => Admission::Open,
     };
     let config = AppConfig {
         admission,
@@ -498,6 +491,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
 }
 
 async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String> {
+    make_default_key(&settings.access_key)?;
     let Checked {
         db_path,
         bind,
@@ -545,6 +539,35 @@ async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String>
 
 /// `kkt key create`: writes a new key to a file only the owner can read,
 /// and says how to use it. The key itself is printed only with `--show`.
+/// Makes the default key file if it is the one in use and does not exist
+/// yet, and logs where it is (never the key).
+fn make_default_key(access_key: &AccessKey) -> Result<(), String> {
+    let AccessKey::Default(path) = access_key else {
+        return Ok(());
+    };
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    }
+    write_key_file(path, &SharedKey::generate(&OsEntropy), false)?;
+    tracing::info!("created a new access key at {}", path.display());
+    Ok(())
+}
+
+/// The access key in the file at `path`.
+fn read_key(path: &Path, sources: &Sources) -> Result<SharedKey, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        format!(
+            "invalid setting: access_key_file could not be read from {}: {e}",
+            path.display()
+        )
+    })?;
+    SharedKey::new(&text, path.display().to_string()).map_err(|e| sources.invalid(e))
+}
+
 fn create_key(env: &Env, path: Option<PathBuf>, force: bool, show: bool) -> Result<(), String> {
     let path = match path {
         Some(path) => path,
@@ -628,9 +651,10 @@ fn service(env: &Env, command: ServiceCommand) -> Result<(), String> {
             config,
             db,
             access_key_file,
+            no_access_key,
             dry_run,
         } => {
-            let plan = service_plan(env, config, db, access_key_file)?;
+            let plan = service_plan(env, config, db, access_key_file, no_access_key)?;
             if dry_run {
                 let dry = DryRun::new(&system);
                 manager
@@ -690,6 +714,7 @@ fn service_plan(
     config: Option<PathBuf>,
     db: Option<PathBuf>,
     access_key_file: Option<PathBuf>,
+    no_access_key: bool,
 ) -> Result<ServicePlan, String> {
     let program = std::env::current_exe()
         .and_then(|p| p.canonicalize())
@@ -710,6 +735,7 @@ fn service_plan(
     let flags = ServeOptions {
         db: db.map(absolute).transpose()?,
         access_key_file: access_key_file.map(absolute).transpose()?,
+        no_access_key: no_access_key.then_some(true),
         ..ServeOptions::NONE
     };
     let loaded = load_serve_options(env, config, flags)?;
@@ -721,6 +747,11 @@ fn service_plan(
             "no home directory to keep the database in: set HOME or pass --db".to_string(),
         )?),
     };
+    let key_off = loaded
+        .flags
+        .no_access_key
+        .or(loaded.from_file.no_access_key)
+        == Some(true);
     let (passed_key, new_key) = match (
         &loaded.flags.access_key_file,
         &loaded.from_file.access_key_file,
@@ -728,6 +759,9 @@ fn service_plan(
         (Some(key), _) => (Some(key.clone()), None),
         // Read from the config file each time the service starts.
         (None, Some(_)) => (None, None),
+        // No key: nothing to pass or make. A key file given with it is
+        // refused by the check below.
+        (None, None) if key_off => (None, None),
         (None, None) => {
             let key = env.access_key_file().ok_or(
                 "no home directory to keep the access key in: set HOME or pass --access-key-file"
@@ -742,13 +776,21 @@ fn service_plan(
         (Some(db), _) | (None, Some(db)) => db.clone(),
         (None, None) => return Err("no database for the service".to_string()),
     };
-    // A key about to be made is good by construction; check any other.
-    options.access_key_file = match &new_key {
-        Some(_) => None,
-        None => passed_key.clone().or(options.access_key_file),
-    };
+    // A key about to be made is good by construction, so the check skips
+    // it; any other key is read and checked.
+    match &new_key {
+        Some(_) => {
+            options.access_key_file = None;
+            options.no_access_key = Some(true);
+        }
+        None => options.access_key_file = passed_key.clone().or(options.access_key_file),
+    }
     let db_folder = db_in_effect.parent().map(Path::to_path_buf);
-    check_settings(options.resolve(db_in_effect), &loaded.sources())?;
+    let sources = loaded.sources();
+    let settings = options
+        .resolve(db_in_effect, env.access_key_file())
+        .map_err(|e| sources.invalid(e))?;
+    check_settings(settings, &sources)?;
 
     let text = |path: &Path| {
         path.to_str()
@@ -770,6 +812,10 @@ fn service_plan(
     }
     if let Some(key) = &passed_key {
         args.extend(["--access-key-file".to_string(), text(key)?]);
+    }
+    // From the config file, serve reads it again each time it starts.
+    if loaded.flags.no_access_key == Some(true) {
+        args.push("--no-access-key".to_string());
     }
     Ok(ServicePlan {
         spec: Spec {

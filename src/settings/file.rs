@@ -6,6 +6,8 @@
 //! bind = "127.0.0.1:7420"
 //! allow_hosts = ["host.docker.internal"]
 //! access_key_file = "access-key"
+//! # or, to run with no key at all:
+//! # no_access_key = true
 //! ```
 //!
 //! A path starting with `~/` is under the home directory; any other relative
@@ -45,6 +47,7 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
             "access_key_file" => {
                 options.access_key_file = Some(value.path("access_key_file", dir, env)?)
             }
+            "no_access_key" => options.no_access_key = Some(value.boolean("no_access_key")?),
             _ => {
                 return Err(InvalidSetting::new(
                     "config",
@@ -86,6 +89,12 @@ impl Value {
             };
         }
         Ok(dir.join(text))
+    }
+
+    fn boolean(&self, name: &'static str) -> Result<bool, InvalidSetting> {
+        self.0
+            .as_bool()
+            .ok_or_else(|| self.wrong(name, "true or false"))
     }
 
     fn address(&self, name: &'static str) -> Result<SocketAddr, InvalidSetting> {
@@ -157,6 +166,7 @@ mod tests {
             allow_hosts = ["host.docker.internal", "box.ts.net"]
             instructions = "instructions.md"
             access_key_file = "/keys/kkt"
+            no_access_key = false
             "#,
         )
         .expect("valid file");
@@ -174,6 +184,7 @@ mod tests {
                 allow_hosts: Some(vec!["host.docker.internal".into(), "box.ts.net".into()]),
                 instructions: Some(PathBuf::from("/etc/kkt/instructions.md")),
                 access_key_file: Some(PathBuf::from("/keys/kkt")),
+                no_access_key: Some(false),
             }
         );
     }
@@ -198,6 +209,7 @@ mod tests {
             ("sends_per_minute = 5000000000", "sends_per_minute"),
             ("allow_hosts = \"one.example\"", "allow_hosts"),
             ("allow_origins = [1]", "allow_origins"),
+            ("no_access_key = \"yes\"", "no_access_key"),
             ("db = \"\"", "db"),
             ("access_key_file = 3", "access_key_file"),
         ];
