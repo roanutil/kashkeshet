@@ -22,11 +22,10 @@
 
   <h2>Recent messages</h2>
   <div class="panel">
-  <ol class="messages" data-live data-follow data-max="{{ max_messages }}">
+  <ol class="messages" data-live data-max="{{ max_messages }}">
     {% for m in recent %}{% let show_channel = true %}{% include "message.html" %}{% else %}<li class="empty muted">No messages yet.</li>{% endfor %}
   </ol>
   </div>
-  <button type="button" class="jump" id="jump" hidden></button>
 </section>
 <section>
   <h2>Agents ({{ agents.len() }})</h2>

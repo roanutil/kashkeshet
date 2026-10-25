@@ -114,8 +114,7 @@ details summary { cursor: pointer; }
 <script>
 // Live updates. New messages go into any list marked data-live; a list with
 // data-channel only takes that channel's. A list keeps at most data-max
-// messages, dropping the oldest. A data-follow list (the message list on the
-// front page or a channel page; one per page) scrolls
+// messages, dropping the oldest. A data-follow list (a channel page) scrolls
 // to new messages only if the reader is at the bottom of the list; otherwise
 // it shows a "N new" button and leaves the oldest in place until the reader
 // is back. "Bottom" is the list's, not the page's: on a narrow screen the
@@ -263,7 +262,7 @@ details summary { cursor: pointer; }
     return li;
   }
 
-  // A page with a followed list opens at its newest messages.
+  // A live channel page opens at its newest messages.
   toBottom();
 })();
 </script>

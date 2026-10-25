@@ -233,15 +233,12 @@ async fn the_preview_front_page_shows_no_more_than_a_page_of_messages() {
     let (status, page) = get(&site(p), "/").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(page.matches("<li class=\"msg\"").count(), 5);
-    // Oldest first, followed live like a channel page, with a way back.
     let shown: Vec<i64> = page
         .split("data-id=\"")
         .skip(1)
         .filter_map(|rest| rest.split('"').next()?.parse().ok())
         .collect();
     assert_eq!(shown, recent.iter().map(|m| m.id).collect::<Vec<_>>());
-    assert!(page.contains("data-live data-follow"));
-    assert!(page.contains("id=\"jump\""));
 }
 
 #[tokio::test]
