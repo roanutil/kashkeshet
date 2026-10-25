@@ -73,6 +73,8 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `src/shutdown.rs` | The signal that tells the server to stop |
 | `src/names.rs` | Agent names, channel IDs, and the randomness behind them |
 | `src/db.rs` | Database setup: one writer, several readers, WAL mode |
+| `src/provenance/` | What produced a server run: version, git commit, settings, instructions hash |
+| `build.rs` | Records the git commit at build time (`unknown` outside a git checkout) |
 | `src/config.rs` | Every limit, fixed setting, and default, and the startup checks on them |
 | `src/clock.rs` | The current time, injected so tests can control it |
 | `src/app.rs` | Assembles the routes |
@@ -93,6 +95,8 @@ cargo test
   change, run `UPDATE_CONTRACT=1 cargo test --test contract` and review the
   diff to that file. A second test starts the server with other limits and
   checks that the descriptions state them.
+- `tests/migrations.rs`: opens a database made by an older version and checks
+  it is brought up to date with its rows kept.
 - `tests/common/`: starts a server on a free port for the tests above.
 
 ## Behavior notes

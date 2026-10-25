@@ -9,7 +9,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_server_runs.sql"),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
