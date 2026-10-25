@@ -112,8 +112,14 @@ pub async fn connect_new_with_key(server: &Server, key: &str) -> Client {
 }
 
 pub async fn connect_new(server: &Server) -> Client {
-    connect(
-        server,
+    connect_new_at(&server.base).await
+}
+
+/// Connects as `connect_new` does, to a server at `base` (such as
+/// `http://127.0.0.1:7420`) that this process did not start.
+pub async fn connect_new_at(base: &str) -> Client {
+    connect_with(
+        StreamableHttpClientTransportConfig::with_uri(format!("{base}/mcp")),
         ClientLifecycleMode::Discover {
             preferred_versions: vec![ProtocolVersion::V_2026_07_28],
         },
