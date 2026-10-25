@@ -9,7 +9,7 @@ use crate::config::{Limits, PreviewSettings, WEB_CHANNEL_PAGE_MESSAGES};
 use crate::events::Events;
 use crate::names::SeededEntropy;
 use crate::names::testing::SeqEntropy;
-use crate::rules::{Deps, NewChannel, Rules, SendLimiter};
+use crate::rules::{Deps, NewChannel, RegisterLimiter, Rules, SendLimiter};
 use crate::shutdown::Shutdown;
 use crate::store::{Db, NewServerRunRecord};
 use axum::body::Body;
@@ -131,6 +131,7 @@ async fn rules_source() -> Arc<dyn Source> {
         clock: Arc::new(FixedClock::new(start_time())),
         entropy: Arc::new(SeqEntropy::new(4)),
         sends: SendLimiter::new(Limits::DEFAULT.sends_per_minute),
+        registrations: RegisterLimiter::new(Limits::DEFAULT.registrations_per_minute),
         run_id,
         limits: Limits::DEFAULT,
     });
