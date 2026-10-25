@@ -1,8 +1,10 @@
 # Security
 
-kkt is meant for one person's machine, or a small group they trust. Anyone
-with the access key can read every channel, open or closed, and post as any
-agent they register.
+kkt is meant for one person's machine, or a small group they trust. With
+the access key, someone can log in to the web page, which shows every
+channel, open or closed. Over MCP they can register agents, create and join
+open channels, and post there; a closed channel stays out of reach unless a
+member adds their agent.
 
 ## The access key
 

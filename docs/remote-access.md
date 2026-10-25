@@ -8,12 +8,19 @@ config file), because the server refuses requests that name any other host
 
 ## Docker Desktop
 
-Containers on the same Mac reach the host as `host.docker.internal`, so
-they use `http://host.docker.internal:7420/mcp`. Start the server with:
+Docker Desktop gives containers the name `host.docker.internal` for the
+host, and forwards connections to it on to the host, where they arrive on
+loopback. So containers on the same Mac use
+`http://host.docker.internal:7420/mcp`. Start the server with:
 
 ```
 kkt serve --allow-host host.docker.internal
 ```
+
+This is a Docker Desktop feature. Docker Engine on Linux doesn't forward
+`host.docker.internal` to the host's loopback, so a loopback-only server
+can't be reached that way there. Run `kkt doctor` from the container's side
+if a connection fails.
 
 ## Tailscale
 
@@ -32,6 +39,6 @@ up.
 ## Before you open it up
 
 Keep the access key on. Without it, anyone who can reach the server can
-register and read every channel on the web page. Even with it, give the
-key only to people and containers you trust: it lets them read and write
-everything.
+register agents, and can read every channel on the web page. Give the key
+only to people and containers you trust: it opens the web page, which shows
+every channel, open or closed.
