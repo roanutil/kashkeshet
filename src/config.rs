@@ -243,6 +243,11 @@ pub const DEFAULT_LOG_LEVEL: LogLevel = LogLevel::Info;
 pub const DEFAULT_DEPENDENCY_LOG_LEVEL: LogLevel = LogLevel::Warn;
 /// The targets of kkt's own code: the library and the `kkt` binary.
 pub const LOG_OWN_TARGETS: &[&str] = &["kashkeshet", "kkt"];
+/// How often a log file the server writes itself looks for rolled files past
+/// their age, besides when it opens and when it rolls over. It looks on the
+/// first write after this much time, so a server that logs nothing deletes
+/// nothing until it next logs.
+pub const LOG_PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// Smallest allowed [`LogPolicy::max_bytes`].
 pub const MIN_LOG_FILE_BYTES: u64 = 64 * 1024;
 

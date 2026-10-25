@@ -4,7 +4,7 @@
 //! launchd service on macOS.
 
 use crate::clock::Clock;
-use crate::config::LogPolicy;
+use crate::config::{LOG_PRUNE_INTERVAL, LogPolicy};
 use chrono::{DateTime, Utc};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -18,6 +18,8 @@ pub struct RotatingFile {
     clock: Arc<dyn Clock>,
     file: File,
     size: u64,
+    /// When rolled files were last checked for age.
+    pruned_at: DateTime<Utc>,
 }
 
 impl RotatingFile {
@@ -29,12 +31,14 @@ impl RotatingFile {
         }
         let file = append(path)?;
         let size = file.metadata()?.len();
-        let log = RotatingFile {
+        let pruned_at = clock.now();
+        let mut log = RotatingFile {
             path: path.to_path_buf(),
             policy,
             clock,
             file,
             size,
+            pruned_at,
         };
         log.prune()?;
         Ok(log)
@@ -62,10 +66,12 @@ impl RotatingFile {
     }
 
     /// Deletes rolled files last written more than the policy's age ago.
-    fn prune(&self) -> io::Result<()> {
+    fn prune(&mut self) -> io::Result<()> {
         let max_age = chrono::Duration::from_std(self.policy.max_age)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let cutoff = self.clock.now() - max_age;
+        let now = self.clock.now();
+        self.pruned_at = now;
+        let cutoff = now - max_age;
         for n in 1..=self.policy.rotated_files {
             let rolled = self.rolled(n);
             let written = match std::fs::metadata(&rolled) {
@@ -84,10 +90,16 @@ impl RotatingFile {
 impl Write for RotatingFile {
     /// Writes `buf` to the file, rolling it over first if `buf` would take
     /// it past the policy's size. A file is never rolled while empty, so one
-    /// write larger than the limit still lands whole.
+    /// write larger than the limit still lands whole. Otherwise, at most
+    /// once per [`LOG_PRUNE_INTERVAL`], deletes rolled files past their age.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.size > 0 && self.size + buf.len() as u64 > self.policy.max_bytes {
             self.roll()?;
+        } else if self.clock.now() - self.pruned_at
+            >= chrono::Duration::from_std(LOG_PRUNE_INTERVAL)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
+        {
+            self.prune()?;
         }
         let written = self.file.write(buf)?;
         self.size += written as u64;
@@ -216,6 +228,27 @@ mod tests {
         drop(log);
         let log = RotatingFile::open(&path, POLICY, clock).expect("reopen");
         assert!(!log.rolled(1).exists());
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn a_running_log_deletes_old_files_without_rolling_over() {
+        let (dir, clock, path) = setup("running");
+        let mut log = RotatingFile::open(&path, POLICY, clock.clone()).expect("open");
+        for n in 0..3 {
+            log.write_all(&line(n)).expect("write");
+        }
+        let rolled = log.rolled(1);
+        // The rolled file goes past its age while the server keeps running.
+        // A small write within the hour leaves it; one after the hour, still
+        // well under the size limit, deletes it.
+        make_old(&rolled, &clock, 25);
+        clock.advance(chrono::Duration::minutes(59));
+        log.write_all(b"x\n").expect("write");
+        assert!(rolled.exists());
+        clock.advance(chrono::Duration::minutes(1));
+        log.write_all(b"x\n").expect("write");
+        assert!(!rolled.exists());
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
