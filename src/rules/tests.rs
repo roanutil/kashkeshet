@@ -444,34 +444,63 @@ async fn the_web_channel_page_holds_web_page_messages_and_pages_back() {
 }
 
 #[tokio::test]
-async fn the_front_page_shows_no_more_than_a_page_of_messages() {
-    let limits = Limits {
-        web_page_messages: 3,
-        ..Limits::DEFAULT
-    };
-    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
-    let a = w.agent().await;
-    let ch = w.channel(&a, "busy", true, &[]).await;
-    let mut ids = Vec::new();
-    for i in 0..7 {
-        ids.push(
-            w.rules
-                .send(&a, ch.clone(), format!("m{i}"))
-                .await
-                .unwrap()
-                .id,
-        );
-    }
-    let recent: Vec<i64> = w
-        .rules
-        .overview()
+async fn the_front_page_summarizes_each_channel_and_agent() {
+    let w = world().await;
+    let (a, b) = (w.agent().await, w.agent().await);
+    let busy = w.channel(&a, "busy", true, &[&b]).await;
+    let quiet = w.channel(&b, "quiet", false, &[]).await;
+    w.rules.send(&a, busy.clone(), "one".into()).await.unwrap();
+    w.clock.advance(chrono::Duration::minutes(10));
+    w.rules.send(&b, busy.clone(), "two".into()).await.unwrap();
+    w.rules
+        .send(&a, busy.clone(), "three".into())
         .await
-        .unwrap()
-        .recent
-        .iter()
-        .map(|m| m.id)
-        .collect();
-    assert_eq!(recent, ids[4..7]);
+        .unwrap();
+
+    let o = w.rules.overview().await.unwrap();
+    assert_eq!(o.now, clock::to_text(w.clock.now()));
+    let row = |id: &str| o.channels.iter().find(|c| c.info.id == id).unwrap();
+    let busy_row = row(&busy);
+    assert_eq!(busy_row.message_count, 3);
+    assert_eq!(busy_row.last_speaker.as_deref(), Some(a.name.as_str()));
+    assert_eq!(
+        busy_row.last_message_at,
+        Some(clock::to_text(w.clock.now()))
+    );
+    // Only the two messages from the last five minutes are recent.
+    assert_eq!(busy_row.recent_message_times.len(), 2);
+    let quiet_row = row(&quiet);
+    assert_eq!(quiet_row.message_count, 0);
+    assert_eq!(quiet_row.last_speaker, None);
+    assert!(quiet_row.recent_message_times.is_empty());
+
+    let channels_of = |name: &str| {
+        let mut ids: Vec<String> = o
+            .agents
+            .iter()
+            .find(|x| x.info.name == name)
+            .unwrap()
+            .channels
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(channels_of(&a.name), std::slice::from_ref(&busy));
+    let mut both = vec![busy.clone(), quiet.clone()];
+    both.sort();
+    assert_eq!(channels_of(&b.name), both);
+
+    // Later, nothing is recent.
+    w.clock.advance(chrono::Duration::minutes(6));
+    let later = w.rules.overview().await.unwrap();
+    assert!(
+        later
+            .channels
+            .iter()
+            .all(|c| c.recent_message_times.is_empty())
+    );
 }
 
 // ---- Closed channels do not exist to outsiders ----
@@ -1060,8 +1089,7 @@ async fn new_agents_and_messages_record_the_server_run() {
     assert_eq!(sent.run_id, Some(w.run_id));
 
     let overview = w.rules.overview().await.unwrap();
-    assert_eq!(overview.agents[0].run_id, Some(w.run_id));
-    assert_eq!(overview.recent[0].run_id, Some(w.run_id));
+    assert_eq!(overview.agents[0].info.run_id, Some(w.run_id));
     let runs: Vec<(i64, &str)> = overview
         .runs
         .iter()

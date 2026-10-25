@@ -397,3 +397,80 @@ async fn recovery_lookup_requires_both_name_and_hash_and_token_replacement_is_lo
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn channel_use_counts_messages_and_names_the_last_speaker() {
+    let db = world(&[
+        ("ch_open", "a", "one"),
+        ("ch_open", "b", "two"),
+        ("ch_open", "a", "three"),
+        ("ch_closed", "a", "solo"),
+    ])
+    .await;
+    // A channel with no messages is listed too.
+    db.write(|w| {
+        w.insert_channel(&NewChannelRecord {
+            id: "ch_quiet".into(),
+            name: "quiet".into(),
+            purpose: None,
+            open: true,
+            created_by: "c".into(),
+            created_at: T.into(),
+        })?;
+        w.insert_message(&NewMessageRecord {
+            channel_id: "ch_open".into(),
+            agent: "b".into(),
+            body: "four".into(),
+            created_at: "2026-10-23T14:05:00Z".into(),
+            run_id: 1,
+        })?;
+        Ok::<_, StoreError>(())
+    })
+    .await
+    .expect("seed");
+    let mut used = db.read(|r| r.channel_use()).await.expect("read");
+    used.sort_by(|x, y| x.channel_id.cmp(&y.channel_id));
+    let at = |s: &str| Some(s.to_string());
+    assert_eq!(
+        used,
+        [
+            ChannelUseRecord {
+                channel_id: "ch_closed".into(),
+                message_count: 1,
+                last_message_at: at(T),
+                last_speaker: at("a"),
+            },
+            ChannelUseRecord {
+                channel_id: "ch_open".into(),
+                message_count: 4,
+                last_message_at: at("2026-10-23T14:05:00Z"),
+                last_speaker: at("b"),
+            },
+            ChannelUseRecord {
+                channel_id: "ch_quiet".into(),
+                message_count: 0,
+                last_message_at: None,
+                last_speaker: None,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn memberships_list_every_agent_in_every_channel() {
+    let db = world(&[]).await;
+    let all = db.read(|r| r.memberships()).await.expect("read");
+    let pairs: Vec<(String, String, String)> = all
+        .into_iter()
+        .map(|m| (m.channel_id, m.channel_name, m.agent))
+        .collect();
+    let pair = |c: &str, n: &str, a: &str| (c.to_string(), n.to_string(), a.to_string());
+    assert_eq!(
+        pairs,
+        [
+            pair("ch_open", "beta", "a"),
+            pair("ch_open", "beta", "b"),
+            pair("ch_closed", "alpha", "a"),
+        ]
+    );
+}

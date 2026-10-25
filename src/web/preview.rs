@@ -8,14 +8,14 @@
 //! seeded entropy gives the same world and the same feed every time.
 
 use super::source::{
-    Agent, AgentView, Channel, ChannelView, LiveEvent, Message, Overview, ServerRun, Source,
-    SourceError,
+    Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary, ChannelView, LiveEvent,
+    Message, Overview, ServerRun, Source, SourceError,
 };
 use crate::clock::{self, Clock};
 use crate::config::{
     PREVIEW_AGENTS, PREVIEW_BURST_MAX, PREVIEW_BURST_ONE_IN, PREVIEW_CHANNELS, PREVIEW_HISTORY,
     PREVIEW_LONG_MESSAGE_ONE_IN, PREVIEW_MESSAGES, PREVIEW_NEW_AGENT_ONE_IN,
-    PREVIEW_NEW_CHANNEL_ONE_IN, PreviewSettings, WEB_RECENT_MESSAGES,
+    PREVIEW_NEW_CHANNEL_ONE_IN, PreviewSettings, WEB_ACTIVITY_WINDOW,
 };
 use crate::events::{Events, NewMessage, Notice};
 use crate::names::{self, Entropy};
@@ -205,18 +205,13 @@ impl Preview {
 
 impl Source for Preview {
     fn overview(&self) -> BoxFuture<'_, Result<Overview, SourceError>> {
+        let now = self.clock.now();
+        let since = clock::to_text(
+            now - chrono::Duration::from_std(WEB_ACTIVITY_WINDOW)
+                .unwrap_or(chrono::Duration::minutes(5)),
+        );
         let world = self.world();
-        let mut agents = world.agents.clone();
-        agents.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
-        // The front page's list keeps at most a page of messages.
-        let recent = WEB_RECENT_MESSAGES.min(self.settings.page_messages);
-        let skip = world.messages.len().saturating_sub(recent);
-        let overview = Overview {
-            channels: world.channels.iter().map(|c| c.channel.clone()).collect(),
-            agents,
-            recent: world.messages[skip..].to_vec(),
-            runs: world.runs.clone(),
-        };
+        let overview = world.overview(&since, clock::to_text(now));
         Box::pin(async move { Ok(overview) })
     }
 
@@ -421,6 +416,54 @@ impl World {
         }
         self.messages.push(message.clone());
         message
+    }
+
+    /// The front page's summary, with recent activity counted since `since`.
+    fn overview(&self, since: &str, now: String) -> Overview {
+        let channels = self
+            .channels
+            .iter()
+            .map(|c| {
+                let mine = self
+                    .messages
+                    .iter()
+                    .filter(|m| m.channel_id == c.channel.id);
+                let last = mine.clone().next_back();
+                ChannelSummary {
+                    channel: c.channel.clone(),
+                    message_count: mine.clone().count() as i64,
+                    last_message_at: last.map(|m| m.created_at.clone()),
+                    last_speaker: last.map(|m| m.agent.clone()),
+                    recent_message_times: mine
+                        .filter(|m| m.created_at.as_str() >= since)
+                        .map(|m| m.created_at.clone())
+                        .collect(),
+                }
+            })
+            .collect();
+        let mut agents: Vec<AgentSummary> = self
+            .agents
+            .iter()
+            .map(|a| AgentSummary {
+                agent: a.clone(),
+                channels: self
+                    .channels
+                    .iter()
+                    .filter(|c| c.members.contains(&a.name))
+                    .map(|c| ChannelLink {
+                        id: c.channel.id.clone(),
+                        name: c.channel.name.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        agents.sort_by(|a, b| b.agent.last_seen.cmp(&a.agent.last_seen));
+        Overview {
+            channels,
+            agents,
+            runs: self.runs.clone(),
+            now,
+        }
     }
 
     fn channel_view(

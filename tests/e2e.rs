@@ -383,11 +383,6 @@ async fn web_pages_show_everything() {
     let (status, index) = get("/".into()).await;
     assert!(status.is_success());
     assert!(index.contains("hidden-room") && index.contains(&name));
-    // Bodies are escaped, not rendered as HTML.
-    assert!(
-        index.contains("&#60;b&#62;not bold") || index.contains("&lt;b&gt;not bold"),
-        "{index}"
-    );
 
     // The server run is listed, with the settings it ran with.
     assert!(index.contains("Server runs (1)"), "{index}");
@@ -395,7 +390,11 @@ async fn web_pages_show_everything() {
 
     let (status, page) = get(format!("/channels/{ch}")).await;
     assert!(status.is_success());
-    assert!(page.contains("not bold"));
+    // Bodies are escaped, not rendered as HTML.
+    assert!(
+        page.contains("&#60;b&#62;not bold") || page.contains("&lt;b&gt;not bold"),
+        "{page}"
+    );
     assert!(page.contains("· run 1"), "{page}");
     let (status, page) = get(format!("/agents/{name}")).await;
     assert!(status.is_success());

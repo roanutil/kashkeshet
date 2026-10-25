@@ -124,12 +124,39 @@ pub struct ServerRun {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Overview {
-    pub channels: Vec<Channel>,
-    pub agents: Vec<Agent>,
-    /// The latest messages across all channels, oldest first.
-    pub recent: Vec<Message>,
+    pub channels: Vec<ChannelSummary>,
+    pub agents: Vec<AgentSummary>,
     /// Every server run, newest first.
     pub runs: Vec<ServerRun>,
+    /// The source's time when this was read, in the stored form. The page
+    /// measures "how long ago" from it, not from the viewer's clock.
+    pub now: String,
+}
+
+/// A channel and how much it is used, for the front page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelSummary {
+    pub channel: Channel,
+    pub message_count: i64,
+    /// When the newest message was sent, and by whom.
+    pub last_message_at: Option<String>,
+    pub last_speaker: Option<String>,
+    /// When each message in the last `WEB_ACTIVITY_WINDOW` was sent, oldest
+    /// first.
+    pub recent_message_times: Vec<String>,
+}
+
+/// An agent and the channels it is in, for the front page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentSummary {
+    pub agent: Agent,
+    pub channels: Vec<ChannelLink>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelLink {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

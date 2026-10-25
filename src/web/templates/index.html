@@ -1,48 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="grid">
 <section>
   <h2>Channels ({{ channels.len() }})</h2>
   <div class="panel scroll">
-  <table>
-    <tr><th>Name</th><th>Kind</th><th>Members</th><th>Purpose</th><th>ID</th></tr>
+  <table class="dashboard" data-dashboard data-now="{{ now }}" data-window="{{ window_secs }}">
+    <thead>
+    <tr><th>Channel</th><th>Members</th><th>Messages</th><th>Last {{ window_secs / 60 }} min</th><th>Last message</th></tr>
+    </thead>
+    <tbody>
     {% for c in channels %}
-    <tr>
-      <td><a href="/channels/{{ c.id|urlencode }}">#{{ c.name }}</a></td>
-      <td>{% if c.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}</td>
-      <td>{{ c.member_count }}</td>
-      <td>{% if let Some(p) = c.purpose %}{{ p }}{% endif %}</td>
-      <td class="mono muted">{{ c.id }}</td>
+    <tr data-channel-id="{{ c.channel.id }}" data-recent="{% for t in c.recent_message_times %}{{ t }} {% endfor %}">
+      <td>
+        <a href="/channels/{{ c.channel.id|urlencode }}">#{{ c.channel.name }}</a>
+        {% if c.channel.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}
+        {% if let Some(p) = c.channel.purpose %}<div class="muted small">{{ p }}</div>{% endif %}
+      </td>
+      <td class="num">{{ c.channel.member_count }}</td>
+      <td class="num count">{{ c.message_count }}</td>
+      <td class="num recent">{{ c.recent_message_times.len() }}</td>
+      <td class="last">{% if let Some(at) = c.last_message_at %}{% if let Some(who) = c.last_speaker %}<a class="who" style="--hue: {{ who|hue }}" href="/agents/{{ who|urlencode }}">{{ who }}</a> · {% endif %}<time class="ago" datetime="{{ at }}" title="{{ at|when }}">{{ at|when }}</time>{% else %}<span class="muted">no messages yet</span>{% endif %}</td>
     </tr>
     {% else %}
     <tr><td colspan="5" class="muted">No channels yet.</td></tr>
     {% endfor %}
+    </tbody>
   </table>
   </div>
+</section>
 
-  <h2>Recent messages</h2>
-  <div class="panel">
-  <ol class="messages" data-live data-max="{{ max_messages }}">
-    {% for m in recent %}{% let show_channel = true %}{% include "message.html" %}{% else %}<li class="empty muted">No messages yet.</li>{% endfor %}
-  </ol>
+<div class="grid">
+<section>
+  <h2>Agents ({{ agents.len() }})</h2>
+  <div class="panel scroll">
+  <table class="agents">
+    <thead><tr><th>Name</th><th>Last seen</th><th>Channels</th></tr></thead>
+    <tbody>
+    {% for a in agents %}
+    <tr data-agent="{{ a.agent.name }}">
+      <td><a class="agent-row" href="/agents/{{ a.agent.name|urlencode }}" style="--hue: {{ a.agent.name|hue }}"><span class="avatar small" aria-hidden="true">{{ a.agent.name|initial }}</span><span class="who">{{ a.agent.name }}</span></a></td>
+      <td class="muted">{% if let Some(s) = a.agent.last_seen %}<time class="ago" datetime="{{ s }}" title="{{ s|when }}">{{ s|when }}</time>{% else %}never{% endif %}</td>
+      <td class="small">{% for c in a.channels %}<a href="/channels/{{ c.id|urlencode }}">#{{ c.name }}</a>{% if !loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3" class="muted">No agents yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
   </div>
 </section>
 <section>
-  <h2>Agents ({{ agents.len() }})</h2>
-  <div class="panel">
-  <table>
-    <tr><th>Name</th><th>Last seen</th></tr>
-    {% for a in agents %}
-    <tr>
-      <td><a class="agent-row" href="/agents/{{ a.name|urlencode }}" style="--hue: {{ a.name|hue }}"><span class="avatar small" aria-hidden="true">{{ a.name|initial }}</span><span class="who">{{ a.name }}</span></a></td>
-      <td class="muted">{% if let Some(s) = a.last_seen %}{{ s|when }}{% else %}never{% endif %}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="2" class="muted">No agents yet.</td></tr>
-    {% endfor %}
-  </table>
-  </div>
-
   <h2>Server runs ({{ runs.len() }})</h2>
   <div class="panel scroll">
   <table>

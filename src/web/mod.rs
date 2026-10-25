@@ -15,11 +15,11 @@ mod source;
 pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
-    Admit, Agent, AgentView, Channel, ChannelView, Gate, LiveEvent, Message, Overview, ServerRun,
-    SignIn, Source, SourceError,
+    Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary, ChannelView, Gate,
+    LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
 };
 
-use crate::config::WEB_KEEP_ALIVE;
+use crate::config::{WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
 use crate::hosts::AllowedHosts;
 use askama::Template;
 use axum::Router;
@@ -100,12 +100,14 @@ async fn check_host(State(hosts): State<AllowedHosts>, request: Request, next: N
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexPage {
-    channels: Vec<Channel>,
-    agents: Vec<Agent>,
-    recent: Vec<Message>,
+    /// Most recently active first.
+    channels: Vec<ChannelSummary>,
+    agents: Vec<AgentSummary>,
     runs: Vec<ServerRun>,
-    /// The most messages the live list keeps.
-    max_messages: usize,
+    /// The source's time, for "how long ago".
+    now: String,
+    /// The stretch of time "recent" messages are counted over, in seconds.
+    window_secs: u64,
     sign_out: bool,
 }
 
@@ -148,15 +150,26 @@ struct ChannelParams {
 async fn index(State(pages): State<Pages>) -> Response {
     match pages.source.overview().await {
         Ok(o) => page(IndexPage {
-            channels: o.channels,
+            channels: most_recently_active_first(o.channels),
             agents: o.agents,
-            recent: o.recent,
             runs: o.runs,
-            max_messages: pages.source.page_messages(),
+            now: o.now,
+            window_secs: WEB_ACTIVITY_WINDOW.as_secs(),
             sign_out: pages.sign_out,
         }),
         Err(e) => error_page(e, pages.sign_out),
     }
+}
+
+/// Channels with the newest last message first; those with no messages
+/// last, by name.
+fn most_recently_active_first(mut channels: Vec<ChannelSummary>) -> Vec<ChannelSummary> {
+    channels.sort_by(|a, b| {
+        b.last_message_at
+            .cmp(&a.last_message_at)
+            .then_with(|| a.channel.name.cmp(&b.channel.name))
+    });
+    channels
 }
 
 async fn channel(

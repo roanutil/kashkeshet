@@ -2,31 +2,66 @@
 //! including closed channels, and changes nothing.
 
 use super::*;
-use crate::config::WEB_RECENT_MESSAGES;
+use crate::config::{WEB_ACTIVITY_SAMPLE, WEB_ACTIVITY_WINDOW};
+use std::collections::HashMap;
 
 impl Rules {
+    /// The front page: every channel with how much it is used, every agent
+    /// with the channels it is in, and the server runs.
     pub async fn overview(&self) -> Result<Overview> {
         let preview = self.limits().member_preview;
-        // The front page's list keeps at most a page of messages.
-        let recent_count = WEB_RECENT_MESSAGES.min(self.limits().web_page_messages);
+        let now = self.inner.deps.clock.now();
+        let window = chrono::Duration::from_std(WEB_ACTIVITY_WINDOW)
+            .map_err(|e| RuleError::new(Code::Internal, e.to_string()))?;
+        let since = clock::to_text(now - window);
+        let now = clock::to_text(now);
         self.db()
             .read(move |store| {
+                let mut used: HashMap<String, ChannelUseRecord> = store
+                    .channel_use()?
+                    .into_iter()
+                    .map(|u| (u.channel_id.clone(), u))
+                    .collect();
+                // Times of the messages in the window, from the newest
+                // `WEB_ACTIVITY_SAMPLE` messages overall.
+                let mut recent: HashMap<String, Vec<String>> = HashMap::new();
+                for m in store.recent_messages(WEB_ACTIVITY_SAMPLE)? {
+                    if m.created_at >= since {
+                        recent.entry(m.channel_id).or_default().push(m.created_at);
+                    }
+                }
                 let channels = store
                     .all_channel_ids(None)?
                     .iter()
-                    .map(|id| channel_info(store, id, None, None, preview))
+                    .map(|id| {
+                        let info = channel_info(store, id, None, None, preview)?;
+                        let use_ = used.remove(id);
+                        let mut recent_message_times = recent.remove(id).unwrap_or_default();
+                        recent_message_times.reverse();
+                        Ok(ChannelActivity {
+                            message_count: use_.as_ref().map_or(0, |u| u.message_count),
+                            last_message_at: use_.as_ref().and_then(|u| u.last_message_at.clone()),
+                            last_speaker: use_.and_then(|u| u.last_speaker),
+                            recent_message_times,
+                            info,
+                        })
+                    })
                     .collect::<Result<Vec<_>>>()?;
+                let mut member_of: HashMap<String, Vec<ChannelRef>> = HashMap::new();
+                for m in store.memberships()? {
+                    member_of.entry(m.agent).or_default().push(ChannelRef {
+                        id: m.channel_id,
+                        name: m.channel_name,
+                    });
+                }
                 let agents = store
                     .agents_by_last_seen()?
                     .into_iter()
-                    .map(AgentInfo::from)
+                    .map(|a| AgentActivity {
+                        channels: member_of.remove(&a.name).unwrap_or_default(),
+                        info: AgentInfo::from(a),
+                    })
                     .collect();
-                let mut recent: Vec<Message> = store
-                    .recent_messages(recent_count)?
-                    .into_iter()
-                    .map(Message::from)
-                    .collect();
-                recent.reverse();
                 let runs = store
                     .server_runs()?
                     .into_iter()
@@ -35,8 +70,8 @@ impl Rules {
                 Ok(Overview {
                     channels,
                     agents,
-                    recent,
                     runs,
+                    now,
                 })
             })
             .await
@@ -102,11 +137,41 @@ impl Rules {
 /// What the human sees on the front page.
 #[derive(Clone, Debug)]
 pub struct Overview {
-    pub channels: Vec<ChannelInfo>,
-    pub agents: Vec<AgentInfo>,
-    pub recent: Vec<Message>,
+    /// In name order.
+    pub channels: Vec<ChannelActivity>,
+    /// Most recently seen first.
+    pub agents: Vec<AgentActivity>,
     /// Every server run, newest first.
     pub runs: Vec<ServerRunInfo>,
+    /// The server's time when this was read, so the page can tell how long
+    /// ago things happened without trusting the viewer's clock.
+    pub now: String,
+}
+
+/// A channel and how much it is used.
+#[derive(Clone, Debug)]
+pub struct ChannelActivity {
+    pub info: ChannelInfo,
+    pub message_count: i64,
+    pub last_message_at: Option<String>,
+    pub last_speaker: Option<String>,
+    /// When each message in the last `WEB_ACTIVITY_WINDOW` was sent, oldest
+    /// first (counted from the newest `WEB_ACTIVITY_SAMPLE` messages).
+    pub recent_message_times: Vec<String>,
+}
+
+/// An agent and the channels it is in.
+#[derive(Clone, Debug)]
+pub struct AgentActivity {
+    pub info: AgentInfo,
+    /// In the order it joined them.
+    pub channels: Vec<ChannelRef>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelRef {
+    pub id: String,
+    pub name: String,
 }
 
 /// One start of the server and what produced it.

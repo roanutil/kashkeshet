@@ -87,10 +87,24 @@ li.empty { padding: 12px; }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
 .older { margin: 8px 0; }
 
+/* The front page's dashboard. */
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.small { font-size: 13px; }
+table.dashboard td { vertical-align: middle; }
+table.dashboard td.recent { font-weight: 600; }
+table.dashboard td.recent.zero { color: var(--muted); font-weight: 400; }
+/* A short pulse when a channel gets a message. */
+tr.pulse td { animation: pulse 1.6s ease-out; }
+@keyframes pulse { from { background: var(--new); } to { background: transparent; } }
+
 /* The "N new · jump to latest" button on a channel page. */
 .jump { position: fixed; right: 20px; bottom: 20px; z-index: 20; border-radius: 999px; padding: 8px 16px;
         border: none; background: var(--accent); color: var(--bg); font-weight: 600; box-shadow: var(--shadow); cursor: pointer; }
 .jump[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  li.msg, tr.pulse td { animation: none; transition: none; }
+}
 
 button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
          background: var(--chip); color: var(--fg); cursor: pointer; }
@@ -204,6 +218,7 @@ details summary { cursor: pointer; }
   source.addEventListener("lagged", () => { location.reload(); });
   source.addEventListener("message", (e) => {
     const m = JSON.parse(e.data);
+    dashboardMessage(m);
     lists.forEach((list) => {
       const only = list.dataset.channel;
       if (only && only !== m.channel_id) return;
@@ -224,6 +239,81 @@ details summary { cursor: pointer; }
       }
     });
   });
+
+  // The front page's dashboard: each channel's counts, last speaker and
+  // "how long ago", kept up to date from the live stream and the clock.
+  // Times are measured against the server's clock (data-now), not the
+  // viewer's, so a viewer whose clock is off still sees the right ages.
+  const dashboard = document.querySelector("table[data-dashboard]");
+  const skew = dashboard ? Date.parse(dashboard.dataset.now) - Date.now() : 0;
+  const windowMs = dashboard ? Number(dashboard.dataset.window) * 1000 : 0;
+  // Rows by channel ID and by agent name, and each channel's recent times.
+  const channelRows = new Map();
+  const agentRows = new Map();
+  const recentTimes = new Map();
+  if (dashboard) {
+    dashboard.querySelectorAll("tr[data-channel-id]").forEach((row) => {
+      channelRows.set(row.dataset.channelId, row);
+      recentTimes.set(row.dataset.channelId, row.dataset.recent.split(" ").filter(Boolean).map(Date.parse));
+    });
+    document.querySelectorAll("tr[data-agent]").forEach((row) => agentRows.set(row.dataset.agent, row));
+  }
+  function serverNow() { return Date.now() + skew; }
+  function ago(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + " s ago";
+    if (s < 3600) return Math.floor(s / 60) + " min ago";
+    if (s < 86400) return Math.floor(s / 3600) + " h ago";
+    return Math.floor(s / 86400) + " d ago";
+  }
+  function tick() {
+    const now = serverNow();
+    document.querySelectorAll("time.ago").forEach((t) => {
+      t.textContent = ago(now - Date.parse(t.getAttribute("datetime")));
+    });
+    recentTimes.forEach((times, id) => {
+      while (times.length && times[0] < now - windowMs) times.shift();
+      const cell = channelRows.get(id)?.querySelector("td.recent");
+      if (cell) {
+        cell.textContent = String(times.length);
+        cell.classList.toggle("zero", times.length === 0);
+      }
+    });
+  }
+  function dashboardMessage(m) {
+    if (!dashboard) return;
+    const row = channelRows.get(m.channel_id);
+    if (row) {
+      const count = row.querySelector("td.count");
+      count.textContent = String(Number(count.textContent) + 1);
+      const times = recentTimes.get(m.channel_id) || [];
+      times.push(Date.parse(m.created_at));
+      recentTimes.set(m.channel_id, times);
+      const last = row.querySelector("td.last");
+      const when = el("time", "ago");
+      when.setAttribute("datetime", m.created_at);
+      when.title = m.created_at.replace("T", " ").replace("Z", "");
+      const who = link("/agents/" + encodeURIComponent(m.agent), "who", m.agent);
+      who.style.setProperty("--hue", String(hue(m.agent)));
+      last.replaceChildren(who, " · ", when);
+      // The most recently active channel comes first; the row pulses.
+      row.parentNode.prepend(row);
+      row.classList.remove("pulse");
+      void row.offsetWidth;
+      row.classList.add("pulse");
+    }
+    const agentRow = agentRows.get(m.agent);
+    if (agentRow) {
+      const seen = agentRow.querySelector("time.ago");
+      if (seen) seen.setAttribute("datetime", m.created_at);
+      agentRow.parentNode.prepend(agentRow);
+    }
+    tick();
+  }
+  if (dashboard) {
+    tick();
+    setInterval(tick, 1000);
+  }
 
   // The same hash as the server's `hue` filter (FNV-1a over UTF-8), so an
   // agent keeps its color on live messages.

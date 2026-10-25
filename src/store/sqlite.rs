@@ -586,6 +586,47 @@ impl Reads for Sql<'_> {
         Ok(rows)
     }
 
+    fn channel_use(&self) -> StoreResult<Vec<ChannelUseRecord>> {
+        // The newest message is found through the (channel_id, id) index.
+        let mut stmt = self.0.prepare_cached(
+            "SELECT c.id,
+                    (SELECT count(*) FROM messages m WHERE m.channel_id = c.id),
+                    last.created_at, last.agent
+             FROM channels c
+             LEFT JOIN messages last ON last.id =
+                 (SELECT max(m.id) FROM messages m WHERE m.channel_id = c.id)",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ChannelUseRecord {
+                    channel_id: r.get(0)?,
+                    message_count: r.get(1)?,
+                    last_message_at: r.get(2)?,
+                    last_speaker: r.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    fn memberships(&self) -> StoreResult<Vec<MembershipRecord>> {
+        let mut stmt = self.0.prepare_cached(
+            "SELECT m.channel_id, c.name, m.agent
+             FROM memberships m JOIN channels c ON c.id = m.channel_id
+             ORDER BY m.joined_at, m.rowid",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(MembershipRecord {
+                    channel_id: r.get(0)?,
+                    channel_name: r.get(1)?,
+                    agent: r.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     fn server_runs(&self) -> StoreResult<Vec<ServerRunRecord>> {
         let mut stmt = self.0.prepare_cached(
             "SELECT id, started_at, version, git_commit, settings, instructions_sha256

@@ -3,8 +3,8 @@
 //! rules' and admission's types and the web's.
 
 use super::source::{
-    Admit, Agent, AgentView, Channel, ChannelView, Gate, LiveEvent, Message, Overview, ServerRun,
-    SignIn, Source, SourceError,
+    Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary, ChannelView, Gate,
+    LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
 };
 use crate::admission::{self, Credentials, Decision, WebAdmission};
 use crate::events::Notice;
@@ -30,10 +30,34 @@ impl Source for RulesSource {
         Box::pin(async move {
             let o = self.rules.overview().await.map_err(source_error)?;
             Ok(Overview {
-                channels: o.channels.into_iter().map(channel).collect(),
-                agents: o.agents.into_iter().map(agent).collect(),
-                recent: o.recent.into_iter().map(message).collect(),
+                channels: o
+                    .channels
+                    .into_iter()
+                    .map(|c| ChannelSummary {
+                        channel: channel(c.info),
+                        message_count: c.message_count,
+                        last_message_at: c.last_message_at,
+                        last_speaker: c.last_speaker,
+                        recent_message_times: c.recent_message_times,
+                    })
+                    .collect(),
+                agents: o
+                    .agents
+                    .into_iter()
+                    .map(|a| AgentSummary {
+                        agent: agent(a.info),
+                        channels: a
+                            .channels
+                            .into_iter()
+                            .map(|c| ChannelLink {
+                                id: c.id,
+                                name: c.name,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
                 runs: o.runs.into_iter().map(run).collect(),
+                now: o.now,
             })
         })
     }
