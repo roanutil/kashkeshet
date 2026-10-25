@@ -2,12 +2,12 @@
 //! rules, and [`WebAdmission`] is the gate. Both only translate between the
 //! rules' and admission's types and the web's.
 
+use super::notice::live_event;
 use super::source::{
     ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
     ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
 };
 use crate::admission::{self, Credentials, Decision, WebAdmission};
-use crate::events::Notice;
 use crate::rules::{self, AgentInfo, ChannelInfo, Code, RuleError, Rules, ServerRunInfo};
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -105,18 +105,7 @@ impl Source for RulesSource {
             .events()
             .subscribe()
             .into_stream()
-            .map(|notice| match notice {
-                Notice::Message(m) => LiveEvent::Message(Message {
-                    id: m.id,
-                    channel_id: m.channel_id,
-                    channel_name: m.channel_name,
-                    agent: m.agent,
-                    body: m.body,
-                    created_at: m.created_at,
-                    run_id: m.run_id,
-                }),
-                Notice::Missed(n) => LiveEvent::Missed(n),
-            })
+            .map(live_event)
             .boxed()
     }
 

@@ -191,10 +191,36 @@ pub struct AgentView {
     pub message_count: i64,
 }
 
+/// An agent registered.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NewAgent {
+    pub name: String,
+}
+
+/// A channel was created, open or closed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NewChannel {
+    pub id: String,
+    pub name: String,
+    pub open: bool,
+    pub created_by: String,
+}
+
+/// An agent joined a channel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Joined {
+    pub agent: String,
+    pub channel_id: String,
+    pub channel_name: String,
+}
+
 /// Something that happened, for the live feed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LiveEvent {
     Message(Message),
+    Agent(NewAgent),
+    Channel(NewChannel),
+    Joined(Joined),
     /// The feed fell behind and missed this many events. The page reloads.
     Missed(u64),
 }

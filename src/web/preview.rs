@@ -7,6 +7,7 @@
 //! channels. Everything comes from the injected clock and entropy, so a
 //! seeded entropy gives the same world and the same feed every time.
 
+use super::notice::live_event;
 use super::source::{
     ActivityCount, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
     ChannelView, LiveEvent, Message, Overview, ServerRun, Source, SourceError,
@@ -17,7 +18,7 @@ use crate::config::{
     PREVIEW_LONG_MESSAGE_ONE_IN, PREVIEW_MESSAGES, PREVIEW_NEW_AGENT_ONE_IN,
     PREVIEW_NEW_CHANNEL_ONE_IN, PreviewSettings, WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW,
 };
-use crate::events::{Events, NewMessage, Notice};
+use crate::events::{Events, Joined, NewAgent, NewChannel, NewMessage};
 use crate::names::{self, Entropy};
 use crate::shutdown::Shutdown;
 use chrono::{DateTime, Utc};
@@ -101,6 +102,14 @@ pub enum Happening {
     NewChannel(String),
 }
 
+/// What a step publishes, in order, once the world is unlocked.
+enum Out {
+    Message(Message),
+    Agent(NewAgent),
+    Channel(NewChannel),
+    Joined(Joined),
+}
+
 struct World {
     agents: Vec<Agent>,
     channels: Vec<SimChannel>,
@@ -163,35 +172,67 @@ impl Preview {
         let now = self.clock.now();
         let e = self.entropy.as_ref();
         let mut world = self.world();
-        let (happening, new) = if e.below(PREVIEW_NEW_CHANNEL_ONE_IN) == 0 {
+        let mut out = Vec::new();
+        let happening = if e.below(PREVIEW_NEW_CHANNEL_ONE_IN) == 0 {
             let id = world.add_channel(now, e);
-            let message = world.post(now, e, Some(&id));
-            (Happening::NewChannel(id), vec![message])
+            if let Some(c) = world.channels.iter().find(|c| c.channel.id == id) {
+                out.push(Out::Channel(NewChannel {
+                    id: id.clone(),
+                    name: c.channel.name.clone(),
+                    open: c.channel.open,
+                    created_by: c.channel.created_by.clone(),
+                    created_at: c.channel.created_at.clone(),
+                }));
+            }
+            out.push(Out::Message(world.post(now, e, Some(&id))));
+            Happening::NewChannel(id)
         } else if e.below(PREVIEW_NEW_AGENT_ONE_IN) == 0 {
             let name = world.add_agent(now, e);
-            let message = world.post_as(now, &name, "Hello, I just registered.");
-            (Happening::NewAgent(name), message.into_iter().collect())
+            out.push(Out::Agent(NewAgent {
+                name: name.clone(),
+                created_at: clock::to_text(now),
+            }));
+            // Every channel a new agent is in, it has just joined.
+            for c in world.channels.iter().filter(|c| c.members.contains(&name)) {
+                out.push(Out::Joined(Joined {
+                    agent: name.clone(),
+                    channel_id: c.channel.id.clone(),
+                    channel_name: c.channel.name.clone(),
+                }));
+            }
+            out.extend(
+                world
+                    .post_as(now, &name, "Hello, I just registered.")
+                    .map(Out::Message),
+            );
+            Happening::NewAgent(name)
         } else if e.below(PREVIEW_BURST_ONE_IN) == 0 {
             let count = 3 + e.below(PREVIEW_BURST_MAX - 2);
             let channel = world.busy_channel(e);
-            let burst = (0..count)
-                .map(|_| world.post(now, e, Some(&channel)))
-                .collect();
-            (Happening::Burst(count), burst)
+            for _ in 0..count {
+                out.push(Out::Message(world.post(now, e, Some(&channel))));
+            }
+            Happening::Burst(count)
         } else {
-            (Happening::Message, vec![world.post(now, e, None)])
+            out.push(Out::Message(world.post(now, e, None)));
+            Happening::Message
         };
         drop(world);
-        for message in new {
-            self.events.publish(NewMessage {
-                id: message.id,
-                channel_id: message.channel_id,
-                channel_name: message.channel_name,
-                agent: message.agent,
-                body: message.body,
-                created_at: message.created_at,
-                run_id: message.run_id,
-            });
+        for item in out {
+            match item {
+                Out::Message(m) => self.events.publish(NewMessage {
+                    id: m.id,
+                    channel_id: m.channel_id,
+                    channel_name: m.channel_name,
+                    agent: m.agent,
+                    body: m.body,
+                    created_at: m.created_at,
+                    run_id: m.run_id,
+                }),
+                Out::Agent(a) => self.events.publish_agent(a),
+                Out::Channel(c) => self.events.publish_channel(c),
+                Out::Joined(j) => self.events.publish_joined(j),
+            }
         }
         happening
     }
@@ -235,18 +276,7 @@ impl Source for Preview {
         self.events
             .subscribe()
             .into_stream()
-            .map(|notice| match notice {
-                Notice::Message(m) => LiveEvent::Message(Message {
-                    id: m.id,
-                    channel_id: m.channel_id,
-                    channel_name: m.channel_name,
-                    agent: m.agent,
-                    body: m.body,
-                    created_at: m.created_at,
-                    run_id: m.run_id,
-                }),
-                Notice::Missed(n) => LiveEvent::Missed(n),
-            })
+            .map(live_event)
             .boxed()
     }
 

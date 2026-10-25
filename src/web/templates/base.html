@@ -103,8 +103,18 @@ tr.glow td { animation: glow 25s ease-out; }
         border: none; background: var(--accent); color: var(--bg); font-weight: 600; box-shadow: var(--shadow); cursor: pointer; }
 .jump[hidden] { display: none; }
 
+/* Toasts for new agents, channels and joins. */
+.toasts { position: fixed; top: 64px; right: 16px; z-index: 30; display: flex; flex-direction: column; gap: 8px;
+          width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+.toast { pointer-events: auto; background: var(--panel); border: 1px solid var(--line);
+         border-left: 4px solid hsl(var(--hue, 220) var(--who-s) var(--who-l)); border-radius: 8px;
+         padding: 8px 12px; box-shadow: var(--shadow); font-size: 14px; display: flex; gap: 8px; align-items: baseline;
+         animation: toast-in .25s ease; transition: opacity .4s ease, transform .4s ease; }
+.toast .icon { flex: none; }
+.toast.leaving { opacity: 0; transform: translateX(16px); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
 @media (prefers-reduced-motion: reduce) {
-  li.msg, tr.glow td { animation: none; transition: none; }
+  .toast, li.msg, tr.glow td { animation: none; transition: none; }
 }
 
 button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
@@ -125,9 +135,11 @@ details summary { cursor: pointer; }
 <main>
 {% block content %}{% endblock %}
 </main>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 {% block script %}
 <script>
-// Live updates. New messages go into any list marked data-live; a list with
+// Live updates. New agents, channels and joins show as toasts. New messages
+// go into any list marked data-live; a list with
 // data-channel only takes that channel's. A list keeps at most data-max
 // messages, dropping the oldest. A data-follow list (a channel page) scrolls
 // to new messages only if the reader is at the bottom of the list; otherwise
@@ -331,6 +343,41 @@ details summary { cursor: pointer; }
     tick();
     setInterval(tick, 1000);
   }
+  // Toasts: a few at a time, newest at the bottom, each fading after a while.
+  const toasts = document.getElementById("toasts");
+  const MAX_TOASTS = 4;
+  const TOAST_MS = 6000;
+  function toast(hueOf, icon, parts) {
+    if (!toasts) return;
+    const t = el("div", "toast");
+    t.style.setProperty("--hue", String(hue(hueOf)));
+    t.append(el("span", "icon", icon));
+    const text = el("span");
+    text.append(...parts);
+    t.append(text);
+    toasts.append(t);
+    while (toasts.children.length > MAX_TOASTS) toasts.firstElementChild.remove();
+    setTimeout(() => {
+      t.classList.add("leaving");
+      setTimeout(() => t.remove(), 400);
+    }, TOAST_MS);
+  }
+  function agentLink(name) { return link("/agents/" + encodeURIComponent(name), "who", name); }
+  function channelLink(id, name) { return link("/channels/" + encodeURIComponent(id), "", "#" + name); }
+  source.addEventListener("agent", (e) => {
+    const a = JSON.parse(e.data);
+    toast(a.name, "👋", [agentLink(a.name), " registered"]);
+  });
+  source.addEventListener("channel", (e) => {
+    const c = JSON.parse(e.data);
+    const parts = [channelLink(c.id, c.name), " created by ", agentLink(c.created_by)];
+    if (!c.open) parts.push(" ", el("span", "badge closed", "closed"));
+    toast(c.created_by, "✨", parts);
+  });
+  source.addEventListener("joined", (e) => {
+    const j = JSON.parse(e.data);
+    toast(j.agent, "➜", [agentLink(j.agent), " joined ", channelLink(j.channel_id, j.channel_name)]);
+  });
 
   // The same hash as the server's `hue` filter (FNV-1a over UTF-8), so an
   // agent keeps its color on live messages.

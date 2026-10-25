@@ -449,6 +449,65 @@ async fn web_events_stream_new_messages() {
     assert!(seen.contains("event: message"), "{seen}");
 }
 
+/// The web page hears about new agents, channels (closed ones too: the
+/// human sees everything) and joins, for its toasts.
+#[tokio::test]
+async fn web_events_announce_new_agents_channels_and_joins() {
+    let server = start().await;
+    let mut stream = reqwest::Client::new()
+        .get(format!("{}/events", server.base))
+        .send()
+        .await
+        .expect("events");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let c = connect_new(&server).await;
+    let (alice, t) = register(&c).await;
+    let (bob, bt) = register(&c).await;
+    let open = json_of(
+        &ok(
+            &c,
+            "create_channel",
+            json!({"token": t, "name": "town-square", "open": true, "format": "json"}),
+        )
+        .await,
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok(
+        &c,
+        "create_channel",
+        json!({"token": t, "name": "back-room", "open": false}),
+    )
+    .await;
+    ok(&c, "join_channel", json!({"token": bt, "channel_id": open})).await;
+
+    let mut seen = String::new();
+    let expected = [
+        format!("event: agent\ndata: {{\"name\":\"{alice}\"}}"),
+        format!("event: agent\ndata: {{\"name\":\"{bob}\"}}"),
+        format!(
+            "event: channel\ndata: {{\"id\":\"{open}\",\"name\":\"town-square\",\"open\":true,\"created_by\":\"{alice}\"}}"
+        ),
+        "\"name\":\"back-room\",\"open\":false".to_string(),
+        format!(
+            "event: joined\ndata: {{\"agent\":\"{bob}\",\"channel_id\":\"{open}\",\"channel_name\":\"town-square\"}}"
+        ),
+    ];
+    let all_seen = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(chunk) = stream.chunk().await.expect("chunk") {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+            if expected.iter().all(|e| seen.contains(e.as_str())) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert!(matches!(all_seen, Ok(true)), "{seen}");
+}
+
 #[tokio::test]
 async fn agents_receive_the_configured_instructions() {
     let server = start().await;

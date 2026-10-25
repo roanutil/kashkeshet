@@ -7,6 +7,7 @@
 //! supplies it over the rules (`real`), and the preview from simulated data
 //! (`preview`), so the page can run and be worked on without a server.
 
+mod notice;
 mod preview;
 mod real;
 mod sign_in;
@@ -16,7 +17,8 @@ pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
     ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
+    ChannelView, Gate, Joined, LiveEvent, Message, NewAgent, NewChannel, Overview, ServerRun,
+    SignIn, Source, SourceError,
 };
 
 use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
@@ -204,25 +206,33 @@ async fn agent(State(pages): State<Pages>, Path(name): Path<String>) -> Response
     }
 }
 
-/// New messages as server-sent events. A `message` event carries one message
-/// as JSON. A `lagged` event means this stream fell behind and missed some;
-/// the page reloads.
+/// What happens, as server-sent events, each carrying JSON: `message` (a new
+/// message), `agent` (an agent registered), `channel` (a channel was
+/// created) and `joined` (an agent joined a channel). A `lagged` event means
+/// this stream fell behind and missed some; the page reloads.
 async fn events(State(pages): State<Pages>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let stream = pages.source.live().map(|event| {
         Ok(match event {
-            LiveEvent::Message(message) => {
-                match Event::default().event("message").json_data(&message) {
-                    Ok(event) => event,
-                    Err(e) => {
-                        tracing::error!(error = %e, "could not encode message event");
-                        Event::default().event("lagged").data("encode error")
-                    }
-                }
-            }
+            LiveEvent::Message(message) => json_event("message", &message),
+            LiveEvent::Agent(agent) => json_event("agent", &agent),
+            LiveEvent::Channel(channel) => json_event("channel", &channel),
+            LiveEvent::Joined(joined) => json_event("joined", &joined),
             LiveEvent::Missed(n) => Event::default().event("lagged").data(n.to_string()),
         })
     });
     Sse::new(stream).keep_alive(KeepAlive::new().interval(WEB_KEEP_ALIVE).text("keep-alive"))
+}
+
+/// An event named `name` carrying `data` as JSON. If that fails, which it
+/// should not, the page is told to reload instead.
+fn json_event(name: &str, data: &impl serde::Serialize) -> Event {
+    match Event::default().event(name).json_data(data) {
+        Ok(event) => event,
+        Err(e) => {
+            tracing::error!(error = %e, "could not encode {name} event");
+            Event::default().event("lagged").data("encode error")
+        }
+    }
 }
 
 mod filters {

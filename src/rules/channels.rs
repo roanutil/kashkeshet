@@ -64,7 +64,8 @@ impl Rules {
         let me = me.name.clone();
         let now = self.now_text();
         let entropy = self.inner.deps.entropy.clone();
-        self.db()
+        let created = self
+            .db()
             .write(move |store| {
                 let mut members = vec![me.clone()];
                 for m in &new.members {
@@ -90,7 +91,15 @@ impl Rules {
                 }
                 channel_info(store, &id, Some(&me), None, limits.member_preview)
             })
-            .await
+            .await?;
+        self.events().publish_channel(NewChannelEvent {
+            id: created.id.clone(),
+            name: created.name.clone(),
+            open: created.open,
+            created_by: created.created_by.clone(),
+            created_at: created.created_at.clone(),
+        });
+        Ok(created)
     }
 
     /// Joins an open channel. Joining a channel you are already in does nothing.
@@ -98,16 +107,27 @@ impl Rules {
         let me = me.name.clone();
         let now = self.now_text();
         let preview = self.limits().member_preview;
-        self.db()
+        let who = me.clone();
+        let (info, joined) = self
+            .db()
             .write(move |store| {
                 let (channel, member) = visible_channel(store, &me, &channel_id)?;
                 if !member {
                     // `visible_channel` only lets a non-member through for an open channel.
                     store.add_member(&channel.id, &me, &now)?;
                 }
-                channel_info(store, &channel.id, Some(&me), None, preview)
+                let info = channel_info(store, &channel.id, Some(&me), None, preview)?;
+                Ok::<_, RuleError>((info, !member))
             })
-            .await
+            .await?;
+        if joined {
+            self.events().publish_joined(Joined {
+                agent: who,
+                channel_id: info.id.clone(),
+                channel_name: info.name.clone(),
+            });
+        }
+        Ok(info)
     }
 
     pub async fn leave_channel(&self, me: &Agent, channel_id: String) -> Result<()> {

@@ -403,26 +403,27 @@ async fn the_preview_world_has_what_the_page_must_show() {
 }
 
 #[tokio::test]
-async fn the_preview_feed_has_every_kind_of_happening_and_publishes_messages() {
+async fn the_preview_feed_has_every_kind_of_happening_and_publishes_it() {
     let clock = Arc::new(FixedClock::new(start_time()));
     let p = preview(3, clock, &Shutdown::new());
     let mut live = p.live();
     let before = p.overview().await.expect("before");
-    let (mut bursts, mut agents, mut channels, mut published) = (0, 0, 0, 0);
-    for _ in 0..300 {
+    let (mut bursts, mut agents, mut channels, mut messages) = (0, 0, 0, 0);
+    for _ in 0..200 {
         match p.step() {
-            Happening::Message => published += 1,
+            Happening::Message => messages += 1,
             Happening::Burst(n) => {
                 bursts += 1;
-                published += n;
+                messages += n;
             }
+            // A new agent says hello; a new channel gets a first message.
             Happening::NewAgent(_) => {
                 agents += 1;
-                published += 1;
+                messages += 1;
             }
             Happening::NewChannel(_) => {
                 channels += 1;
-                published += 1;
+                messages += 1;
             }
         }
     }
@@ -430,17 +431,38 @@ async fn the_preview_feed_has_every_kind_of_happening_and_publishes_messages() {
     let after = p.overview().await.expect("after");
     assert_eq!(after.agents.len(), before.agents.len() + agents);
     assert_eq!(after.channels.len(), before.channels.len() + channels);
-    // Every message was published, in order. (The buffer holds them all.)
+
+    // Everything was published, in order. (The buffer holds it all.)
+    let (mut heard_messages, mut heard_agents, mut heard_channels, mut heard_joins) = (0, 0, 0, 0);
     let mut last = 0;
-    for _ in 0..published {
+    let mut joined_new_agent = true;
+    let mut newest_agent = String::new();
+    while heard_messages < messages {
         match live.next().await {
             Some(LiveEvent::Message(m)) => {
                 assert!(m.id > last);
                 last = m.id;
+                heard_messages += 1;
             }
-            other => panic!("expected a message, got {other:?}"),
+            Some(LiveEvent::Agent(a)) => {
+                newest_agent = a.name;
+                heard_agents += 1;
+            }
+            Some(LiveEvent::Channel(_)) => heard_channels += 1,
+            Some(LiveEvent::Joined(j)) => {
+                joined_new_agent &= j.agent == newest_agent;
+                heard_joins += 1;
+            }
+            other => panic!("unexpected {other:?}"),
         }
     }
+    assert_eq!(heard_agents, agents);
+    assert_eq!(heard_channels, channels);
+    assert!(
+        heard_joins >= agents,
+        "each new agent joins at least one channel"
+    );
+    assert!(joined_new_agent, "joins follow the agent that joined");
 }
 
 #[tokio::test]
@@ -460,7 +482,10 @@ async fn the_preview_runs_by_the_clock_and_stops_with_the_server() {
     let first = tokio::time::timeout(std::time::Duration::from_secs(5), live.next())
         .await
         .expect("a step after two seconds");
-    assert!(matches!(first, Some(LiveEvent::Message(_))));
+    assert!(
+        matches!(first, Some(ref e) if !matches!(e, LiveEvent::Missed(_))),
+        "{first:?}"
+    );
     shutdown.stop();
     tokio::time::timeout(std::time::Duration::from_secs(5), runner)
         .await

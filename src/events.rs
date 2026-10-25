@@ -1,8 +1,11 @@
-//! New-message notifications.
+//! Notifications of what happens: new messages, and new agents, channels and
+//! channel members.
 //!
-//! When a message is stored, the sender publishes it here. The web page and any
-//! agent waiting for messages subscribe. A subscriber that falls behind is told
-//! it missed messages and can fetch them from the database.
+//! When a message is stored, the sender publishes it here, and the rules do
+//! the same when an agent registers, a channel is created, or an agent joins
+//! one. The web page and any agent waiting for messages subscribe; waiting
+//! agents look only at messages. A subscriber that falls behind is told it
+//! missed some and can fetch them from the database.
 //!
 //! Tokio's broadcast channel does the work, but stays inside this module.
 
@@ -25,9 +28,44 @@ pub struct NewMessage {
     pub run_id: Option<i64>,
 }
 
+/// An agent registered.
+#[derive(Clone, Debug, Serialize)]
+pub struct NewAgent {
+    pub name: String,
+    pub created_at: String,
+}
+
+/// A channel was created. Closed channels are announced too: only the
+/// human's view hears these.
+#[derive(Clone, Debug, Serialize)]
+pub struct NewChannel {
+    pub id: String,
+    pub name: String,
+    pub open: bool,
+    pub created_by: String,
+    pub created_at: String,
+}
+
+/// An agent joined a channel it was not in.
+#[derive(Clone, Debug, Serialize)]
+pub struct Joined {
+    pub agent: String,
+    pub channel_id: String,
+    pub channel_name: String,
+}
+
+/// Everything that can be published.
+#[derive(Clone, Debug)]
+enum Published {
+    Message(NewMessage),
+    Agent(NewAgent),
+    Channel(NewChannel),
+    Joined(Joined),
+}
+
 #[derive(Clone)]
 pub struct Events {
-    sender: broadcast::Sender<NewMessage>,
+    sender: broadcast::Sender<Published>,
     shutdown: Option<Shutdown>,
 }
 
@@ -53,9 +91,28 @@ impl Events {
 
     /// Tells every current subscriber about a new message.
     pub fn publish(&self, message: NewMessage) {
-        match self.sender.send(message) {
+        self.send(Published::Message(message));
+    }
+
+    /// Tells every current subscriber that an agent registered.
+    pub fn publish_agent(&self, agent: NewAgent) {
+        self.send(Published::Agent(agent));
+    }
+
+    /// Tells every current subscriber that a channel was created.
+    pub fn publish_channel(&self, channel: NewChannel) {
+        self.send(Published::Channel(channel));
+    }
+
+    /// Tells every current subscriber that an agent joined a channel.
+    pub fn publish_joined(&self, joined: Joined) {
+        self.send(Published::Joined(joined));
+    }
+
+    fn send(&self, published: Published) {
+        match self.sender.send(published) {
             Ok(_receivers) => {}
-            // Nobody is listening. That is normal: the message is already stored.
+            // Nobody is listening. That is normal: what happened is already stored.
             Err(_unheard) => {}
         }
     }
@@ -74,14 +131,20 @@ impl Events {
 pub enum Notice {
     /// A new message.
     Message(NewMessage),
-    /// The subscriber fell behind and missed this many messages. They are in
-    /// the database.
+    /// A new agent.
+    Agent(NewAgent),
+    /// A new channel.
+    Channel(NewChannel),
+    /// An agent joined a channel.
+    Joined(Joined),
+    /// The subscriber fell behind and missed this many notices. What they
+    /// were about is in the database.
     Missed(u64),
 }
 
 /// One subscriber's view of new messages.
 pub struct Subscription {
-    receiver: broadcast::Receiver<NewMessage>,
+    receiver: broadcast::Receiver<Published>,
     shutdown: Option<Shutdown>,
 }
 
@@ -100,7 +163,10 @@ impl Subscription {
             received = self.receiver.recv() => received,
         };
         match received {
-            Ok(message) => Some(Notice::Message(message)),
+            Ok(Published::Message(message)) => Some(Notice::Message(message)),
+            Ok(Published::Agent(agent)) => Some(Notice::Agent(agent)),
+            Ok(Published::Channel(channel)) => Some(Notice::Channel(channel)),
+            Ok(Published::Joined(joined)) => Some(Notice::Joined(joined)),
             Err(RecvError::Lagged(n)) => Some(Notice::Missed(n)),
             Err(RecvError::Closed) => None,
         }
@@ -160,6 +226,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_subscriber_hears_every_kind_in_order() {
+        let events = Events::new();
+        let mut sub = events.subscribe();
+        events.publish_agent(NewAgent {
+            name: "amber-falcon".into(),
+            created_at: "2026-10-23T14:00:00Z".into(),
+        });
+        events.publish_channel(NewChannel {
+            id: "ch_test".into(),
+            name: "test".into(),
+            open: false,
+            created_by: "amber-falcon".into(),
+            created_at: "2026-10-23T14:00:00Z".into(),
+        });
+        events.publish_joined(Joined {
+            agent: "bold-panther".into(),
+            channel_id: "ch_test".into(),
+            channel_name: "test".into(),
+        });
+        events.publish(message(1));
+        assert!(matches!(sub.next().await, Some(Notice::Agent(a)) if a.name == "amber-falcon"));
+        assert!(
+            matches!(sub.next().await, Some(Notice::Channel(c)) if c.id == "ch_test" && !c.open)
+        );
+        assert!(matches!(sub.next().await, Some(Notice::Joined(j)) if j.agent == "bold-panther"));
+        assert_eq!(id(sub.next().await), Some(1));
+    }
+
+    #[tokio::test]
     async fn a_subscriber_hears_messages_in_order() {
         let events = Events::new();
         let mut sub = events.subscribe();
@@ -200,7 +295,7 @@ mod tests {
         let ids: Vec<i64> = stream
             .map(|notice| match notice {
                 Notice::Message(m) => m.id,
-                Notice::Missed(n) => panic!("missed {n}"),
+                other => panic!("expected a message, got {other:?}"),
             })
             .collect()
             .await;
