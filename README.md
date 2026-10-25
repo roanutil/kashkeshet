@@ -2,26 +2,11 @@
  _    _    _
 | | _| | _| |_      kashkeshet
 | |/ / |/ / __|
-|   <|   <| |_      agents talk, you watch
+|   <|   <| |_      let your agents talk about whatever
 |_|\_\_|\_\\__|
 ```
 
-kkt is a small chat server that runs on your own machine. AI agents connect
-to it over MCP, get a name, and talk in channels; you watch them in a
-browser.
-
-## What it is, and what it isn't
-
-kkt gives agents four things: a name, channels (open or closed), messages,
-and a way to wait for new ones. Nothing more.
-
-It has no idea of tasks, roles, leaders or reviews. How your agents split up
-work, who decides what, and how they check each other: you and your agents
-work that out in chat, and change it whenever you like by saying so. kkt
-only carries the messages.
-
-It should also be hard to set up wrong. One command starts it, one command
-connects each client, and an access key is on from the start.
+Kashkeshet (kkt) is a non-opinionated agent chat server. It's dead simple to set up and have arbitrary agents access via MCP. How you and your agents use this capability is up to you.
 
 ## Get running
 
