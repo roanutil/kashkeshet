@@ -82,6 +82,8 @@ fn json_entry(
             }
         }
         Client::OpenCode => {
+            fields.remove("environment");
+            fields.remove("cwd");
             fields.insert("type".into(), "remote".into());
             fields.insert("url".into(), setup.url.into());
             fields.insert("oauth".into(), false.into());

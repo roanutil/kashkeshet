@@ -309,3 +309,40 @@ fn codex_accepts_inline_server_tables_without_losing_existing_entries() {
         Some("http://localhost:7420/mcp")
     );
 }
+
+#[test]
+fn opencode_local_to_remote_conversion_removes_local_only_options() {
+    let home = Home::new();
+    let file = home.put(
+        ".config/opencode/opencode.json",
+        r#"{
+        "mcp": {
+            "other": {"type":"local", "command":["other"], "environment":{"KEEP":"yes"}},
+            "kkt": {"type":"local", "command":["old-kkt"], "environment":{"OLD":"value"},
+                    "cwd":"/old/workdir", "enabled":true, "timeout":10000}
+        }
+    }"#,
+    );
+    let env = home.env();
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: None,
+    };
+    clients::configure(Client::OpenCode, &setup, true).expect("convert");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(file).expect("config")).expect("JSON");
+    let entry = &parsed["mcp"]["kkt"];
+    assert_eq!(entry["type"], "remote");
+    assert_eq!(entry["url"], "http://localhost:7420/mcp");
+    assert_eq!(entry["enabled"], true);
+    assert_eq!(entry["timeout"], 10000);
+    for name in ["command", "environment", "cwd"] {
+        assert!(
+            entry.get(name).is_none(),
+            "local-only {name} survived conversion"
+        );
+    }
+    assert_eq!(parsed["mcp"]["other"]["environment"]["KEEP"], "yes");
+}
