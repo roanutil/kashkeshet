@@ -113,6 +113,8 @@ working kept changing because changing it took one message.
 
 ## More
 
+- [Connecting clients](docs/clients.md): what `kkt connect` writes for each
+  client, `kkt key header`, and what `kkt doctor` checks.
 - [Configuration](docs/configuration.md): `kkt serve` options, the config
   file, where data lives, the access key, managing agents.
 - [Running in the background](docs/service.md): what `kkt service` installs.
