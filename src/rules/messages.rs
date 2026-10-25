@@ -203,6 +203,11 @@ impl Rules {
                         Some(Notice::Message(_older)) => continue,
                         // Missed some notices; look in the database instead.
                         Some(Notice::Missed(_)) => break,
+                        // New agents, channels and members are for the web
+                        // page; a waiting agent wants messages.
+                        Some(
+                            Notice::Agent(_) | Notice::Channel(_) | Notice::Joined(_) | Notice::Left(_),
+                        ) => continue,
                         // The server is shutting down.
                         None => return Ok(found),
                     },

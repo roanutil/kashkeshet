@@ -64,7 +64,8 @@ impl Rules {
         let me = me.name.clone();
         let now = self.now_text();
         let entropy = self.inner.deps.entropy.clone();
-        self.db()
+        let created = self
+            .db()
             .write(move |store| {
                 let mut members = vec![me.clone()];
                 for m in &new.members {
@@ -90,7 +91,16 @@ impl Rules {
                 }
                 channel_info(store, &id, Some(&me), None, limits.member_preview)
             })
-            .await
+            .await?;
+        self.events().publish_channel(NewChannelEvent {
+            id: created.id.clone(),
+            name: created.name.clone(),
+            open: created.open,
+            created_by: created.created_by.clone(),
+            created_at: created.created_at.clone(),
+            member_count: created.member_count,
+        });
+        Ok(created)
     }
 
     /// Joins an open channel. Joining a channel you are already in does nothing.
@@ -98,27 +108,49 @@ impl Rules {
         let me = me.name.clone();
         let now = self.now_text();
         let preview = self.limits().member_preview;
-        self.db()
+        let who = me.clone();
+        let (info, joined) = self
+            .db()
             .write(move |store| {
                 let (channel, member) = visible_channel(store, &me, &channel_id)?;
                 if !member {
                     // `visible_channel` only lets a non-member through for an open channel.
                     store.add_member(&channel.id, &me, &now)?;
                 }
-                channel_info(store, &channel.id, Some(&me), None, preview)
+                let info = channel_info(store, &channel.id, Some(&me), None, preview)?;
+                Ok::<_, RuleError>((info, !member))
             })
-            .await
+            .await?;
+        if joined {
+            self.events().publish_joined(Joined {
+                agent: who,
+                channel_id: info.id.clone(),
+                channel_name: info.name.clone(),
+                member_count: info.member_count,
+            });
+        }
+        Ok(info)
     }
 
     pub async fn leave_channel(&self, me: &Agent, channel_id: String) -> Result<()> {
         let me = me.name.clone();
-        self.db()
+        let who = me.clone();
+        let (channel, member_count) = self
+            .db()
             .write(move |store| {
                 let channel = member_channel(store, &me, &channel_id)?;
                 store.remove_member(&channel.id, &me)?;
-                Ok(())
+                let count = store.member_count(&channel.id)?;
+                Ok::<_, RuleError>((channel, count))
             })
-            .await
+            .await?;
+        self.events().publish_left(Left {
+            agent: who,
+            channel_id: channel.id,
+            channel_name: channel.name,
+            member_count,
+        });
+        Ok(())
     }
 
     /// Adds agents to a channel `me` is in. They become members at once.
@@ -132,22 +164,39 @@ impl Rules {
         let me = me.name.clone();
         let now = self.now_text();
         let limit = self.limits().default_limit;
-        self.db()
+        let (page, channel, added, member_count) = self
+            .db()
             .write(move |store| {
                 let channel = member_channel(store, &me, &channel_id)?;
                 if agents.is_empty() {
                     return Err(RuleError::invalid("`agents` must name at least one agent"));
                 }
+                let mut added: Vec<String> = Vec::new();
                 for a in &agents {
                     let a = a.trim();
                     if !agent_exists(store, a)? {
                         return Err(RuleError::agent_not_found(a));
                     }
+                    if !store.is_member(&channel.id, a)? && !added.iter().any(|x| x == a) {
+                        added.push(a.to_string());
+                    }
                     store.add_member(&channel.id, a, &now)?;
                 }
-                members_page(store, &channel.id, limit, None)
+                let page = members_page(store, &channel.id, limit, None)?;
+                let count = store.member_count(&channel.id)?;
+                Ok::<_, RuleError>((page, channel, added, count))
             })
-            .await
+            .await?;
+        // Being added is joining, as far as anyone watching is concerned.
+        for agent in added {
+            self.events().publish_joined(Joined {
+                agent,
+                channel_id: channel.id.clone(),
+                channel_name: channel.name.clone(),
+                member_count,
+            });
+        }
+        Ok(page)
     }
 
     pub async fn set_purpose(

@@ -103,8 +103,18 @@ tr.glow td { animation: glow 25s ease-out; }
         border: none; background: var(--accent); color: var(--bg); font-weight: 600; box-shadow: var(--shadow); cursor: pointer; }
 .jump[hidden] { display: none; }
 
+/* Toasts for new agents, channels and joins. */
+.toasts { position: fixed; top: 64px; right: 16px; z-index: 30; display: flex; flex-direction: column; gap: 8px;
+          width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+.toast { pointer-events: auto; background: var(--panel); border: 1px solid var(--line);
+         border-left: 4px solid hsl(var(--hue, 220) var(--who-s) var(--who-l)); border-radius: 8px;
+         padding: 8px 12px; box-shadow: var(--shadow); font-size: 14px; display: flex; gap: 8px; align-items: baseline;
+         animation: toast-in .25s ease; transition: opacity .4s ease, transform .4s ease; }
+.toast .icon { flex: none; }
+.toast.leaving { opacity: 0; transform: translateX(16px); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
 @media (prefers-reduced-motion: reduce) {
-  li.msg, tr.glow td { animation: none; transition: none; }
+  .toast, li.msg, tr.glow td { animation: none; transition: none; }
 }
 
 button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
@@ -125,9 +135,11 @@ details summary { cursor: pointer; }
 <main>
 {% block content %}{% endblock %}
 </main>
+<div class="toasts" id="toasts" aria-live="polite"></div>
 {% block script %}
 <script>
-// Live updates. New messages go into any list marked data-live; a list with
+// Live updates. New agents, channels and joins show as toasts. New messages
+// go into any list marked data-live; a list with
 // data-channel only takes that channel's. A list keeps at most data-max
 // messages, dropping the oldest. A data-follow list (a channel page) scrolls
 // to new messages only if the reader is at the bottom of the list; otherwise
@@ -243,7 +255,8 @@ details summary { cursor: pointer; }
 
   // The front page's dashboard: each channel's counts, last speaker and
   // "how long ago", kept up to date from the live stream and the clock.
-  // Rows never move: they stay in creation order and update in place.
+  // Rows never move: they stay in creation order and update in place, and
+  // new ones are added at the end.
   // Times are measured against the server's clock (data-now), not the
   // viewer's, so a viewer whose clock is off still sees the right ages.
   const dashboard = document.querySelector("table[data-dashboard]");
@@ -327,10 +340,132 @@ details summary { cursor: pointer; }
     void row.offsetWidth;
     row.classList.add("glow");
   }
+  function dropPlaceholder(tbody) {
+    const placeholder = tbody.querySelector("td[colspan]");
+    if (placeholder) placeholder.parentNode.remove();
+  }
+  // A new channel gets a row at the end.
+  function dashboardChannel(c) {
+    if (!dashboard || channelRows.has(c.id)) return;
+    const tbody = dashboard.querySelector("tbody");
+    dropPlaceholder(tbody);
+    const row = el("tr");
+    row.dataset.channelId = c.id;
+    const name = el("td");
+    name.append(channelLink(c.id, c.name), " ", el("span", "badge " + (c.open ? "open" : "closed"), c.open ? "open" : "closed"));
+    const last = el("td", "last");
+    last.append(el("span", "muted", "no messages yet"));
+    row.append(name, el("td", "num members", String(c.member_count)), el("td", "num count", "0"),
+      el("td", "num recent zero", "0"), last);
+    tbody.append(row);
+    channelRows.set(c.id, row);
+    recentCounts.set(c.id, new Map());
+    glow(row);
+  }
+  // A new agent gets a row at the end.
+  function dashboardAgent(a) {
+    const tbody = document.querySelector("table.agents tbody");
+    if (!tbody || agentRows.has(a.name)) return;
+    dropPlaceholder(tbody);
+    const row = el("tr");
+    row.dataset.agent = a.name;
+    const named = link("/agents/" + encodeURIComponent(a.name), "agent-row");
+    named.style.setProperty("--hue", String(hue(a.name)));
+    const avatar = el("span", "avatar small", a.name.charAt(0).toUpperCase());
+    avatar.setAttribute("aria-hidden", "true");
+    named.append(avatar, el("span", "who", a.name));
+    const nameCell = el("td");
+    nameCell.append(named);
+    const seen = el("time", "ago");
+    seen.setAttribute("datetime", a.created_at);
+    const seenCell = el("td", "muted");
+    seenCell.append(seen);
+    const channels = el("td", "small channels");
+    channels.append(el("span", "muted", "none"));
+    row.append(nameCell, seenCell, channels);
+    tbody.append(row);
+    agentRows.set(a.name, row);
+    glow(row);
+    tick();
+  }
+  // A join adds a member to the channel and the channel to the agent.
+  // Joins and leaves carry the channel's member count afterwards, which
+  // the row takes as it is: counting changes here would drift.
+  function setMembers(channelId, count) {
+    const members = channelRows.get(channelId)?.querySelector("td.members");
+    if (members) members.textContent = String(count);
+  }
+  // Rewrites an agent's channel list with `change` applied to it: a list of
+  // [id, name] pairs, in the order shown.
+  function changeChannels(agent, change) {
+    const cell = agentRows.get(agent)?.querySelector("td.channels");
+    if (!cell) return;
+    const pairs = [...cell.querySelectorAll("a[data-channel-id]")]
+      .map((a) => [a.dataset.channelId, a.textContent.replace(/^#/, "")]);
+    const next = change(pairs);
+    cell.replaceChildren();
+    next.forEach(([id, name], i) => {
+      if (i > 0) cell.append(", ");
+      const a = channelLink(id, name);
+      a.dataset.channelId = id;
+      cell.append(a);
+    });
+    if (next.length === 0) cell.append(el("span", "muted", "none"));
+  }
+  // A join adds the agent to the channel and the channel to the agent.
+  function dashboardJoined(j) {
+    setMembers(j.channel_id, j.member_count);
+    changeChannels(j.agent, (pairs) => pairs.some(([id]) => id === j.channel_id)
+      ? pairs : [...pairs, [j.channel_id, j.channel_name]]);
+  }
+  // A leave takes them out again.
+  function dashboardLeft(l) {
+    setMembers(l.channel_id, l.member_count);
+    changeChannels(l.agent, (pairs) => pairs.filter(([id]) => id !== l.channel_id));
+  }
   if (dashboard) {
     tick();
     setInterval(tick, 1000);
   }
+  // Toasts: a few at a time, newest at the bottom, each fading after a while.
+  const toasts = document.getElementById("toasts");
+  const MAX_TOASTS = 4;
+  const TOAST_MS = 6000;
+  function toast(hueOf, icon, parts) {
+    if (!toasts) return;
+    const t = el("div", "toast");
+    t.style.setProperty("--hue", String(hue(hueOf)));
+    t.append(el("span", "icon", icon));
+    const text = el("span");
+    text.append(...parts);
+    t.append(text);
+    toasts.append(t);
+    while (toasts.children.length > MAX_TOASTS) toasts.firstElementChild.remove();
+    setTimeout(() => {
+      t.classList.add("leaving");
+      setTimeout(() => t.remove(), 400);
+    }, TOAST_MS);
+  }
+  function agentLink(name) { return link("/agents/" + encodeURIComponent(name), "who", name); }
+  function channelLink(id, name) { return link("/channels/" + encodeURIComponent(id), "", "#" + name); }
+  source.addEventListener("agent", (e) => {
+    const a = JSON.parse(e.data);
+    toast(a.name, "👋", [agentLink(a.name), " registered"]);
+    dashboardAgent(a);
+  });
+  source.addEventListener("channel", (e) => {
+    const c = JSON.parse(e.data);
+    const parts = [channelLink(c.id, c.name), " created by ", agentLink(c.created_by)];
+    if (!c.open) parts.push(" ", el("span", "badge closed", "closed"));
+    toast(c.created_by, "✨", parts);
+    dashboardChannel(c);
+  });
+  source.addEventListener("joined", (e) => {
+    const j = JSON.parse(e.data);
+    toast(j.agent, "➜", [agentLink(j.agent), " joined ", channelLink(j.channel_id, j.channel_name)]);
+    dashboardJoined(j);
+  });
+  source.addEventListener("left", (e) => dashboardLeft(JSON.parse(e.data)));
 
   // The same hash as the server's `hue` filter (FNV-1a over UTF-8), so an
   // agent keeps its color on live messages.

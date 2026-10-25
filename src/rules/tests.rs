@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::clock::testing::FixedClock;
+use crate::events::Notice;
 use crate::names::testing::{SameNameEntropy, SeqEntropy};
 use chrono::TimeZone;
 use std::time::Duration;
@@ -1066,6 +1067,101 @@ async fn wait_ignores_channels_i_am_not_in_and_times_out() {
     };
     until_sleeping(&w.clock).await;
     w.rules.send(&a, ch, "not for b".into()).await.unwrap();
+    w.clock.advance(chrono::Duration::seconds(30));
+    let got = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the wait should time out")
+        .expect("join")
+        .expect("wait");
+    assert!(got.messages.is_empty());
+}
+
+#[tokio::test]
+async fn new_agents_channels_joins_and_leaves_are_published() {
+    let w = world().await;
+    let mut notices = w.rules.events().subscribe();
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let c = w.agent().await;
+    let open = w.channel(&a, "open-room", true, &[]).await;
+    let closed = w.channel(&a, "closed-room", false, &[]).await;
+    w.rules.join_channel(&b, open.clone()).await.unwrap();
+    // Joining again, or being in a channel from its creation, is not news.
+    w.rules.join_channel(&b, open.clone()).await.unwrap();
+    w.rules.join_channel(&a, open.clone()).await.unwrap();
+    // Leaving and coming back: each event carries the count afterwards.
+    w.rules.leave_channel(&b, open.clone()).await.unwrap();
+    w.rules.join_channel(&b, open.clone()).await.unwrap();
+    // Being added by a member is joining; adding a member again is not.
+    w.rules
+        .add_to_channel(&a, open.clone(), vec![c.name.clone(), b.name.clone()])
+        .await
+        .unwrap();
+
+    let mut heard = Vec::new();
+    while let Ok(Some(notice)) =
+        tokio::time::timeout(Duration::from_millis(50), notices.next()).await
+    {
+        heard.push(match notice {
+            Notice::Agent(x) => format!("agent {}", x.name),
+            Notice::Channel(x) => format!(
+                "channel {} {} {} {} {}",
+                x.id, x.name, x.open, x.created_by, x.member_count
+            ),
+            Notice::Joined(x) => format!(
+                "joined {} {} {} {}",
+                x.agent, x.channel_id, x.channel_name, x.member_count
+            ),
+            Notice::Left(x) => format!(
+                "left {} {} {} {}",
+                x.agent, x.channel_id, x.channel_name, x.member_count
+            ),
+            other => format!("{other:?}"),
+        });
+    }
+    assert_eq!(
+        heard,
+        [
+            format!("agent {}", a.name),
+            format!("agent {}", b.name),
+            format!("agent {}", c.name),
+            format!("channel {open} open-room true {} 1", a.name),
+            format!("channel {closed} closed-room false {} 1", a.name),
+            format!("joined {} {open} open-room 2", b.name),
+            format!("left {} {open} open-room 1", b.name),
+            format!("joined {} {open} open-room 2", b.name),
+            format!("joined {} {open} open-room 3", c.name),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_waiting_agent_is_not_woken_by_new_agents_or_channels() {
+    let w = world().await;
+    let a = w.agent().await;
+    let waiter = {
+        let rules = w.rules.clone();
+        let a = a.clone();
+        tokio::spawn(async move {
+            rules
+                .wait_for_messages(
+                    &a,
+                    WaitQuery {
+                        after_id: 0,
+                        channel_ids: None,
+                        timeout: Duration::from_secs(30),
+                        limit: 10,
+                    },
+                )
+                .await
+        })
+    };
+    until_sleeping(&w.clock).await;
+    let b = w.agent().await;
+    let ch = w.channel(&b, "elsewhere", true, &[]).await;
+    w.rules.join_channel(&a, ch).await.unwrap();
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished(), "the wait ended without a message");
     w.clock.advance(chrono::Duration::seconds(30));
     let got = tokio::time::timeout(Duration::from_secs(5), waiter)
         .await

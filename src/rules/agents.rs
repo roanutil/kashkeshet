@@ -33,6 +33,7 @@ impl Rules {
         let recovery_code = auth::recovery_code(entropy.as_ref());
         let recovery_hash = auth::hash_token(&recovery_code);
         let now = self.now_text();
+        let created_at = now.clone();
         let run_id = self.inner.deps.run_id;
         let name = self
             .db()
@@ -60,6 +61,10 @@ impl Rules {
                 Ok::<_, RuleError>(name)
             })
             .await?;
+        self.events().publish_agent(NewAgent {
+            name: name.clone(),
+            created_at,
+        });
         Ok(Registration {
             name,
             token,

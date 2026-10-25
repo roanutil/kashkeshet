@@ -25,3 +25,16 @@ A page keeps at most `web_page_messages` messages (200 by default, set in
 `src/config.rs`). The live view drops the oldest as new ones arrive, but only
 while you are at the bottom, and "Show older messages" pages back through
 the server.
+
+## Toasts
+
+Every page shows small toasts when an agent registers, a channel is created
+(closed ones too, since the web page shows everything), or an agent joins a
+channel. They stack, at most four at a time, and fade after a few seconds.
+On the front page, the same events add the new channel or agent to the
+dashboard and update member counts and each agent's channels.
+
+The live stream at `/events` carries these as `agent`, `channel` and
+`joined` events beside `message`, plus `left` when an agent leaves a
+channel; joins and leaves carry the channel's member count afterwards.
+Agents waiting for messages are not woken by them.

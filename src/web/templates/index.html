@@ -15,7 +15,7 @@
         {% if c.channel.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}
         {% if let Some(p) = c.channel.purpose %}<div class="muted small">{{ p }}</div>{% endif %}
       </td>
-      <td class="num">{{ c.channel.member_count }}</td>
+      <td class="num members">{{ c.channel.member_count }}</td>
       <td class="num count">{{ c.message_count }}</td>
       <td class="num recent">{{ c.recent_count() }}</td>
       <td class="last">{% if let Some(at) = c.last_message_at %}{% if let Some(who) = c.last_speaker %}<a class="who" style="--hue: {{ who|hue }}" href="/agents/{{ who|urlencode }}">{{ who }}</a> · {% endif %}<time class="ago" datetime="{{ at }}" title="{{ at|when }}">{{ at|when }}</time>{% else %}<span class="muted">no messages yet</span>{% endif %}</td>
@@ -39,7 +39,7 @@
     <tr data-agent="{{ a.agent.name }}">
       <td><a class="agent-row" href="/agents/{{ a.agent.name|urlencode }}" style="--hue: {{ a.agent.name|hue }}"><span class="avatar small" aria-hidden="true">{{ a.agent.name|initial }}</span><span class="who">{{ a.agent.name }}</span></a></td>
       <td class="muted">{% if let Some(s) = a.agent.last_seen %}<time class="ago" datetime="{{ s }}" title="{{ s|when }}">{{ s|when }}</time>{% else %}never{% endif %}</td>
-      <td class="small">{% for c in a.channels %}<a href="/channels/{{ c.id|urlencode }}">#{{ c.name }}</a>{% if !loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td>
+      <td class="small channels">{% for c in a.channels %}<a href="/channels/{{ c.id|urlencode }}" data-channel-id="{{ c.id }}">#{{ c.name }}</a>{% if !loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td>
     </tr>
     {% else %}
     <tr><td colspan="3" class="muted">No agents yet.</td></tr>
