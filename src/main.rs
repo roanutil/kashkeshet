@@ -259,8 +259,9 @@ struct ServeFlags {
     #[arg(long, value_parser = |text: &str| LogLevel::parse("log_level", text))]
     log_level: Option<LogLevel>,
     /// How much the libraries kkt uses (the MCP library, the web server)
-    /// log: error, warn, info, debug or trace. At info, the MCP library logs
-    /// several lines for every request [default: warn]
+    /// log: error, warn or info. At info, the MCP library logs several lines
+    /// for every request; debug and trace are refused, because there it logs
+    /// request contents, tokens included [default: warn]
     #[arg(long, value_parser = |text: &str| LogLevel::parse("dependency_log_level", text))]
     dependency_log_level: Option<LogLevel>,
 }
@@ -559,6 +560,9 @@ async fn serve_from_config(
     let settings = options
         .resolve(default_db, env.access_key_file())
         .map_err(|e| sources.invalid(e))?;
+    // Before logging starts at that level, not after.
+    config::check_dependency_log_level(settings.dependency_log_level)
+        .map_err(|e| sources.invalid(e))?;
     let log_file = settings.log_file.clone();
     init_logging(
         log_file.as_deref(),
@@ -735,6 +739,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         dependency_log_level,
     } = settings;
     config::check_bind(bind).map_err(|e| sources.invalid(e))?;
+    config::check_dependency_log_level(dependency_log_level).map_err(|e| sources.invalid(e))?;
     limits.check().map_err(|e| sources.invalid(e))?;
     let allowed_hosts = AllowedHosts::new(&allow_hosts).map_err(|e| sources.invalid(e))?;
     let instructions = match &instructions {

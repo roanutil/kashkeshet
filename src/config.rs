@@ -241,6 +241,23 @@ pub const DEFAULT_LOG_LEVEL: LogLevel = LogLevel::Info;
 /// The level logged for the libraries kkt uses (`dependency_log_level`).
 /// Above info, because the MCP library logs several lines for every request.
 pub const DEFAULT_DEPENDENCY_LOG_LEVEL: LogLevel = LogLevel::Warn;
+
+/// Checks `dependency_log_level`. At debug and trace the MCP library logs
+/// whole requests and replies, tokens and recovery codes included, and logs
+/// must never hold those; so those levels are refused.
+pub fn check_dependency_log_level(level: LogLevel) -> Result<(), InvalidSetting> {
+    match level {
+        LogLevel::Error | LogLevel::Warn | LogLevel::Info => Ok(()),
+        LogLevel::Debug | LogLevel::Trace => Err(InvalidSetting::new(
+            "dependency_log_level",
+            format!(
+                "must be error, warn or info, not {}: at debug and trace the MCP library \
+                 logs request contents, including tokens",
+                level.name()
+            ),
+        )),
+    }
+}
 /// The targets of kkt's own code: the library and the `kkt` binary.
 pub const LOG_OWN_TARGETS: &[&str] = &["kashkeshet", "kkt"];
 /// How often a log file the server writes itself looks for rolled files past
@@ -654,5 +671,16 @@ mod tests {
         let err = LogLevel::parse("dependency_log_level", "verbose").expect_err("unknown");
         assert_eq!(err.name, "dependency_log_level");
         assert!(LogLevel::parse("log_level", "INFO").is_err());
+    }
+
+    #[test]
+    fn dependency_levels_that_would_log_secrets_are_refused() {
+        for level in [LogLevel::Error, LogLevel::Warn, LogLevel::Info] {
+            assert_eq!(check_dependency_log_level(level), Ok(()));
+        }
+        for level in [LogLevel::Debug, LogLevel::Trace] {
+            let err = check_dependency_log_level(level).expect_err("refused");
+            assert_eq!(err.name, "dependency_log_level");
+        }
     }
 }

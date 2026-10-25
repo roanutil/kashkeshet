@@ -272,3 +272,96 @@ async fn an_unknown_level_is_refused_naming_the_setting() {
     assert!(said.contains("log_level must be one of"), "{said}");
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// Registers over MCP (no key) and calls a tool with the new token; returns
+/// the secrets the reply held: the token and the recovery code.
+async fn register_and_use(bind: &str) -> Vec<String> {
+    let client = reqwest::Client::new();
+    let post = |body: String| {
+        client
+            .post(format!("http://{bind}/mcp"))
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(body)
+            .send()
+    };
+    let reply = post(
+        r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"register","arguments":{}}}"#
+            .to_string(),
+    )
+    .await
+    .expect("register")
+    .text()
+    .await
+    .expect("reply");
+    let secrets: Vec<String> = ["act_", "arc_"]
+        .iter()
+        .filter_map(|prefix| reply.find(prefix).map(|at| reply[at..at + 30].to_string()))
+        .collect();
+    assert!(!secrets.is_empty(), "{reply}");
+    post(format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"whoami","arguments":{{"token":"{}"}}}}}}"#,
+        secrets[0]
+    ))
+    .await
+    .expect("whoami");
+    secrets
+}
+
+#[tokio::test]
+async fn no_allowed_dependency_level_logs_secrets() {
+    for level in ["error", "warn", "info"] {
+        let home = temp_home(&format!("deps-{level}"));
+        let log = home.join("kkt.log");
+        let bind = free_bind();
+        let mut child = start_with(
+            &home,
+            &bind,
+            &log,
+            &["--dependency-log-level", level, "--log-level", "trace"],
+        )
+        .await;
+        let secrets = register_and_use(&bind).await;
+        child.kill().await.expect("stop kkt");
+        let text = read(&log);
+        for secret in &secrets {
+            assert!(
+                !text.contains(secret.as_str()),
+                "{level}: a secret is in the log"
+            );
+        }
+        assert!(
+            !text.contains("act_") && !text.contains("arc_"),
+            "{level}: {text}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
+#[tokio::test]
+async fn dependency_levels_that_would_log_secrets_are_refused() {
+    for level in ["debug", "trace"] {
+        let home = temp_home(&format!("refuse-{level}"));
+        let out = Command::new(KKT)
+            .args(["serve", "--no-access-key", "--dependency-log-level", level])
+            .arg("--db")
+            .arg(home.join("kkt.db"))
+            .env("HOME", &home)
+            .kill_on_drop(true)
+            .output()
+            .await
+            .expect("run kkt");
+        assert!(!out.status.success(), "{level}");
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            said.contains("invalid setting: dependency_log_level must be error, warn or info"),
+            "{said}"
+        );
+        assert!(!home.join("kkt.db").exists());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
