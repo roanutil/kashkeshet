@@ -101,6 +101,7 @@ pub fn settings_text(
         member_preview,
         purpose_preview_chars,
         web_session_lifetime,
+        web_page_messages,
     } = limits;
     let mut lines = vec![
         format!("max_response_bytes={max_response_bytes}"),
@@ -122,6 +123,7 @@ pub fn settings_text(
             "web_session_lifetime_ms={}",
             web_session_lifetime.as_millis()
         ),
+        format!("web_page_messages={web_page_messages}"),
     ];
     let mut origins = allowed_origins.to_vec();
     origins.sort();
@@ -205,6 +207,7 @@ mod tests {
              member_preview=3\n\
              purpose_preview_chars=120\n\
              web_session_lifetime_ms=43200000\n\
+             web_page_messages=200\n\
              allowed_origin=http://localhost:6274\n\
              allowed_host=host.docker.internal"
         );

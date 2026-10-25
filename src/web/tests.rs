@@ -5,7 +5,7 @@
 use super::*;
 use crate::admission::{Admission, Sessions, WebAdmission};
 use crate::clock::testing::FixedClock;
-use crate::config::{Limits, PreviewSettings, WEB_CHANNEL_PAGE_MESSAGES};
+use crate::config::{Limits, PreviewSettings};
 use crate::events::Events;
 use crate::names::SeededEntropy;
 use crate::names::testing::SeqEntropy;
@@ -75,13 +75,16 @@ async fn pages_work(source: Arc<dyn Source>) {
     );
     assert!(page.contains(&agent.name), "front page lacks the agent");
     assert!(
-        page.contains(&format!("{} ·", message.id)),
+        page.contains(&format!("data-id=\"{}\"", message.id)),
         "front page lacks the latest message"
     );
+    assert!(page.contains(&format!("data-max=\"{}\"", source.page_messages())));
 
     let (status, page) = get(&site, &format!("/channels/{}", channel.id)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains(&format!("#{}", channel.name)));
+    assert!(page.contains("data-follow"), "the newest page is live");
+    assert!(page.contains(&format!("data-max=\"{}\"", source.page_messages())));
 
     let view = source
         .channel(message.channel_id.clone(), None)
@@ -184,6 +187,37 @@ async fn pages_work_from_the_preview() {
 }
 
 #[tokio::test]
+async fn the_show_older_link_appears_only_when_older_messages_exist() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    let p = preview(1, clock, &Shutdown::new());
+    let site = site(p.clone());
+    let overview = p.overview().await.expect("overview");
+    let mut seen_paged = false;
+    let mut seen_single = false;
+    for c in &overview.channels {
+        let view = p.channel(c.id.clone(), None).await.expect("view");
+        let (status, page) = get(&site, &format!("/channels/{}", c.id)).await;
+        assert_eq!(status, StatusCode::OK);
+        match view.older_before_id {
+            Some(before) => {
+                seen_paged = true;
+                assert!(
+                    page.contains(&format!("?before_id={before}\">Show older")),
+                    "{}",
+                    c.name
+                );
+                assert!(!page.contains("id=\"older\" hidden"), "{}", c.name);
+            }
+            None => {
+                seen_single = true;
+                assert!(page.contains("id=\"older\" hidden"), "{}", c.name);
+            }
+        }
+    }
+    assert!(seen_paged && seen_single);
+}
+
+#[tokio::test]
 async fn the_preview_world_repeats_from_its_seed() {
     let shutdown = Shutdown::new();
     let world = |seed| {
@@ -218,7 +252,7 @@ async fn the_preview_world_has_what_the_page_must_show() {
         }
         if let Some(before) = view.older_before_id {
             paged += 1;
-            assert!(view.messages.len() == WEB_CHANNEL_PAGE_MESSAGES);
+            assert_eq!(view.messages.len(), p.page_messages());
             let older = p.channel(c.id.clone(), Some(before)).await.expect("older");
             assert!(older.messages.iter().all(|m| m.id < before));
         }

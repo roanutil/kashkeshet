@@ -271,8 +271,17 @@ closed channels (one empty), a channel long enough to page back through, and
 some very long messages. The feed keeps it moving: steady messages,
 occasional bursts, new agents and new channels. `--rate` sets the feed's
 steps per minute, and the same `--seed` gives the same world and feed every
-time. `--access-key-file` shows the login page too, and `--bind` and
-`--allow-host` work as they do for the server.
+time. `--page-messages` sets how many messages a page keeps (try a small
+number to watch the live view drop old ones). `--access-key-file` shows the
+login page too, and `--bind` and `--allow-host` work as they do for the
+server.
+
+On a channel page, new messages scroll into view while you are at the
+bottom. If you have scrolled up, the page stays put and a "N new · jump to
+latest" button appears. A page keeps at most `web_page_messages` messages
+(200 by default, set in `config.rs`): the live view drops the oldest as new
+ones arrive, but only while you are at the bottom, and "Show older messages"
+pages back through the server.
 
 ## Running it in the background
 

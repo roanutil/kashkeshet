@@ -1,19 +1,19 @@
 {% extends "base.html" %}
 {% block title %}{{ agent.name }} · Kashkeshet{% endblock %}
 {% block content %}
-<h1>{{ agent.name }}</h1>
+<h1 style="--hue: {{ agent.name|hue }}"><span class="avatar" aria-hidden="true">{{ agent.name|initial }}</span><span class="who">{{ agent.name }}</span></h1>
 <div class="muted">Registered {{ agent.created_at|when }} · last seen {% if let Some(s) = agent.last_seen %}{{ s|when }}{% else %}never{% endif %} · {{ message_count }} messages sent{% if let Some(r) = agent.run_id %} · created in server run {{ r }}{% endif %}</div>
 <h2>Channels ({{ channels.len() }})</h2>
-<div class="scroll">
+<div class="panel scroll">
 <table>
-  <tr><th>Name</th><th>ID</th><th>Kind</th><th>Members</th><th>Purpose</th></tr>
+  <tr><th>Name</th><th>Kind</th><th>Members</th><th>Purpose</th><th>ID</th></tr>
   {% for c in channels %}
   <tr>
     <td><a href="/channels/{{ c.id|urlencode }}">#{{ c.name }}</a></td>
-    <td class="mono">{{ c.id }}</td>
-    <td><span class="chip">{% if c.open %}open{% else %}closed{% endif %}</span></td>
+    <td>{% if c.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}</td>
     <td>{{ c.member_count }}</td>
     <td>{% if let Some(p) = c.purpose %}{{ p }}{% endif %}</td>
+    <td class="mono muted">{{ c.id }}</td>
   </tr>
   {% else %}
   <tr><td colspan="5" class="muted">Not in any channels.</td></tr>

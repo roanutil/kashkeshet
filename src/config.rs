@@ -22,8 +22,9 @@ pub const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 pub const EVENT_BUFFER: usize = 1024;
 /// Messages shown on the web page's front page.
 pub const WEB_RECENT_MESSAGES: usize = 50;
-/// Messages shown on the web page for one channel.
-pub const WEB_CHANNEL_PAGE_MESSAGES: usize = 200;
+/// Largest `web_page_messages`. More would make a page slow to load and
+/// heavy to keep live.
+pub const MAX_WEB_PAGE_MESSAGES: usize = 5000;
 /// How often the web page's event stream sends a keep-alive comment.
 pub const WEB_KEEP_ALIVE: Duration = Duration::from_secs(15);
 /// How many numbered names to try before giving up on a base agent name.
@@ -114,11 +115,14 @@ pub const PREVIEW_LONG_MESSAGE_ONE_IN: usize = 10;
 pub struct PreviewSettings {
     /// Steps of the simulated feed per minute. Most steps are one message.
     pub steps_per_minute: u32,
+    /// The most messages one page shows, as the server's `web_page_messages`.
+    pub page_messages: usize,
 }
 
 impl PreviewSettings {
     pub const DEFAULT: PreviewSettings = PreviewSettings {
         steps_per_minute: 30,
+        page_messages: Limits::DEFAULT.web_page_messages,
     };
 
     /// Checks the settings. The preview refuses to start with ones that fail.
@@ -127,6 +131,12 @@ impl PreviewSettings {
             return Err(InvalidSetting::new(
                 "rate",
                 "must be from 1 to 60000 steps per minute",
+            ));
+        }
+        if self.page_messages == 0 || self.page_messages > MAX_WEB_PAGE_MESSAGES {
+            return Err(InvalidSetting::new(
+                "page_messages",
+                format!("must be from 1 to {MAX_WEB_PAGE_MESSAGES}"),
             ));
         }
         Ok(())
@@ -195,6 +205,10 @@ pub struct Limits {
     pub purpose_preview_chars: usize,
     /// How long a web page sign-in lasts, when an access key is set.
     pub web_session_lifetime: Duration,
+    /// The most messages one web page shows: a channel's page, and the live
+    /// view, which drops the oldest as new ones arrive. Older messages are a
+    /// "show older" link away.
+    pub web_page_messages: usize,
 }
 
 impl Limits {
@@ -216,6 +230,7 @@ impl Limits {
         member_preview: 3,
         purpose_preview_chars: 120,
         web_session_lifetime: Duration::from_secs(12 * 60 * 60),
+        web_page_messages: 200,
     };
 
     /// Checks that these limits make sense together. The server refuses to
@@ -233,6 +248,7 @@ impl Limits {
                 self.registrations_per_minute as usize,
             ),
             ("max_agents", self.max_agents),
+            ("web_page_messages", self.web_page_messages),
         ];
         if let Some((name, _)) = at_least_one.iter().find(|(_, value)| *value == 0) {
             return Err(InvalidSetting::new(name, "must be at least 1"));
@@ -247,6 +263,12 @@ impl Limits {
             return Err(InvalidSetting::new(
                 "max_limit",
                 "must be at least default_limit",
+            ));
+        }
+        if self.web_page_messages > MAX_WEB_PAGE_MESSAGES {
+            return Err(InvalidSetting::new(
+                "web_page_messages",
+                format!("must be at most {MAX_WEB_PAGE_MESSAGES}"),
             ));
         }
         if self.web_session_lifetime < Duration::from_secs(1) {
@@ -331,13 +353,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn web_pages_have_a_ceiling() {
+        let limits = Limits {
+            web_page_messages: MAX_WEB_PAGE_MESSAGES + 1,
+            ..Limits::DEFAULT
+        };
+        assert_eq!(limits.check().map_err(|e| e.name), Err("web_page_messages"));
+        let limits = Limits {
+            web_page_messages: MAX_WEB_PAGE_MESSAGES,
+            ..Limits::DEFAULT
+        };
+        assert_eq!(limits.check(), Ok(()));
+    }
+
+    #[test]
     fn preview_rates_must_be_sensible() {
         assert_eq!(PreviewSettings::DEFAULT.check(), Ok(()));
         for bad in [0, 60_001] {
             let settings = PreviewSettings {
                 steps_per_minute: bad,
+                ..PreviewSettings::DEFAULT
             };
             assert_eq!(settings.check().map_err(|e| e.name), Err("rate"));
+        }
+        for bad in [0, MAX_WEB_PAGE_MESSAGES + 1] {
+            let settings = PreviewSettings {
+                page_messages: bad,
+                ..PreviewSettings::DEFAULT
+            };
+            assert_eq!(settings.check().map_err(|e| e.name), Err("page_messages"));
         }
     }
 
@@ -349,7 +393,7 @@ mod tests {
     #[test]
     fn zero_is_refused_for_every_count() {
         type SetZero = fn(&mut Limits);
-        let cases: [(&str, SetZero); 8] = [
+        let cases: [(&str, SetZero); 9] = [
             ("default_limit", |l| l.default_limit = 0),
             ("max_body_chars", |l| l.max_body_chars = 0),
             ("max_body_bytes", |l| l.max_body_bytes = 0),
@@ -360,6 +404,7 @@ mod tests {
                 l.registrations_per_minute = 0
             }),
             ("max_agents", |l| l.max_agents = 0),
+            ("web_page_messages", |l| l.web_page_messages = 0),
         ];
         for (name, set_zero) in cases {
             let mut limits = Limits::DEFAULT;

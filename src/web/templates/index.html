@@ -3,16 +3,16 @@
 <div class="grid">
 <section>
   <h2>Channels ({{ channels.len() }})</h2>
-  <div class="scroll">
+  <div class="panel scroll">
   <table>
-    <tr><th>Name</th><th>ID</th><th>Kind</th><th>Members</th><th>Purpose</th></tr>
+    <tr><th>Name</th><th>Kind</th><th>Members</th><th>Purpose</th><th>ID</th></tr>
     {% for c in channels %}
     <tr>
       <td><a href="/channels/{{ c.id|urlencode }}">#{{ c.name }}</a></td>
-      <td class="mono">{{ c.id }}</td>
-      <td><span class="chip">{% if c.open %}open{% else %}closed{% endif %}</span></td>
+      <td>{% if c.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}</td>
       <td>{{ c.member_count }}</td>
       <td>{% if let Some(p) = c.purpose %}{{ p }}{% endif %}</td>
+      <td class="mono muted">{{ c.id }}</td>
     </tr>
     {% else %}
     <tr><td colspan="5" class="muted">No channels yet.</td></tr>
@@ -21,26 +21,30 @@
   </div>
 
   <h2>Recent messages</h2>
-  <ol class="messages" data-live data-max="200">
+  <div class="panel">
+  <ol class="messages" data-live data-max="{{ max_messages }}">
     {% for m in recent %}{% let show_channel = true %}{% include "message.html" %}{% else %}<li class="empty muted">No messages yet.</li>{% endfor %}
   </ol>
+  </div>
 </section>
 <section>
   <h2>Agents ({{ agents.len() }})</h2>
+  <div class="panel">
   <table>
     <tr><th>Name</th><th>Last seen</th></tr>
     {% for a in agents %}
     <tr>
-      <td><a href="/agents/{{ a.name|urlencode }}">{{ a.name }}</a></td>
+      <td><a class="agent-row" href="/agents/{{ a.name|urlencode }}" style="--hue: {{ a.name|hue }}"><span class="avatar small" aria-hidden="true">{{ a.name|initial }}</span><span class="who">{{ a.name }}</span></a></td>
       <td class="muted">{% if let Some(s) = a.last_seen %}{{ s|when }}{% else %}never{% endif %}</td>
     </tr>
     {% else %}
     <tr><td colspan="2" class="muted">No agents yet.</td></tr>
     {% endfor %}
   </table>
+  </div>
 
   <h2>Server runs ({{ runs.len() }})</h2>
-  <div class="scroll">
+  <div class="panel scroll">
   <table>
     <tr><th>Run</th><th>Started</th><th>Version</th><th>Commit</th><th>Instructions</th></tr>
     {% for r in runs %}
@@ -51,7 +55,7 @@
       <td class="mono" title="{{ r.git_commit }}">{{ r.git_commit|short }}</td>
       <td class="mono" title="SHA-256 {{ r.instructions_sha256 }}">{{ r.instructions_sha256|short }}</td>
     </tr>
-    <tr><td colspan="5"><details><summary class="muted">Settings</summary><pre class="mono">{{ r.settings }}</pre></details></td></tr>
+    <tr><td colspan="5"><details><summary class="muted">Settings</summary><pre>{{ r.settings }}</pre></details></td></tr>
     {% else %}
     <tr><td colspan="5" class="muted">No runs recorded.</td></tr>
     {% endfor %}

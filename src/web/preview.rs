@@ -15,7 +15,7 @@ use crate::clock::{self, Clock};
 use crate::config::{
     PREVIEW_AGENTS, PREVIEW_BURST_MAX, PREVIEW_BURST_ONE_IN, PREVIEW_CHANNELS, PREVIEW_HISTORY,
     PREVIEW_LONG_MESSAGE_ONE_IN, PREVIEW_MESSAGES, PREVIEW_NEW_AGENT_ONE_IN,
-    PREVIEW_NEW_CHANNEL_ONE_IN, PreviewSettings, WEB_CHANNEL_PAGE_MESSAGES, WEB_RECENT_MESSAGES,
+    PREVIEW_NEW_CHANNEL_ONE_IN, PreviewSettings, WEB_RECENT_MESSAGES,
 };
 use crate::events::{Events, NewMessage, Notice};
 use crate::names::{self, Entropy};
@@ -224,7 +224,7 @@ impl Source for Preview {
         before_id: Option<i64>,
     ) -> BoxFuture<'_, Result<ChannelView, SourceError>> {
         let world = self.world();
-        let view = world.channel_view(&id, before_id);
+        let view = world.channel_view(&id, before_id, self.settings.page_messages);
         Box::pin(async move { view })
     }
 
@@ -251,6 +251,10 @@ impl Source for Preview {
                 Notice::Missed(n) => LiveEvent::Missed(n),
             })
             .boxed()
+    }
+
+    fn page_messages(&self) -> usize {
+        self.settings.page_messages
     }
 }
 
@@ -417,7 +421,12 @@ impl World {
         message
     }
 
-    fn channel_view(&self, id: &str, before_id: Option<i64>) -> Result<ChannelView, SourceError> {
+    fn channel_view(
+        &self,
+        id: &str,
+        before_id: Option<i64>,
+        page_messages: usize,
+    ) -> Result<ChannelView, SourceError> {
         let c = self
             .channels
             .iter()
@@ -428,7 +437,7 @@ impl World {
             .iter()
             .filter(|m| m.channel_id == id && before_id.is_none_or(|b| m.id < b))
             .collect();
-        let skip = earlier.len().saturating_sub(WEB_CHANNEL_PAGE_MESSAGES);
+        let skip = earlier.len().saturating_sub(page_messages);
         let messages: Vec<Message> = earlier[skip..].iter().map(|m| (*m).clone()).collect();
         let older_before_id = match skip {
             0 => None,

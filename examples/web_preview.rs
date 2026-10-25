@@ -2,7 +2,7 @@
 //! working on the page's look and live behavior.
 //!
 //! ```text
-//! cargo run --example web_preview -- --bind 127.0.0.1:7421 --seed 7 --rate 60
+//! cargo run --example web_preview -- --bind 127.0.0.1:7421 --seed 7 --rate 60 --page-messages 30
 //! ```
 //!
 //! The same seed gives the same world and the same feed. Pass
@@ -32,6 +32,11 @@ struct Args {
         PreviewSettings::DEFAULT.steps_per_minute
     ))]
     rate: Option<u32>,
+    #[arg(long, help = format!(
+        "The most messages one page shows; small values show the live view dropping old ones [default: {}]",
+        PreviewSettings::DEFAULT.page_messages
+    ))]
+    page_messages: Option<usize>,
     /// A host name to answer to besides loopback. Repeat for more.
     #[arg(long = "allow-host")]
     allow_hosts: Vec<String>,
@@ -59,6 +64,9 @@ async fn run(args: Args) -> Result<(), String> {
         steps_per_minute: args
             .rate
             .unwrap_or(PreviewSettings::DEFAULT.steps_per_minute),
+        page_messages: args
+            .page_messages
+            .unwrap_or(PreviewSettings::DEFAULT.page_messages),
     };
     config::check_bind(bind).map_err(|e| format!("invalid setting: {e}"))?;
     settings

@@ -88,6 +88,10 @@ impl Source for RulesSource {
             })
             .boxed()
     }
+
+    fn page_messages(&self) -> usize {
+        self.rules.limits().web_page_messages
+    }
 }
 
 impl Gate for WebAdmission {

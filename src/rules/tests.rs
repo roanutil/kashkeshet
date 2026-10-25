@@ -410,6 +410,39 @@ async fn a_closed_channel_with_no_members_is_unreachable_but_the_human_sees_it()
     assert!(view.members.is_empty());
 }
 
+#[tokio::test]
+async fn the_web_channel_page_holds_web_page_messages_and_pages_back() {
+    let limits = Limits {
+        web_page_messages: 3,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "busy", true, &[]).await;
+    let mut ids = Vec::new();
+    for i in 0..7 {
+        let m = w.rules.send(&a, ch.clone(), format!("m{i}")).await.unwrap();
+        ids.push(m.id);
+    }
+    let shown = |v: &human::ChannelView| v.messages.iter().map(|m| m.id).collect::<Vec<_>>();
+
+    let latest = w.rules.channel_view(ch.clone(), None).await.unwrap();
+    assert_eq!(shown(&latest), ids[4..7]);
+    assert_eq!(latest.older_before_id, Some(ids[4]));
+
+    let older = w
+        .rules
+        .channel_view(ch.clone(), Some(ids[4]))
+        .await
+        .unwrap();
+    assert_eq!(shown(&older), ids[1..4]);
+    assert_eq!(older.older_before_id, Some(ids[1]));
+
+    let oldest = w.rules.channel_view(ch, Some(ids[1])).await.unwrap();
+    assert_eq!(shown(&oldest), ids[0..1]);
+    assert_eq!(oldest.older_before_id, None);
+}
+
 // ---- Closed channels do not exist to outsiders ----
 
 #[tokio::test]
