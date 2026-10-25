@@ -1,9 +1,15 @@
 //! `kkt serve --log-file`: the log goes to the file, holds the server's own
 //! lines but not the MCP library's per-request ones, and never holds a key,
 //! token or session ID.
+//!
+//! Each test stops the server with SIGTERM and waits for it to exit before
+//! reading the log, so every line it logged is in the file: some lines, such
+//! as the MCP library's, are written after the reply has been sent.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 
@@ -11,7 +17,19 @@ const KKT: &str = env!("CARGO_BIN_EXE_kkt");
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 fn temp_home(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("kashkeshet-logs-{name}-{}", std::process::id()));
+    // Tests run in parallel, and each starts by emptying its folder: two
+    // tests sharing a name would delete each other's files mid-test.
+    static USED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    {
+        let mut used = USED.lock().expect("used names");
+        assert!(
+            !used.iter().any(|n| n == name),
+            "two tests use the temp folder {name:?}"
+        );
+        used.push(name.to_string());
+    }
+    let dir =
+        std::env::temp_dir().join(format!("kashkeshet-logfile-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp home");
     dir
@@ -57,6 +75,24 @@ async fn start(home: &Path, bind: &str, log: &Path) -> Child {
     child
 }
 
+/// Stops the server with SIGTERM, as a service manager would, waits for it
+/// to exit cleanly, and returns what it printed.
+async fn stop(child: Child) -> std::process::Output {
+    let pid = child.id().expect("pid").to_string();
+    let sent = Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()
+        .await
+        .expect("run kill");
+    assert!(sent.success());
+    let out = tokio::time::timeout(TIMEOUT, child.wait_with_output())
+        .await
+        .expect("kkt did not stop in time")
+        .expect("wait for kkt");
+    assert!(out.status.success(), "kkt exited with {}", out.status);
+    out
+}
+
 /// Calls `register` over MCP with the access key and returns the reply.
 async fn register(bind: &str, key: &str) -> String {
     reqwest::Client::new()
@@ -84,7 +120,7 @@ async fn the_log_file_has_the_servers_lines_and_no_secrets() {
     let home = temp_home("secrets");
     let log = home.join("logs/kkt.log");
     let bind = free_bind();
-    let mut child = start(&home, &bind, &log).await;
+    let child = start(&home, &bind, &log).await;
     let key = read(&home.join(".config/kkt/access-key"))
         .trim()
         .to_string();
@@ -117,8 +153,7 @@ async fn the_log_file_has_the_servers_lines_and_no_secrets() {
         .map(|(_, id)| id.to_string())
         .expect("session id");
 
-    child.kill().await.expect("stop kkt");
-    let out = child.wait_with_output().await.expect("output");
+    let out = stop(child).await;
     let text = read(&log);
 
     // The server's own lines go to the file, not stdout.
@@ -230,9 +265,9 @@ async fn dependency_log_level_info_brings_back_the_mcp_librarys_lines() {
     let home = temp_home("deps-info");
     let log = home.join("kkt.log");
     let bind = free_bind();
-    let mut child = start_with(&home, &bind, &log, &["--dependency-log-level", "info"]).await;
+    let child = start_with(&home, &bind, &log, &["--dependency-log-level", "info"]).await;
     make_some_noise(&bind).await;
-    child.kill().await.expect("stop kkt");
+    stop(child).await;
     let text = read(&log);
     assert!(text.contains("Service initialized"), "{text}");
     assert!(text.contains("listening"), "{text}");
@@ -247,9 +282,9 @@ async fn log_level_warn_in_the_config_file_leaves_out_info_lines() {
     std::fs::write(&config, "log_level = \"warn\"\n").expect("config");
     let bind = free_bind();
     let config_arg = config.display().to_string();
-    let mut child = start_with(&home, &bind, &log, &["--config", &config_arg]).await;
+    let child = start_with(&home, &bind, &log, &["--config", &config_arg]).await;
     make_some_noise(&bind).await;
-    child.kill().await.expect("stop kkt");
+    stop(child).await;
     let text = read(&log);
     assert!(!text.contains("listening"), "{text}");
     assert!(text.contains("refused a web request"), "{text}");
@@ -311,10 +346,10 @@ async fn register_and_use(bind: &str) -> Vec<String> {
 #[tokio::test]
 async fn no_allowed_dependency_level_logs_secrets() {
     for level in ["error", "warn", "info"] {
-        let home = temp_home(&format!("deps-{level}"));
+        let home = temp_home(&format!("no-secrets-{level}"));
         let log = home.join("kkt.log");
         let bind = free_bind();
-        let mut child = start_with(
+        let child = start_with(
             &home,
             &bind,
             &log,
@@ -322,7 +357,7 @@ async fn no_allowed_dependency_level_logs_secrets() {
         )
         .await;
         let secrets = register_and_use(&bind).await;
-        child.kill().await.expect("stop kkt");
+        stop(child).await;
         let text = read(&log);
         for secret in &secrets {
             assert!(
