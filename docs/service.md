@@ -20,8 +20,8 @@ Services start in a folder of the manager's choosing, so the service runs
 this program with absolute paths: the config file if there is one, and the
 database and access key file unless the config file names them. With no key
 set anywhere, `install` uses `~/.config/kkt/access-key`, and makes it first
-if it is missing. `install` also takes `--config`, `--db` and
-`--access-key-file`.
+if it is missing. `install` also takes `--config`, `--db`,
+`--access-key-file` and `--no-access-key`, as `serve` does.
 
 Everything else comes from the config file each time the service starts.
 After editing it, run `kkt service stop` and then `kkt service start`.

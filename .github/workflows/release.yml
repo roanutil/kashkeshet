@@ -1,6 +1,6 @@
 # Based on dist 0.33.1: https://axodotdev.github.io/cargo-dist
 # Maintained changes: stable version tags only, locked Cargo invocation,
-# and post-build archive/provenance validation. See README before regenerating.
+# and post-build archive/provenance validation. See docs/releases.md before regenerating.
 #
 # Copyright 2022-2024, axodotdev
 # SPDX-License-Identifier: MIT or Apache-2.0

@@ -31,6 +31,9 @@ connects each client, and an access key is on from the start.
    curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sam-mfb/kashkeshet/releases/latest/download/kashkeshet-installer.sh | sh
    ```
 
+   [Installing](docs/releases.md) covers checking a download and building
+   from source.
+
 2. Start the server in the background. It starts again at each login:
 
    ```
@@ -121,5 +124,7 @@ working kept changing because changing it took one message.
   they meet.
 - [Provenance](docs/provenance.md): how each message is tied to the build
   and settings that handled it.
+- [Installing and releases](docs/releases.md): checking a download, and
+  how releases are made.
 - [Development](docs/development.md): the web page preview, tests, and
   where the code lives.

@@ -58,7 +58,8 @@ folder, created if missing:
 
 The key is on unless you turn it off. Without `--access-key-file`, the
 server uses `~/.config/kkt/access-key` and creates it on first start,
-readable only by you. It logs where the key is, never the key itself.
+readable only by you. It logs where the key is, never the key itself. A
+file given with `--access-key-file` must already exist.
 
 `kkt key create` makes a key: it writes a new random key to
 `~/.config/kkt/access-key` (or the file given with `--path`), readable only
