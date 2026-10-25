@@ -34,6 +34,8 @@ require reading another's internals.
 | `hosts.rs` | Which `Host` names the server answers to, for `/mcp` and the web page | Touch storage, rules, or HTTP library types |
 | `service/` | Running the server as a launchd or systemd service: the service files and the commands that manage them, through its `System` contract | Touch the system except through `System`; decide server settings (`main.rs` passes them in) |
 | `settings/` | Gathering a server's settings from flags, the config file and defaults; default paths | Read files or environment variables itself; check limits (that is `config.rs`) |
+| `clients/` | Client MCP configuration, its vendor formats, backups and header-helper output | Start the server; expose key contents in previews or errors |
+| `diagnostics.rs` | Read-only key and HTTP/MCP connection checks, in our own result types | Register agents or change server data |
 | `config.rs` | Every limit, fixed setting and default, and the startup checks | Hold logic beyond checking settings |
 | `provenance/` | What produced a server run | |
 | `events.rs` | New-message notifications for waiting agents and the web page | Decide who may see a message |
@@ -87,7 +89,8 @@ over tokio's broadcast receiver, `shutdown::Shutdown` over tokio-util's
 cancellation token, `store` over rusqlite. rmcp stays in `mcp.rs` and
 `app.rs`; askama stays in `web/`; axum stays in `web/`, `app.rs`, `main.rs`
 and `examples/web_preview.rs`, which serve the router; toml stays in
-`settings/`; clap stays in `main.rs` and `examples/`.
+`settings/` and `clients/`; toml_edit stays in `clients/`; reqwest stays in
+`diagnostics.rs`; clap stays in `main.rs` and `examples/`.
 
 **Settings and defaults.** Every limit or fixed value lives in `config.rs`,
 with its default written out. Settings agents or operators can change are
@@ -166,6 +169,11 @@ Where the tests are:
   must refuse, and `kkt key create`.
 - `tests/agent.rs`: `kkt agent` revoking an agent in the database of a
   running server, and listing agents.
+- `tests/clients.rs`, `tests/connect_cli.rs`: client config preservation,
+  backups, idempotence, header helpers and fake client/service commands,
+  with isolated home directories.
+- `tests/doctor.rs`: key permissions, Host and authentication diagnostics
+  against local HTTP/MCP test servers.
 - `tests/service.rs`: `kkt service install --dry-run` with the real binary.
   The other service commands are tested against a fake system in
   `src/service/tests.rs`, and the plist and unit are pinned by the files in

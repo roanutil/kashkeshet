@@ -1,8 +1,10 @@
 use clap::{Args, Parser, Subcommand};
 use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::app::{self, AppConfig, Parts};
+use kashkeshet::clients::{self, Client, Setup};
 use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::{self, DEFAULT_BIND, InvalidSetting, Limits};
+use kashkeshet::diagnostics;
 use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
@@ -67,6 +69,34 @@ enum Command {
         #[command(subcommand)]
         command: ServiceCommand,
     },
+    /// Show a client's MCP configuration, or apply it with --write.
+    Connect {
+        #[arg(value_parser = ["claude-code", "codex", "agy", "opencode"])]
+        client: String,
+        #[command(flatten)]
+        connection: ConnectionFlags,
+        /// Back up the client's config, then apply the change.
+        #[arg(long)]
+        write: bool,
+    },
+    /// Diagnose the key file, HTTP connection and MCP authentication.
+    Doctor {
+        #[command(flatten)]
+        connection: ConnectionFlags,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ConnectionFlags {
+    /// The serve config file (otherwise the default, if present).
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// The HTTP MCP endpoint (otherwise http://<serve bind>/mcp).
+    #[arg(long)]
+    url: Option<String>,
+    /// The access key file (otherwise the one used by serve).
+    #[arg(long)]
+    key_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -129,6 +159,15 @@ enum ServiceCommand {
 
 #[derive(Subcommand, Debug)]
 enum KeyCommand {
+    /// Print the access-key header for client helper commands.
+    Header {
+        /// The key file (otherwise the default access-key path).
+        #[arg(long)]
+        key_file: Option<PathBuf>,
+        /// Print the JSON header map required by Claude Code and Codex.
+        #[arg(long)]
+        json: bool,
+    },
     /// Write a new random access key to a file only you can read.
     Create {
         /// Where to write it. By default ~/.config/kkt/access-key
@@ -241,12 +280,21 @@ async fn main() -> std::process::ExitCode {
         Command::Key {
             command: KeyCommand::Create { path, force, show },
         } => create_key(&env, path, force, show),
+        Command::Key {
+            command: KeyCommand::Header { key_file, json },
+        } => key_header(&env, key_file, json),
         Command::Agent {
             command,
             db,
             config,
         } => agent(&env, command, db, config).await,
         Command::Service { command } => service(&env, command),
+        Command::Connect {
+            client,
+            connection,
+            write,
+        } => connect(&env, &client, connection, write),
+        Command::Doctor { connection } => doctor(&env, connection).await,
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -254,6 +302,130 @@ async fn main() -> std::process::ExitCode {
             tracing::error!("{e}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+struct Connection {
+    url: String,
+    key_file: Option<PathBuf>,
+}
+
+/// Resolve the same serve settings without creating a database. Only connect
+/// creates a missing default key; doctor is a read-only diagnostic.
+fn client_connection(
+    env: &Env,
+    flags: ConnectionFlags,
+    create: bool,
+) -> Result<Connection, String> {
+    let key_override = flags.key_file.is_some();
+    let loaded = load_serve_options(
+        env,
+        flags.config,
+        ServeOptions {
+            access_key_file: flags.key_file,
+            no_access_key: key_override.then_some(false),
+            ..ServeOptions::NONE
+        },
+    )?;
+    let sources = loaded.sources();
+    let settings = loaded
+        .flags
+        .over(loaded.from_file)
+        .resolve(
+            env.default_db(Platform::CURRENT).unwrap_or_default(),
+            env.access_key_file(),
+        )
+        .map_err(|e| sources.invalid(e))?;
+    let url = diagnostics::endpoint(settings.bind, flags.url.as_deref())?;
+    if create {
+        make_default_key(&settings.access_key)?;
+    }
+    let key_file = match settings.access_key {
+        AccessKey::None => None,
+        AccessKey::Default(path) | AccessKey::File(path) => {
+            if create {
+                read_key(&path, &sources)?;
+            }
+            Some(
+                std::path::absolute(&path)
+                    .map_err(|e| format!("could not resolve key path: {e}"))?,
+            )
+        }
+    };
+    Ok(Connection { url, key_file })
+}
+
+fn connect(env: &Env, client: &str, flags: ConnectionFlags, write: bool) -> Result<(), String> {
+    let client = match client {
+        "claude-code" => Client::ClaudeCode,
+        "codex" => Client::Codex,
+        "agy" => Client::Agy,
+        "opencode" => Client::OpenCode,
+        _ => return Err("unknown client".into()),
+    };
+    let connection = client_connection(env, flags, true)?;
+    let executable = std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .map_err(|e| format!("could not find kkt's path: {e}"))?;
+    let setup = Setup {
+        env,
+        url: &connection.url,
+        executable: &executable,
+        key_file: connection.key_file.as_deref(),
+    };
+    println!("{}", clients::configure(client, &setup, write)?);
+    Ok(())
+}
+
+fn key_header(env: &Env, path: Option<PathBuf>, json: bool) -> Result<(), String> {
+    let path = path
+        .or_else(|| env.access_key_file())
+        .ok_or("set HOME or pass --key-file")?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("could not read key file {}: {e}", path.display()))?;
+    println!("{}", clients::header(text.trim(), json)?);
+    Ok(())
+}
+
+async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
+    let connection = client_connection(env, flags, false)?;
+    let mut checks = diagnostics::inspect(&connection.url, connection.key_file.as_deref()).await?;
+    match Manager::for_this_os(env).and_then(|manager| manager.state(&OsSystem)) {
+        Ok(state) if !state.installed => checks.push(diagnostics::Check::ok(
+            "service",
+            "not installed; optional when running `kkt serve` in a terminal",
+        )),
+        Ok(state) if state.running => {
+            checks.push(diagnostics::Check::ok("service", "installed and running"))
+        }
+        Ok(_) => checks.push(diagnostics::Check::problem(
+            "service",
+            "installed but not running",
+            "run `kkt service start`",
+        )),
+        Err(error) => checks.push(diagnostics::Check::problem(
+            "service",
+            error.to_string(),
+            "check `kkt service status` and your user service manager",
+        )),
+    }
+    let mut all_ok = true;
+    for check in checks {
+        all_ok &= check.ok;
+        println!(
+            "{}: {}: {}",
+            if check.ok { "ok" } else { "problem" },
+            check.name,
+            check.detail
+        );
+        if let Some(fix) = check.fix {
+            println!("  fix: {fix}");
+        }
+    }
+    if all_ok {
+        Ok(())
+    } else {
+        Err("doctor found problems; see the fixes above".into())
     }
 }
 
