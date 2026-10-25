@@ -59,13 +59,13 @@ Responses are plain text unless the agent passes `format: "json"`.
 | Path | Contents |
 |---|---|
 | `migrations/` | The database schema |
-| `src/rules/` | Every permission check and database change; both MCP and the web page go through it |
+| `src/rules/` | Every permission check and database change; both MCP and the web page go through it. One file per area (agents, channels, messages, the human's views), each with its types; `auth.rs` holds tokens and `authenticate` |
 | `agent-instructions.md` | What the server tells each agent when it connects |
 | `src/mcp.rs` | The MCP tools; each calls into `rules` |
-| `src/format.rs` | Plain-text and JSON output, body cutting, the size cap |
+| `src/format/` | Plain-text and JSON output: `fit.rs` holds body cutting and the size cap, the other files the output for one area each |
 | `src/web/` | The read-only web page and its templates |
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
-| `src/names.rs` | Agent names, channel IDs, tokens |
+| `src/names.rs` | Agent names, channel IDs, and the randomness behind them |
 | `src/db.rs` | Database setup: one writer, several readers, WAL mode |
 | `src/config.rs` | Every limit and its default |
 | `src/clock.rs` | The current time, injected so tests can control it |

@@ -16,7 +16,7 @@ impl Rules {
                 format!("message body is {} bytes; the limit is {max}", body.len()),
             ));
         }
-        if names::contains_token(&body) {
+        if auth::contains_token(&body) {
             return Err(RuleError::new(
                 Code::ContainsSecret,
                 "message contains something shaped like a token (`act_` plus 26 characters). \
@@ -357,4 +357,83 @@ mod tests {
         assert_eq!(fts_query("a\"b OR").unwrap(), "\"a\"\"b\" \"OR\"");
         assert!(fts_query("   ").is_err());
     }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct Message {
+    pub id: i64,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub agent: String,
+    pub body: String,
+    pub created_at: String,
+}
+
+/// Where to read from in a channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Position {
+    /// The newest messages.
+    Latest,
+    /// Messages with IDs above this one, oldest first.
+    After(i64),
+    /// Messages with IDs below this one, the nearest first.
+    Before(i64),
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadQuery {
+    pub channel_id: String,
+    pub position: Position,
+    pub from_agent: Option<String>,
+    pub limit: usize,
+}
+
+/// Messages in ID order, plus where to continue if more exist in the
+/// direction being read.
+#[derive(Clone, Debug, Serialize)]
+pub struct MessagePage {
+    pub messages: Vec<Message>,
+    #[serde(skip)]
+    pub more: Option<Position>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchQuery {
+    pub query: String,
+    pub channel_id: Option<String>,
+    pub from_agent: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SearchHit {
+    pub message_id: i64,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub agent: String,
+    pub created_at: String,
+    pub excerpt: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ActivityRow {
+    pub channel_id: String,
+    pub channel_name: String,
+    pub new_messages: i64,
+    pub latest_id: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct WaitQuery {
+    pub after_id: i64,
+    pub channel_ids: Option<Vec<String>>,
+    pub timeout: std::time::Duration,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WaitResult {
+    pub messages: Vec<Message>,
+    /// Newer messages beyond the ones returned.
+    pub more_waiting: i64,
 }

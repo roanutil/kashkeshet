@@ -342,3 +342,44 @@ mod tests {
         assert!(clean_purpose(Some(&"x".repeat(501)), 500).is_err());
     }
 }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ChannelInfo {
+    pub id: String,
+    pub name: String,
+    pub purpose: Option<String>,
+    pub open: bool,
+    pub created_by: String,
+    pub created_at: String,
+    pub member_count: i64,
+    /// The first few members, in the order they joined.
+    pub members_preview: Vec<String>,
+    pub is_member: bool,
+    /// Messages newer than the `after_id` the agent gave, if it gave one.
+    pub new_messages: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChannelQuery {
+    pub query: Option<String>,
+    pub member_only: bool,
+    pub with_agent: Option<String>,
+    pub after_id: Option<i64>,
+    pub limit: usize,
+    pub cursor: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewChannel {
+    pub name: String,
+    pub open: bool,
+    pub purpose: Option<String>,
+    pub members: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Members {
+    pub channel_id: String,
+    pub total: i64,
+    pub page: Page<String>,
+}

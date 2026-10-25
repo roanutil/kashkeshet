@@ -9,8 +9,8 @@ impl Rules {
     pub async fn register(&self) -> Result<Registration> {
         let entropy = self.inner.deps.entropy.clone();
         let base = names::agent_name(entropy.as_ref());
-        let token = names::token(entropy.as_ref());
-        let hash = names::hash_token(&token);
+        let token = auth::token(entropy.as_ref());
+        let hash = auth::hash_token(&token);
         let now = self.now_text();
         let name = self
             .db()
@@ -86,4 +86,23 @@ fn free_name(conn: &Connection, base: &str) -> Result<String> {
         Code::Internal,
         format!("could not find a free name based on {base}"),
     ))
+}
+
+/// An agent that has proven who it is on this call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Agent {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Registration {
+    pub name: String,
+    pub token: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentInfo {
+    pub name: String,
+    pub created_at: String,
+    pub last_seen: Option<String>,
 }

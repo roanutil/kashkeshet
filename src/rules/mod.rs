@@ -18,19 +18,24 @@
 //! `not_member`.
 
 mod agents;
+mod auth;
 mod channels;
 mod error;
 mod human;
 mod messages;
 mod rate;
-mod types;
 
 #[cfg(test)]
 mod tests;
 
-pub use channels::channel_cursor;
+pub use agents::{Agent, AgentInfo, Registration};
+pub use channels::{ChannelInfo, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
-pub use types::*;
+pub use human::{AgentView, ChannelView, Overview};
+pub use messages::{
+    ActivityRow, Message, MessagePage, Position, ReadQuery, SearchHit, SearchQuery, WaitQuery,
+    WaitResult,
+};
 
 use crate::clock::{self, Clock};
 use crate::config::Limits;
@@ -38,9 +43,17 @@ use crate::db::Db;
 use crate::events::Events;
 use crate::names::{self, Entropy};
 use rusqlite::{Connection, OptionalExtension, named_params};
+use serde::Serialize;
 use std::sync::Arc;
 
 pub type Result<T> = std::result::Result<T, RuleError>;
+
+/// One page of a list, plus the cursor for the next page if there is one.
+#[derive(Clone, Debug, Serialize)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+}
 
 /// Everything the rules depend on, supplied at startup.
 pub struct Deps {
@@ -83,53 +96,6 @@ impl Rules {
 
     fn now_text(&self) -> String {
         clock::to_text(self.inner.deps.clock.now())
-    }
-
-    /// Checks a token and returns the agent it belongs to. Records when the
-    /// agent was last seen, at most once per `last_seen_interval`.
-    pub async fn authenticate(&self, token: Option<&str>) -> Result<Agent> {
-        let token = match token {
-            Some(t) if !t.trim().is_empty() => t.trim(),
-            _ => return Err(RuleError::unauthenticated()),
-        };
-        let hash = names::hash_token(token);
-        let found: Option<(String, Option<String>)> = self
-            .db()
-            .read(move |conn| {
-                conn.query_row(
-                    "SELECT name, last_seen FROM agents WHERE token_hash = ?",
-                    [&hash],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()
-                .map_err(RuleError::from)
-            })
-            .await?;
-        let Some((name, last_seen)) = found else {
-            return Err(RuleError::unauthenticated());
-        };
-
-        let now = self.inner.deps.clock.now();
-        let interval = chrono::Duration::from_std(self.limits().last_seen_interval)
-            .map_err(|e| RuleError::new(Code::Internal, e.to_string()))?;
-        let stale = match last_seen.as_deref().and_then(clock::from_text) {
-            Some(seen) => now - seen >= interval,
-            None => true,
-        };
-        if stale {
-            let who = name.clone();
-            let now = clock::to_text(now);
-            self.db()
-                .write(move |tx| {
-                    tx.execute(
-                        "UPDATE agents SET last_seen = ? WHERE name = ?",
-                        [&now, &who],
-                    )?;
-                    Ok::<_, RuleError>(())
-                })
-                .await?;
-        }
-        Ok(Agent { name })
     }
 }
 

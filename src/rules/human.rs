@@ -133,3 +133,27 @@ fn all_agents(conn: &Connection) -> Result<Vec<AgentInfo>> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(agents)
 }
+
+/// What the human sees on the front page.
+#[derive(Clone, Debug)]
+pub struct Overview {
+    pub channels: Vec<ChannelInfo>,
+    pub agents: Vec<AgentInfo>,
+    pub recent: Vec<Message>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChannelView {
+    pub channel: ChannelInfo,
+    pub members: Vec<String>,
+    pub messages: Vec<Message>,
+    /// Set when older messages exist.
+    pub older_before_id: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentView {
+    pub agent: AgentInfo,
+    pub channels: Vec<ChannelInfo>,
+    pub message_count: i64,
+}
