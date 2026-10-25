@@ -2,11 +2,11 @@
 
 ## Installing
 
-Once the first version is released, install `kkt` on macOS (Apple Silicon
-or Intel) or Linux (ARM64 or x86_64) with:
+Install the latest stable `kkt` on macOS (Apple Silicon or Intel) or Linux
+(ARM64 or x86_64) with:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sam-mfb/kashkeshet/releases/latest/download/kashkeshet-installer.sh | sh
+curl -fsSL https://github.com/sam-mfb/kashkeshet/releases/latest/download/kashkeshet-installer.sh | sh
 kkt --version
 ```
 
@@ -18,11 +18,11 @@ To build from source instead, use the pinned Rust toolchain and run
 `cargo install --path . --locked`.
 
 Release candidates use a tag-specific installer; GitHub's `latest` URL is
-for stable releases. For the first candidate, once published:
+for stable releases. To install v0.1.0 specifically:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sam-mfb/kashkeshet/releases/download/v0.1.0-rc.1/kashkeshet-installer.sh | sh
-kkt --version # kashkeshet 0.1.0-rc.1
+curl -fsSL https://github.com/sam-mfb/kashkeshet/releases/download/v0.1.0/kashkeshet-installer.sh | sh
+kkt --version # kashkeshet 0.1.0
 ```
 
 ## Verify a download
@@ -67,8 +67,8 @@ the binary and its recorded provenance then report that version too.
 | `0.1.0-rc.1` | `v0.1.0-rc.1` | Pre-release; use its tag-specific installer |
 | `0.1.0` | `v0.1.0` | Stable; available through `releases/latest` |
 
-The first trial uses `0.1.0-rc.1`. After the candidate is validated, a
-separate reviewed version bump prepares `0.1.0`.
+The validated `0.1.0-rc.1` candidate is followed by stable `0.1.0`.
+The current Cargo version and release tag are `0.1.0` and `v0.1.0`.
 Do not override a version mismatch with `--force-tag`.
 
 The four targets build natively on `macos-15`, `macos-15-intel`,
@@ -84,8 +84,8 @@ version of dist and run:
 
 ```sh
 dist plan --output-format=json
-python3 .github/scripts/check-release-tag.py v0.1.0-rc.1
-dist plan --tag=v0.1.0-rc.1 --output-format=json
+python3 .github/scripts/check-release-tag.py v0.1.0
+dist plan --tag=v0.1.0 --output-format=json
 python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 # Example native target; use the target shown by `rustc -vV` on your machine.
 export KKT_RELEASE_CARGO="$(command -v cargo)"
