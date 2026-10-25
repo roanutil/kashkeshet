@@ -44,6 +44,7 @@ pub struct AgentRecord {
 pub struct NewAgentRecord {
     pub name: String,
     pub token_hash: Vec<u8>,
+    pub recovery_hash: Option<Vec<u8>>,
     pub created_at: String,
     pub last_seen: Option<String>,
     pub run_id: i64,
@@ -202,6 +203,9 @@ pub trait Reads {
 
     fn agent_by_token_hash(&self, hash: &[u8]) -> StoreResult<Option<AgentRecord>>;
 
+    /// Looks up an agent by both its name and hashed recovery code.
+    fn agent_by_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<Option<AgentRecord>>;
+
     /// Up to `limit` agents in name order, after `after_name` if given, whose
     /// names contain `text` if given.
     fn agents(
@@ -291,6 +295,9 @@ pub trait Reads {
 /// Changes the rules can make, on top of what they can ask.
 pub trait Writes: Reads {
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()>;
+
+    /// Replaces the authentication token, preserving the agent's identity.
+    fn set_token_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()>;
 
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()>;
 

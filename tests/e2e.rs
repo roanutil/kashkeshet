@@ -467,3 +467,73 @@ async fn agents_receive_the_configured_instructions() {
         );
     }
 }
+
+#[tokio::test]
+async fn reconnect_and_reclaim_keeps_closed_channel_access() {
+    let server = start().await;
+    let first = connect_new(&server).await;
+    let registration = ok(&first, "register", json!({})).await;
+    let field = |key: &str| {
+        registration
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}: ")))
+            .unwrap()
+            .to_string()
+    };
+    let name = field("name");
+    let token = field("token");
+    let recovery_code = field("recovery_code");
+    let channel = json_of(
+        &ok(
+            &first,
+            "create_channel",
+            json!({"token": token, "name": "private", "open": false, "format": "json"}),
+        )
+        .await,
+    );
+    let channel_id = channel["id"].as_str().unwrap();
+    let sent = json_of(&ok(&first, "send", json!({"token": token, "channel_id": channel_id, "body": "history survives", "format": "json"})).await);
+    first.cancel().await.unwrap();
+    let second = connect_new(&server).await;
+    let recovered = json_of(
+        &ok(
+            &second,
+            "reclaim",
+            json!({"name": name, "recovery_code": recovery_code, "format": "json"}),
+        )
+        .await,
+    );
+    assert_eq!(recovered["name"], name);
+    assert_ne!(recovered["token"], token);
+    assert!(recovered.get("recovery_code").is_none());
+    let (text, error) = call(&second, "whoami", json!({"token": token})).await;
+    assert!(error && text.starts_with("error: unauthenticated"));
+    let next_token = recovered["token"].as_str().unwrap();
+    assert_eq!(
+        ok(&second, "whoami", json!({"token": next_token})).await,
+        format!("name: {name}")
+    );
+    let history = ok(
+        &second,
+        "get_message",
+        json!({"token": next_token, "message_id": sent["message_id"]}),
+    )
+    .await;
+    assert!(history.contains("history survives"));
+    let (text, error) = call(
+        &second,
+        "send",
+        json!({"token": next_token, "channel_id": channel_id, "body": recovery_code}),
+    )
+    .await;
+    assert!(error && text.starts_with("error: contains_secret"));
+    let text_recovery = ok(
+        &second,
+        "reclaim",
+        json!({"name": name, "recovery_code": recovery_code}),
+    )
+    .await;
+    assert!(text_recovery.starts_with(&format!("name: {name}\ntoken: act_")));
+    assert!(!text_recovery.contains(&recovery_code));
+    second.cancel().await.unwrap();
+}

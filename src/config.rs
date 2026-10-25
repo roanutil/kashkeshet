@@ -8,6 +8,12 @@ use std::time::Duration;
 //
 // Values agents never see and the command line does not change.
 
+/// Prefix of an agent authentication token.
+pub const TOKEN_PREFIX: &str = "act_";
+/// Prefix of an identity recovery code.
+pub const RECOVERY_PREFIX: &str = "arc_";
+/// Random characters per agent token or recovery code (about 134 bits).
+pub const AGENT_SECRET_CHARS: usize = 26;
 /// Read-only database connections kept open beside the one writer.
 pub const DB_READERS: usize = 4;
 /// How long a database connection waits for a lock before failing.

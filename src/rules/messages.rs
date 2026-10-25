@@ -15,11 +15,11 @@ impl Rules {
                 format!("message body is {} bytes; the limit is {max}", body.len()),
             ));
         }
-        if auth::contains_token(&body) {
+        if auth::contains_secret(&body) {
             return Err(RuleError::new(
                 Code::ContainsSecret,
-                "message contains something shaped like a token (`act_` plus 26 characters). \
-                 Tokens must never be shared; remove it and send again.",
+                "message contains something shaped like a token or recovery code. \
+                 Tokens and recovery codes must never be shared; remove it and send again.",
             ));
         }
         let me = me.name.clone();

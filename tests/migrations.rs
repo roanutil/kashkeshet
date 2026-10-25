@@ -57,7 +57,7 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
@@ -65,6 +65,15 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     assert!(column_exists(&conn, "agents", "run_id"));
     assert!(column_exists(&conn, "messages", "run_id"));
     assert!(column_exists(&conn, "agents", "revoked_at"));
+    assert!(column_exists(&conn, "agents", "recovery_hash"));
+    let recovery_hash: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT recovery_hash FROM agents WHERE name = 'amber-falcon'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("old agent kept without recovery credentials");
+    assert_eq!(recovery_hash, None);
 
     let agent_run: Option<i64> = conn
         .query_row(
