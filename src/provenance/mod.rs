@@ -45,7 +45,11 @@ impl ServerRun {
         ServerRun {
             version: build.version.to_string(),
             commit: build.commit.to_string(),
-            settings: settings_text(&config.limits, &config.allowed_origins),
+            settings: settings_text(
+                &config.limits,
+                &config.allowed_origins,
+                config.admission.key_source(),
+            ),
             instructions_sha256: sha256_hex(&config.instructions),
         }
     }
@@ -66,8 +70,13 @@ pub async fn record(db: &Db, run: &ServerRun, started_at: DateTime<Utc>) -> Stor
 
 /// The settings as text that stays the same for the same settings: one
 /// `name=value` line each, in a fixed order, with times in milliseconds and
-/// origins sorted.
-pub fn settings_text(limits: &Limits, allowed_origins: &[String]) -> String {
+/// origins sorted. When an access key is set, the file it came from is the
+/// last line; the key itself is never recorded.
+pub fn settings_text(
+    limits: &Limits,
+    allowed_origins: &[String],
+    access_key_file: Option<&str>,
+) -> String {
     // Listing every field, with no `..`, makes a new limit fail to compile
     // here until it is added to the text.
     let Limits {
@@ -103,6 +112,7 @@ pub fn settings_text(limits: &Limits, allowed_origins: &[String]) -> String {
     let mut origins = allowed_origins.to_vec();
     origins.sort();
     lines.extend(origins.iter().map(|o| format!("allowed_origin={o}")));
+    lines.extend(access_key_file.map(|f| format!("access_key_file={f}")));
     lines.join("\n")
 }
 
@@ -116,9 +126,11 @@ fn sha256_hex(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admission::{Admission, SharedKey};
 
     fn config(limits: Limits, origins: &[&str], instructions: &str) -> AppConfig {
         AppConfig {
+            admission: Admission::Open,
             limits,
             allowed_origins: origins.iter().map(|o| o.to_string()).collect(),
             instructions: instructions.into(),
@@ -135,7 +147,7 @@ mod tests {
         let run = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
         assert_eq!(run.version, "9.9.9");
         assert_eq!(run.commit, "abc123");
-        assert_eq!(run.settings, settings_text(&Limits::DEFAULT, &[]));
+        assert_eq!(run.settings, settings_text(&Limits::DEFAULT, &[], None));
         // SHA-256 of the empty string.
         assert_eq!(
             run.instructions_sha256,
@@ -146,7 +158,7 @@ mod tests {
     #[test]
     fn default_settings_text_is_fixed() {
         assert_eq!(
-            settings_text(&Limits::DEFAULT, &["http://localhost:6274".into()]),
+            settings_text(&Limits::DEFAULT, &["http://localhost:6274".into()], None),
             "max_response_bytes=8192\n\
              default_limit=20\n\
              max_limit=100\n\
@@ -166,9 +178,29 @@ mod tests {
 
     #[test]
     fn origin_order_does_not_change_the_text() {
-        let a = settings_text(&Limits::DEFAULT, &["http://b".into(), "http://a".into()]);
-        let b = settings_text(&Limits::DEFAULT, &["http://a".into(), "http://b".into()]);
+        let a = settings_text(
+            &Limits::DEFAULT,
+            &["http://b".into(), "http://a".into()],
+            None,
+        );
+        let b = settings_text(
+            &Limits::DEFAULT,
+            &["http://a".into(), "http://b".into()],
+            None,
+        );
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn a_run_records_the_key_file_but_not_the_key() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let mut keyed = config(Limits::DEFAULT, &[], "");
+        keyed.admission = Admission::SharedKey(SharedKey::new(key, "/keys/kkt").expect("key"));
+        let run = ServerRun::new(TEST_BUILD, &keyed);
+        assert!(run.settings.ends_with("\naccess_key_file=/keys/kkt"));
+        assert!(!run.settings.contains(key));
+        let open = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
+        assert!(!open.settings.contains("access_key"));
     }
 
     #[test]

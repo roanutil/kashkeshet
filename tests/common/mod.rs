@@ -1,6 +1,7 @@
 //! Shared by the integration tests: start a server on a free port and connect
 //! an MCP client to it.
 
+use kashkeshet::admission::Admission;
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::Limits;
@@ -29,6 +30,7 @@ impl Drop for Server {
 /// The settings `start` uses.
 pub fn test_config() -> AppConfig {
     AppConfig {
+        admission: Admission::Open,
         limits: Limits::DEFAULT,
         allowed_origins: vec!["http://localhost:6274".into()],
         instructions: "test instructions: call register".into(),
@@ -69,12 +71,36 @@ pub async fn start_with(config: AppConfig) -> Server {
 pub type Client = RunningService<RoleClient, ()>;
 
 pub async fn connect(server: &Server, lifecycle: ClientLifecycleMode) -> Client {
-    let transport = StreamableHttpClientTransport::from_config(
+    connect_with(
         StreamableHttpClientTransportConfig::with_uri(format!("{}/mcp", server.base)),
-    );
+        lifecycle,
+    )
+    .await
+}
+
+async fn connect_with(
+    config: StreamableHttpClientTransportConfig,
+    lifecycle: ClientLifecycleMode,
+) -> Client {
+    let transport = StreamableHttpClientTransport::from_config(config);
     ().serve_with_lifecycle(transport, lifecycle)
         .await
         .expect("connect")
+}
+
+/// Connects as `connect_new` does, sending `Authorization: Bearer <key>`
+/// with every request.
+// Each test file builds this module on its own; not all of them use this.
+#[allow(dead_code)]
+pub async fn connect_new_with_key(server: &Server, key: &str) -> Client {
+    connect_with(
+        StreamableHttpClientTransportConfig::with_uri(format!("{}/mcp", server.base))
+            .auth_header(key),
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    )
+    .await
 }
 
 pub async fn connect_new(server: &Server) -> Client {
