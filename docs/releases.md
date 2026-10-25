@@ -17,6 +17,14 @@ compatible glibc. Windows binaries and a Homebrew tap are not published yet.
 To build from source instead, use the pinned Rust toolchain and run
 `cargo install --path . --locked`.
 
+Release candidates use a tag-specific installer; GitHub's `latest` URL is
+for stable releases. For the first candidate, once published:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sam-mfb/kashkeshet/releases/download/v0.1.0-rc.1/kashkeshet-installer.sh | sh
+kkt --version # kkt 0.1.0-rc.1
+```
+
 ## Verify a download
 
 The [releases](https://github.com/sam-mfb/kashkeshet/releases) contain one
@@ -44,9 +52,24 @@ are attested too. See [GitHub's verification instructions](https://docs.github.c
 
 Release packaging uses [dist 0.33.1](https://github.com/axodotdev/cargo-dist/releases/tag/v0.33.1),
 configured in `Cargo.toml`. After a version change is merged, only an
-owner-authorized stable `vX.Y.Z` tag triggers publishing; pushing a branch
-does not. Pull requests run `dist plan` without creating a release. Do not
-push the first release tag without Sam's approval.
+owner-authorized `vX.Y.Z` or `vX.Y.Z-rc.N` tag triggers publishing; pushing
+a branch does not. Pull requests run `dist plan` without creating a release.
+The coordinator tags after `next` is merged into `main`, with Sam's approval.
+Preparing a release does not authorize pushing a tag.
+
+The tag must equal `v` followed by the complete Cargo package version,
+including any `-rc.N` suffix. The workflow checks this before planning a
+release. Cargo.toml and Cargo.lock must be committed with the same version;
+the binary and its recorded provenance then report that version too.
+
+| Cargo version | Tag | GitHub release |
+|---|---|---|
+| `0.1.0-rc.1` | `v0.1.0-rc.1` | Pre-release; use its tag-specific installer |
+| `0.1.0` | `v0.1.0` | Stable; available through `releases/latest` |
+
+The first trial uses `0.1.0-rc.1`. After the candidate is validated, a
+separate reviewed version bump prepares `0.1.0`.
+Do not override a version mismatch with `--force-tag`.
 
 The four targets build natively on `macos-15`, `macos-15-intel`,
 `ubuntu-24.04`, and `ubuntu-24.04-arm`. A Cargo wrapper enforces `--locked`
@@ -61,6 +84,8 @@ version of dist and run:
 
 ```sh
 dist plan --output-format=json
+python3 .github/scripts/check-release-tag.py v0.1.0-rc.1
+dist plan --tag=v0.1.0-rc.1 --output-format=json
 python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 # Example native target; use the target shown by `rustc -vV` on your machine.
 export KKT_RELEASE_CARGO="$(command -v cargo)"
@@ -77,11 +102,17 @@ sources deliberately records `-dirty` and fails that check. `dist build
 --artifacts=global` builds the installer after the native artifacts exist.
 
 `.github/workflows/release.yml` starts from dist's generated workflow but
-has maintained changes for the stable tag filter, locked Cargo wrapper,
+has maintained changes for the stable/RC tag filters, the exact Cargo tag
+check (`.github/scripts/check-release-tag.py`), locked Cargo wrapper,
 release-check tests, and packaged provenance check. `allow-dirty = ["ci"]`
 in the dist config permits those edits. When updating dist, temporarily
 remove that setting, run `dist generate --mode ci`, then restore the setting
-and those marked workflow changes. Review the diff and rerun the checks.
+and those marked workflow changes. Keep validation after checkout and before
+any dist hosting step; retain the generated manifest-based `--prerelease`
+flag on `gh release create`. `force-latest = false` keeps RCs out of the
+stable release path. Review the diff and rerun the checks with both a stable
+and an RC version fixture, confirming `announcement_is_prerelease` is false
+for the former and true for the latter.
 The commented Homebrew settings in `Cargo.toml` document how to enable a
 tap later; no tap repository or publishing credential is needed today.
 
