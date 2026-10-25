@@ -1,8 +1,21 @@
 # Working on kashkeshet
 
-These are the general coding principles turned into rules for this codebase.
-The README explains what the server does and where the code lives; read it
-first.
+The README explains what kkt is and how to use it. This file is for working
+on the code: the design principles, where code lives, the rules that turn
+the general coding principles into practice here, and the tests.
+
+## Design principles
+
+1. **Simple.** Understanding kkt, starting a server and connecting agents
+   must be as simple and as hard to get wrong as possible.
+2. **Not opinionated.** kkt provides mechanics: identities, channels,
+   messages, and waiting for them. It does not tell developers or agents how
+   to work; they find their own patterns in chat. The test for a feature:
+   does it add a general mechanism, or prescribe a way of working? Only the
+   first belongs in kkt.
+3. **No backwards compatibility yet.** The project is young, so keeping
+   existing setups working is not a concern. Prefer one clear way over
+   keeping old ways alongside it.
 
 ## The parts and their boundaries
 
@@ -23,7 +36,22 @@ require reading another's internals.
 | `settings/` | Gathering a server's settings from flags, the config file and defaults; default paths | Read files or environment variables itself; check limits (that is `config.rs`) |
 | `config.rs` | Every limit, fixed setting and default, and the startup checks | Hold logic beyond checking settings |
 | `provenance/` | What produced a server run | |
+| `events.rs` | New-message notifications for waiting agents and the web page | Decide who may see a message |
+| `shutdown.rs` | The stop signal (Ctrl-C, SIGTERM) and the `Shutdown` that ends the server | |
+| `names.rs` | Agent names, channel IDs, and the randomness behind them (`Entropy`) | |
+| `clock.rs` | The current time and waiting (`Clock`), injected so tests can control them | |
 | `app.rs` | Assembling the parts | Hold business logic |
+| `main.rs` | The `kkt` command: its subcommands, and the files and environment they read | Hold business logic |
+
+Outside `src/`:
+
+- `migrations/`: the database schema, one numbered file per change.
+- `agent-instructions.md`: what the server tells each agent when it
+  connects. It describes how the tools work, nothing more.
+- `build.rs`: records the git commit at build time (`unknown` outside a git
+  checkout).
+- `tests/contract/tools.json`: the tools agents see, as pinned by
+  `tests/contract.rs`.
 
 Put new code in the part that owns its area. If no part fits, add a new one
 named for the area (e.g. `auth`, `search`), not for a kind of code (`types`,
@@ -71,7 +99,9 @@ an error naming the setting; never correct them quietly.
 
 **What agents see.** The MCP tools are a contract with every agent that uses
 the server. Do not rename or remove tools, parameters, error codes, or output
-fields; add new ones instead. Write limits in tool and parameter descriptions as
+fields; add new ones instead. While design principle 3 holds, a rename or
+removal that makes kkt simpler is allowed: say so plainly in the pull
+request. Write limits in tool and parameter descriptions as
 placeholders such as `{max_limit}` (see `mcp::describe`), never as numbers.
 `tests/contract.rs` pins the tool list. After an intended change, run
 `UPDATE_CONTRACT=1 cargo test --test contract` and review the diff to
@@ -96,6 +126,11 @@ inputs that shape a run change, they must show up in `provenance::ServerRun`.
 
 ## Tests
 
+`rust-toolchain.toml` pins the Rust version, with rustfmt and Clippy; rustup
+installs it on the first Rust command in the repository. CI runs the three
+checks below on Ubuntu and macOS for every pull request and push to `next`
+and `main`, with `--locked`, and a pull request merges only when they pass.
+
 - Run `cargo test`, `cargo clippy --all-targets -- -D warnings` and
   `cargo fmt --check` before every commit. All three must be clean.
 - A bug fix comes with a test that fails without the fix.
@@ -107,6 +142,37 @@ inputs that shape a run change, they must show up in `provenance::ServerRun`.
   End-to-end tests in `tests/` start a server with `tests/common`.
 - A schema change needs a test that an existing database migrates (see
   `tests/migrations.rs`).
+- Tests that run the `kkt` binary give it its own home directory (`HOME`),
+  so they never read a real config file or write a real key.
+
+Where the tests are:
+
+- Unit tests sit beside the code they test. `src/rules/tests.rs` has one
+  rule test per row of the rules table in `rules/mod.rs`, plus the
+  `not_found` behavior.
+- `tests/e2e.rs`: starts a server and runs several agents through it with
+  `rmcp`'s client, over both the 2026-07-28 protocol and the older one.
+- `tests/contract.rs`: checks the tools agents see (names, descriptions,
+  input schemas) against `tests/contract/tools.json`. After an intended
+  change, run `UPDATE_CONTRACT=1 cargo test --test contract` and review the
+  diff to that file. A second test starts the server with other limits and
+  checks that the descriptions state them.
+- `tests/migrations.rs`: opens a database made by an older version and
+  checks it is brought up to date with its rows kept.
+- `tests/admission.rs`: the access key on `/mcp`.
+- `tests/web_login.rs`: logging in to the web page.
+- `tests/kkt.rs`, `tests/serve.rs`, `tests/startup.rs`, `tests/key.rs`: the
+  `kkt` command, `kkt serve` with its config file and defaults, settings it
+  must refuse, and `kkt key create`.
+- `tests/agent.rs`: `kkt agent` revoking an agent in the database of a
+  running server, and listing agents.
+- `tests/service.rs`: `kkt service install --dry-run` with the real binary.
+  The other service commands are tested against a fake system in
+  `src/service/tests.rs`, and the plist and unit are pinned by the files in
+  `src/service/golden/`.
+- `tests/shutdown.rs`: on Unix, stops a real server with SIGTERM and Ctrl-C,
+  including with open event streams and pending message waits.
+- `tests/common/`: starts a server on a free port for the tests above.
 
 ## Working with other agents
 
