@@ -1,5 +1,6 @@
 //! Store tests: the SQL methods that hold logic of their own (filters, paging
-//! bounds, quoting), and reopening a database file.
+//! bounds, quoting), that a failed write changes nothing, and reopening a
+//! database file.
 
 use super::sqlite::{fts_query, like_pattern};
 use super::*;
@@ -261,4 +262,93 @@ async fn runs_are_listed_newest_first_and_stamp_what_they_create() {
         .expect("message")
         .expect("1");
     assert_eq!(message.run_id, Some(first));
+}
+
+#[tokio::test]
+async fn name_pages_start_after_the_cursor() {
+    let db = world(&[]).await;
+    let names = |text: Option<&'static str>, after: Option<&'static str>, limit: usize| {
+        let db = db.clone();
+        async move {
+            db.read(move |r| r.agents(text, after, limit))
+                .await
+                .expect("agents")
+                .into_iter()
+                .map(|a| a.name)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(names(None, Some("a"), 1).await, ["b"]);
+    assert_eq!(names(None, Some("c"), 10).await, Vec::<String>::new());
+    // `_` is literal, not a one-character wildcard.
+    assert_eq!(names(Some("_"), None, 10).await, Vec::<String>::new());
+    let members = db
+        .read(|r| r.members_by_name("ch_open", Some("a"), 10))
+        .await
+        .expect("members");
+    assert_eq!(members, ["b"]);
+}
+
+#[tokio::test]
+async fn search_treats_query_syntax_as_words() {
+    let db = world(&[
+        ("ch_open", "a", "parser OR lexer"),
+        ("ch_open", "b", "just the parser"),
+        ("ch_closed", "a", "parser in alpha"),
+    ])
+    .await;
+    let hits = |member: &'static str, words: &'static [&'static str]| {
+        let db = db.clone();
+        async move {
+            db.read(move |r| {
+                r.search(&SearchFilter {
+                    member: member.into(),
+                    words: words.iter().map(|w| w.to_string()).collect(),
+                    channel_id: None,
+                    from_agent: None,
+                    limit: 10,
+                })
+            })
+            .await
+            .expect("search")
+            .into_iter()
+            .map(|h| h.message_id)
+            .collect::<Vec<_>>()
+        }
+    };
+    // `OR` is a word to find, not an operator.
+    assert_eq!(hits("a", &["parser", "OR"]).await, [1]);
+    assert_eq!(hits("a", &["parser"]).await, [3, 2, 1]);
+    // `b` is not in the closed channel.
+    assert_eq!(hits("b", &["parser"]).await, [2, 1]);
+    // A stray quote or a lone operator does not break the query.
+    assert!(hits("a", &["pars\"er"]).await.is_empty());
+    assert!(hits("a", &["NOT"]).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_write_changes_nothing() {
+    let db = world(&[]).await;
+    let failed = db
+        .write(|w| {
+            w.insert_channel(&NewChannelRecord {
+                id: "ch_x".into(),
+                name: "x".into(),
+                purpose: None,
+                open: true,
+                created_by: "a".into(),
+                created_at: T.into(),
+            })?;
+            w.add_member("ch_x", "a", T)?;
+            Err::<(), _>(StoreError::Database("stop".into()))
+        })
+        .await;
+    assert!(failed.is_err());
+    let found = db.read(|r| r.channel("ch_x")).await.expect("read");
+    assert_eq!(found, None);
+    let mine = ChannelFilter {
+        member_only: true,
+        ..filter("a")
+    };
+    assert_eq!(channel_ids(&db, mine).await, ["ch_closed", "ch_open"]);
 }
