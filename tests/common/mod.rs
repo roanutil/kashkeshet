@@ -1,6 +1,9 @@
 //! Shared by the integration tests: start a server on a free port and connect
 //! an MCP client to it.
 
+// Each test file builds this module on its own, and none uses every helper.
+#![allow(dead_code)]
+
 use kashkeshet::admission::Admission;
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
@@ -44,10 +47,14 @@ pub async fn start() -> Server {
 }
 
 pub async fn start_with(config: AppConfig) -> Server {
+    start_with_clock(config, Arc::new(SystemClock)).await
+}
+
+/// Starts a server whose time comes from `clock`.
+pub async fn start_with_clock(config: AppConfig, clock: Arc<dyn Clock>) -> Server {
     let shutdown = Shutdown::new();
     let db = Db::open_in_memory().expect("db");
     let run = ServerRun::new(Build::CURRENT, &config);
-    let clock = Arc::new(SystemClock);
     let run_id = provenance::record(&db, &run, clock.now())
         .await
         .expect("record run");
@@ -92,8 +99,6 @@ async fn connect_with(
 
 /// Connects as `connect_new` does, sending `Authorization: Bearer <key>`
 /// with every request.
-// Each test file builds this module on its own; not all of them use this.
-#[allow(dead_code)]
 pub async fn connect_new_with_key(server: &Server, key: &str) -> Client {
     connect_with(
         StreamableHttpClientTransportConfig::with_uri(format!("{}/mcp", server.base))

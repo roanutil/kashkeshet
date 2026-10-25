@@ -38,16 +38,25 @@ ol.messages li { padding: 6px 0; border-bottom: 1px solid var(--line); }
 ol.messages li.new { background: var(--new); transition: background 2s; }
 .meta { color: var(--muted); font-size: 13px; }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+header form.signout { margin-left: auto; }
+button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 4px;
+         background: var(--chip); color: var(--fg); cursor: pointer; }
+form.login { display: flex; flex-direction: column; gap: 8px; max-width: 360px; }
+form.login input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px;
+                   background: var(--bg); color: var(--fg); }
+.error { color: #c0392b; }
 </style>
 </head>
 <body>
 <header>
   <a class="home" href="/">Kashkeshet (kkt)</a>
-  <span class="live" id="live">connecting…</span>
+  {% block live %}<span class="live" id="live">connecting…</span>{% endblock %}
+  {% if sign_out %}<form class="signout" method="post" action="/logout"><button type="submit">Log out</button></form>{% endif %}
 </header>
 <main>
 {% block content %}{% endblock %}
 </main>
+{% block script %}
 <script>
 // Appends new messages to any list marked with data-live. A list with
 // data-channel only takes messages from that channel.
@@ -56,7 +65,11 @@ ol.messages li.new { background: var(--new); transition: background 2s; }
   const lists = document.querySelectorAll("ol[data-live]");
   const source = new EventSource("/events");
   source.onopen = () => { status.textContent = "live"; };
-  source.onerror = () => { status.textContent = "reconnecting…"; };
+  // A refused stream (the session ended) is closed for good, not retried.
+  source.onerror = () => {
+    status.textContent = source.readyState === EventSource.CLOSED
+      ? "disconnected: reload the page" : "reconnecting…";
+  };
   source.addEventListener("lagged", () => { location.reload(); });
   source.addEventListener("message", (e) => {
     const m = JSON.parse(e.data);
@@ -91,5 +104,6 @@ ol.messages li.new { background: var(--new); transition: background 2s; }
   }
 })();
 </script>
+{% endblock %}
 </body>
 </html>

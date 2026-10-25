@@ -80,15 +80,6 @@ async fn without_a_key_file_nothing_changes() {
     client.cancel().await.expect("close");
 }
 
-#[tokio::test]
-async fn the_web_page_is_not_covered() {
-    let server = start_keyed().await;
-    let page = reqwest::get(format!("{}/", server.base))
-        .await
-        .expect("get /");
-    assert!(page.status().is_success());
-}
-
 /// Starts the server with `--access-key-file <file>` and returns what it
 /// printed, expecting it to refuse to start.
 async fn refused_start(file: &std::path::Path, db: &std::path::Path) -> String {

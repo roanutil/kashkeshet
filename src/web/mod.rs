@@ -1,7 +1,11 @@
 //! The human's read-only view: pages for all channels, one channel, and one
 //! agent, plus a stream of new messages for live updates. Requests naming a
-//! host that is not allowed are refused, as they are on `/mcp`.
+//! host that is not allowed are refused, as they are on `/mcp`. When an
+//! access key is set, viewers log in first (`sign_in`).
 
+mod sign_in;
+
+use crate::admission::WebAdmission;
 use crate::config::WEB_KEEP_ALIVE;
 use crate::events::Notice;
 use crate::hosts::AllowedHosts;
@@ -13,19 +17,51 @@ use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
+use std::sync::Arc;
 
-pub fn router(rules: Rules, hosts: AllowedHosts) -> Router {
-    Router::new()
+/// What the pages need: the rules, and whether to offer a logout button.
+#[derive(Clone)]
+struct Pages {
+    rules: Rules,
+    sign_out: bool,
+}
+
+/// The web page. Every route checks the `Host` against `hosts`. When `gate`
+/// requires sign-in, every page and the event stream need a session, and
+/// `/login` and `/logout` are added.
+pub fn router(rules: Rules, hosts: AllowedHosts, gate: Arc<WebAdmission>) -> Router {
+    let sign_in_required = gate.sign_in_required();
+    let pages = Router::new()
         .route("/", get(index))
         .route("/channels/{id}", get(channel))
         .route("/agents/{name}", get(agent))
         .route("/events", get(events))
-        .with_state(rules)
-        .layer(middleware::from_fn_with_state(hosts, check_host))
+        .with_state(Pages {
+            rules,
+            sign_out: sign_in_required,
+        });
+    let site = if sign_in_required {
+        let sign_in = Router::new()
+            .route(
+                sign_in::LOGIN_PATH,
+                get(sign_in::login_form).post(sign_in::login),
+            )
+            .route("/logout", post(sign_in::logout))
+            .with_state(gate.clone());
+        pages
+            .route_layer(middleware::from_fn_with_state(
+                gate,
+                sign_in::require_session,
+            ))
+            .merge(sign_in)
+    } else {
+        pages
+    };
+    site.layer(middleware::from_fn_with_state(hosts, check_host))
 }
 
 /// Serves the request only if its `Host` is allowed. Without this, a site
@@ -57,6 +93,7 @@ struct IndexPage {
     agents: Vec<AgentInfo>,
     recent: Vec<Message>,
     runs: Vec<ServerRunInfo>,
+    sign_out: bool,
 }
 
 #[derive(Template)]
@@ -68,6 +105,7 @@ struct ChannelPage {
     older_before_id: Option<i64>,
     /// Live updates only make sense when showing the newest messages.
     live: bool,
+    sign_out: bool,
 }
 
 #[derive(Template)]
@@ -76,6 +114,7 @@ struct AgentPage {
     agent: AgentInfo,
     channels: Vec<ChannelInfo>,
     message_count: i64,
+    sign_out: bool,
 }
 
 #[derive(Template)]
@@ -83,6 +122,7 @@ struct AgentPage {
 struct ErrorPage {
     status: u16,
     message: String,
+    sign_out: bool,
 }
 
 #[derive(Deserialize)]
@@ -90,63 +130,72 @@ struct ChannelParams {
     before_id: Option<i64>,
 }
 
-async fn index(State(rules): State<Rules>) -> Response {
-    match rules.overview().await {
+async fn index(State(pages): State<Pages>) -> Response {
+    match pages.rules.overview().await {
         Ok(o) => page(IndexPage {
             channels: o.channels,
             agents: o.agents,
             recent: o.recent,
             runs: o.runs,
+            sign_out: pages.sign_out,
         }),
-        Err(e) => error_page(e),
+        Err(e) => error_page(e, pages.sign_out),
     }
 }
 
 async fn channel(
-    State(rules): State<Rules>,
+    State(pages): State<Pages>,
     Path(id): Path<String>,
     Query(params): Query<ChannelParams>,
 ) -> Response {
-    match rules.channel_view(id, params.before_id).await {
+    match pages.rules.channel_view(id, params.before_id).await {
         Ok(v) => page(ChannelPage {
             channel: v.channel,
             members: v.members,
             messages: v.messages,
             older_before_id: v.older_before_id,
             live: params.before_id.is_none(),
+            sign_out: pages.sign_out,
         }),
-        Err(e) => error_page(e),
+        Err(e) => error_page(e, pages.sign_out),
     }
 }
 
-async fn agent(State(rules): State<Rules>, Path(name): Path<String>) -> Response {
-    match rules.agent_view(name).await {
+async fn agent(State(pages): State<Pages>, Path(name): Path<String>) -> Response {
+    match pages.rules.agent_view(name).await {
         Ok(v) => page(AgentPage {
             agent: v.agent,
             channels: v.channels,
             message_count: v.message_count,
+            sign_out: pages.sign_out,
         }),
-        Err(e) => error_page(e),
+        Err(e) => error_page(e, pages.sign_out),
     }
 }
 
 /// New messages as server-sent events. A `message` event carries one message
 /// as JSON. A `lagged` event means this stream fell behind and missed some;
 /// the page reloads.
-async fn events(State(rules): State<Rules>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = rules.events().subscribe().into_stream().map(|notice| {
-        Ok(match notice {
-            Notice::Message(message) => match Event::default().event("message").json_data(&message)
-            {
-                Ok(event) => event,
-                Err(e) => {
-                    tracing::error!(error = %e, "could not encode message event");
-                    Event::default().event("lagged").data("encode error")
+async fn events(State(pages): State<Pages>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let stream = pages
+        .rules
+        .events()
+        .subscribe()
+        .into_stream()
+        .map(|notice| {
+            Ok(match notice {
+                Notice::Message(message) => {
+                    match Event::default().event("message").json_data(&message) {
+                        Ok(event) => event,
+                        Err(e) => {
+                            tracing::error!(error = %e, "could not encode message event");
+                            Event::default().event("lagged").data("encode error")
+                        }
+                    }
                 }
-            },
-            Notice::Missed(n) => Event::default().event("lagged").data(n.to_string()),
-        })
-    });
+                Notice::Missed(n) => Event::default().event("lagged").data(n.to_string()),
+            })
+        });
     Sse::new(stream).keep_alive(KeepAlive::new().interval(WEB_KEEP_ALIVE).text("keep-alive"))
 }
 
@@ -183,7 +232,7 @@ fn page(t: impl Template) -> Response {
     }
 }
 
-fn error_page(e: RuleError) -> Response {
+fn error_page(e: RuleError, sign_out: bool) -> Response {
     let status = match e.code {
         Code::NotFound => StatusCode::NOT_FOUND,
         Code::InvalidArgument => StatusCode::BAD_REQUEST,
@@ -195,6 +244,7 @@ fn error_page(e: RuleError) -> Response {
     let body = ErrorPage {
         status: status.as_u16(),
         message: e.message,
+        sign_out,
     };
     match body.render() {
         Ok(html) => (status, Html(html)).into_response(),
