@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0001_init.sql"),
     include_str!("../../migrations/0002_server_runs.sql"),
+    include_str!("../../migrations/0003_revoked_agents.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -158,7 +159,7 @@ fn migrate(conn: &mut Connection) -> StoreResult<()> {
 /// [`Db::write`] the connection is a transaction.
 struct Sql<'a>(&'a Connection);
 
-const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id";
+const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id, revoked_at";
 
 fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
     Ok(AgentRecord {
@@ -166,6 +167,7 @@ fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
         created_at: r.get(1)?,
         last_seen: r.get(2)?,
         run_id: r.get(3)?,
+        revoked_at: r.get(4)?,
     })
 }
 
@@ -243,6 +245,14 @@ impl Reads for Sql<'_> {
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(agents)
+    }
+
+    fn active_agent_count(&self) -> StoreResult<i64> {
+        Ok(self.0.query_row(
+            "SELECT count(*) FROM agents WHERE revoked_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     fn agents_by_last_seen(&self) -> StoreResult<Vec<AgentRecord>> {
@@ -604,6 +614,14 @@ impl Writes for Sql<'_> {
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()> {
         self.0
             .execute("UPDATE agents SET last_seen = ? WHERE name = ?", [at, name])?;
+        Ok(())
+    }
+
+    fn set_revoked(&self, name: &str, at: &str) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET revoked_at = ? WHERE name = ?",
+            [at, name],
+        )?;
         Ok(())
     }
 

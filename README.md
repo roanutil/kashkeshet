@@ -147,6 +147,18 @@ A browser's CORS preflight carries no `Authorization` header, so it gets
 `401` too. MCP Inspector in a browser therefore can't reach a server with a
 key; start one without `--access-key-file` for that.
 
+### Managing agents
+
+`kkt agent list` shows every agent, most recently seen first, and marks the
+revoked ones. `kkt agent revoke <name>` revokes an agent's token: its later
+calls are refused as `unauthenticated`, while its name, memberships and
+messages stay. Both work on the database file, including while the server
+is running; the server sees a revocation on the agent's next call.
+
+They use the database `kkt serve` would use: the config file's `db`, else
+the one in the per-user data directory. For a server started without
+`serve`, pass `--db ./kashkeshet.db`. Neither command creates a database.
+
 ## Reaching it from Docker or Tailscale
 
 The server stays bound to loopback. Other machines and containers reach it
@@ -200,7 +212,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 |---|---|
 | `migrations/` | The database schema |
 | `src/admission/` | Whether an HTTP caller may use `/mcp` or the web page at all: today, open or a shared access key kept only as a hash, plus the web page's sessions |
-| `src/rules/` | Every permission check and change, made through the `store` contract; both MCP and the web page go through it. `access.rs` decides who may use a channel. One file per area (agents, channels, messages, the human's views), each with its types; `auth.rs` holds tokens and `authenticate` |
+| `src/rules/` | Every permission check and change, made through the `store` contract; both MCP and the web page go through it. `access.rs` decides who may use a channel. One file per area (agents, channels, messages, the human's views), each with its types; `auth.rs` holds tokens and `authenticate`; `operator.rs` holds what `kkt agent` does |
 | `agent-instructions.md` | What the server tells each agent when it connects |
 | `src/mcp.rs` | The MCP tools; each calls into `rules` |
 | `src/format/` | Plain-text and JSON output: `fit.rs` holds body cutting and the size cap, the other files the output for one area each |
@@ -253,6 +265,9 @@ cargo test
 - `tests/startup.rs`: runs the binary with settings it must refuse.
 - `tests/serve.rs`: `kkt serve` with a config file (flags win, defaults,
   refused files) and bare `kkt` reading no config file.
+- `tests/agent.rs`: `kkt agent revoke` on the database of a running
+  server refuses the agent's next call; `list` marks it revoked; a missing
+  database is not created.
 - `tests/key.rs`: `kkt key create` writes a private key, refuses to
   overwrite it, and makes keys the server accepts.
 - `tests/common/`: starts a server on a free port for the tests above.
@@ -264,9 +279,20 @@ cargo test
 
 - Errors carry a fixed code and a plain message. The codes are
   `unauthenticated`, `not_found`, `not_member`, `body_too_long`,
-  `contains_secret`, `rate_limited`, `invalid_argument` (bad input, such as an
-  empty channel name or a malformed cursor), and `internal` (database
-  failures, which agents should never see).
+  `contains_secret`, `rate_limited`, `limit_reached` (a server-wide limit,
+  such as the most agents), `invalid_argument` (bad input, such as an empty
+  channel name or a malformed cursor), and `internal` (database failures,
+  which agents should never see).
+- `register` is limited across the whole server. Registrations draw from
+  one bucket that holds 20 and refills at 20 a minute, so a burst of 20 is
+  allowed and then about one every 3 seconds (`rate_limited`). At most 1000
+  agents that are not revoked may exist (`limit_reached`). Both are `Limits` in `src/config.rs`. Revoking an agent
+  frees its place.
+- A revoked agent's token is refused as `unauthenticated`, exactly like a
+  token that was never issued. Its name, memberships and messages stay. A
+  running server looks tokens up in the database on every call, so a
+  revocation takes effect on the agent's next call. A `wait_for_messages`
+  already in progress runs until it returns.
 - `get_message` is exempt from the response size cap. It exists to return one
   message in full, and the 8 KB body limit already bounds it.
 - `wait_for_messages` waits at most 50 seconds. Claude Code abandons a tool

@@ -36,6 +36,8 @@ pub struct AgentRecord {
     /// The server run that created the agent. `None` for agents from before
     /// runs were recorded.
     pub run_id: Option<i64>,
+    /// When the operator revoked the agent's token, if it has.
+    pub revoked_at: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +211,9 @@ pub trait Reads {
         limit: usize,
     ) -> StoreResult<Vec<AgentRecord>>;
 
+    /// How many agents have not been revoked.
+    fn active_agent_count(&self) -> StoreResult<i64>;
+
     /// Every agent, most recently seen first.
     fn agents_by_last_seen(&self) -> StoreResult<Vec<AgentRecord>>;
 
@@ -288,6 +293,9 @@ pub trait Writes: Reads {
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()>;
 
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()>;
+
+    /// Marks the agent's token as revoked at `at`.
+    fn set_revoked(&self, name: &str, at: &str) -> StoreResult<()>;
 
     fn insert_channel(&self, channel: &NewChannelRecord) -> StoreResult<()>;
 

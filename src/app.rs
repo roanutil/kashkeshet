@@ -9,7 +9,7 @@ use crate::format::Formatter;
 use crate::hosts::AllowedHosts;
 use crate::mcp::{self, ChatServer};
 use crate::names::Entropy;
-use crate::rules::{Deps, Rules, SendLimiter};
+use crate::rules::{Deps, RegisterLimiter, Rules, SendLimiter};
 use crate::shutdown::Shutdown;
 use crate::store::Db;
 use crate::web;
@@ -51,6 +51,7 @@ pub struct Parts {
     pub(crate) events: Events,
     pub(crate) fmt: Formatter,
     pub(crate) sends: SendLimiter,
+    pub(crate) registrations: RegisterLimiter,
     /// This server run, from `provenance::record`.
     pub run_id: i64,
 }
@@ -73,6 +74,7 @@ impl Parts {
             entropy,
             events: Events::new(),
             sends: SendLimiter::new(limits.sends_per_minute),
+            registrations: RegisterLimiter::new(limits.registrations_per_minute),
         }
     }
 }
@@ -93,6 +95,7 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
         clock: parts.clock,
         entropy: parts.entropy,
         sends: parts.sends,
+        registrations: parts.registrations,
         run_id: parts.run_id,
         limits: config.limits,
     });

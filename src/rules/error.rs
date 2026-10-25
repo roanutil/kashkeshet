@@ -11,6 +11,8 @@ pub enum Code {
     BodyTooLong,
     ContainsSecret,
     RateLimited,
+    /// A server-wide limit, such as the most agents, has been reached.
+    LimitReached,
     InvalidArgument,
     Internal,
 }
@@ -24,6 +26,7 @@ impl Code {
             Code::BodyTooLong => "body_too_long",
             Code::ContainsSecret => "contains_secret",
             Code::RateLimited => "rate_limited",
+            Code::LimitReached => "limit_reached",
             Code::InvalidArgument => "invalid_argument",
             Code::Internal => "internal",
         }

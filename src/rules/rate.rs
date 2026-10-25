@@ -1,7 +1,8 @@
-//! A per-agent cap on how fast messages can be sent.
+//! Caps on how fast things can happen: messages per agent, and
+//! registrations across the whole server.
 //!
-//! Each agent has a bucket that holds up to `per_minute` sends and refills at
-//! `per_minute` sends per minute. State lives in memory and resets on restart.
+//! Each cap is a bucket that holds up to `per_minute` uses and refills at
+//! `per_minute` uses per minute. State lives in memory and resets on restart.
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -84,6 +85,38 @@ impl SendLimiter {
     }
 }
 
+/// One bucket for the whole server's registrations.
+pub struct RegisterLimiter {
+    per_minute: u32,
+    bucket: Mutex<Option<Bucket>>,
+}
+
+impl RegisterLimiter {
+    pub fn new(per_minute: u32) -> RegisterLimiter {
+        RegisterLimiter {
+            per_minute,
+            bucket: Mutex::new(None),
+        }
+    }
+
+    /// Records one registration at `now`. Returns false if the server is over
+    /// its limit.
+    pub fn allow(&self, now: DateTime<Utc>) -> bool {
+        // See `SendLimiter::allow` on why a poisoned lock is still usable.
+        let mut bucket = self.bucket.lock().unwrap_or_else(|p| p.into_inner());
+        let (next, allowed) = take(*bucket, now, self.per_minute);
+        *bucket = Some(next);
+        allowed
+    }
+
+    /// Gives back a registration that `allow` counted but that did not happen.
+    pub fn refund(&self) {
+        // See `SendLimiter::allow` on why a poisoned lock is still usable.
+        let mut bucket = self.bucket.lock().unwrap_or_else(|p| p.into_inner());
+        *bucket = bucket.map(|b| refund(b, self.per_minute));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +172,19 @@ mod tests {
         assert!(limiter.allow("a", t0));
         // Refunding an agent with no bucket does nothing.
         limiter.refund("b");
+    }
+
+    #[test]
+    fn registrations_share_one_bucket() {
+        let limiter = RegisterLimiter::new(2);
+        let t0 = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        assert!(limiter.allow(t0));
+        assert!(limiter.allow(t0));
+        assert!(!limiter.allow(t0));
+        limiter.refund();
+        assert!(limiter.allow(t0));
+        assert!(!limiter.allow(t0));
+        // Half a minute refills one.
+        assert!(limiter.allow(t0 + Duration::seconds(30)));
     }
 }

@@ -9,6 +9,7 @@ use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::settings::{self, Env, Platform, ServeOptions, ServeSettings};
 use kashkeshet::shutdown::{Shutdown, StopSignals};
 use kashkeshet::store::Db;
+use kashkeshet::{Operator, Revoked};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,32 @@ enum Command {
     Key {
         #[command(subcommand)]
         command: KeyCommand,
+    },
+    /// List agents, or revoke one's token. Works on the database file while
+    /// the server runs.
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+        /// The server's database file. By default the one `kkt serve` uses:
+        /// the config file's `db`, else kashkeshet.db in the per-user data
+        /// directory. A server started without `serve` uses ./kashkeshet.db.
+        #[arg(long, global = true)]
+        db: Option<PathBuf>,
+        /// The config file, as for `kkt serve`.
+        #[arg(long, global = true)]
+        config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentCommand {
+    /// Every agent, most recently seen first, with revoked ones marked.
+    List,
+    /// Revoke an agent's token. Its later calls are refused as
+    /// `unauthenticated`; its name and messages stay.
+    Revoke {
+        /// The agent's name, such as amber-falcon.
+        name: String,
     },
 }
 
@@ -158,6 +185,11 @@ async fn main() -> std::process::ExitCode {
         Some(Command::Key {
             command: KeyCommand::Create { path, force, show },
         }) => create_key(&env, path, force, show),
+        Some(Command::Agent {
+            command,
+            db,
+            config,
+        }) => agent(&env, command, db, config).await,
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -189,24 +221,7 @@ async fn serve_from_config(
     config: Option<PathBuf>,
     flags: ServeFlags,
 ) -> Result<(), String> {
-    let config_file = match config {
-        Some(path) => Some(path),
-        None => env.config_file().filter(|path| path.exists()),
-    };
-    let from_file = match &config_file {
-        Some(path) => {
-            let text = std::fs::read_to_string(path).map_err(|e| {
-                format!(
-                    "invalid setting: config could not be read from {}: {e}",
-                    path.display()
-                )
-            })?;
-            let dir = path.parent().unwrap_or(Path::new("."));
-            settings::parse_file(&text, dir, env)
-                .map_err(|e| format!("invalid setting: {e} (in {})", path.display()))?
-        }
-        None => ServeOptions::NONE,
-    };
+    let (config_file, from_file) = read_config(env, config)?;
     let flags = flags.options();
     let sources = Sources {
         file: config_file.map(|path| (path, from_file.clone())),
@@ -229,6 +244,90 @@ async fn serve_from_config(
     };
     let settings = options.resolve(default_db);
     serve(settings, &sources).await
+}
+
+/// The config file to use (`config`, else the default one if it exists),
+/// and what it gives.
+fn read_config(
+    env: &Env,
+    config: Option<PathBuf>,
+) -> Result<(Option<PathBuf>, ServeOptions), String> {
+    let config_file = match config {
+        Some(path) => Some(path),
+        None => env.config_file().filter(|path| path.exists()),
+    };
+    let from_file = match &config_file {
+        Some(path) => {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                format!(
+                    "invalid setting: config could not be read from {}: {e}",
+                    path.display()
+                )
+            })?;
+            let dir = path.parent().unwrap_or(Path::new("."));
+            settings::parse_file(&text, dir, env)
+                .map_err(|e| format!("invalid setting: {e} (in {})", path.display()))?
+        }
+        None => ServeOptions::NONE,
+    };
+    Ok((config_file, from_file))
+}
+
+/// `kkt agent`: the operator's commands, on the database `kkt serve` would
+/// use unless `--db` names another. Never creates a database.
+async fn agent(
+    env: &Env,
+    command: AgentCommand,
+    db: Option<PathBuf>,
+    config: Option<PathBuf>,
+) -> Result<(), String> {
+    let path = match db {
+        Some(path) => path,
+        None => match read_config(env, config)?.1.db {
+            Some(path) => path,
+            None => env.default_db(Platform::CURRENT).ok_or(
+                "no home directory to find the database in: set HOME or pass --db".to_string(),
+            )?,
+        },
+    };
+    if !path.exists() {
+        return Err(format!(
+            "no database at {}; pass --db with the server's database file",
+            path.display()
+        ));
+    }
+    let db = Db::open(&path).map_err(|e| format!("could not open {}: {e}", path.display()))?;
+    let operator = Operator::new(db, Arc::new(SystemClock));
+    match command {
+        AgentCommand::List => {
+            let agents = operator.agents().await.map_err(|e| e.to_string())?;
+            if agents.is_empty() {
+                println!("no agents in {}", path.display());
+            }
+            for a in agents {
+                let seen = a.last_seen.as_deref().unwrap_or("never");
+                let revoked = match &a.revoked_at {
+                    Some(at) => format!("  revoked {at}"),
+                    None => String::new(),
+                };
+                println!(
+                    "{}  created {}  last seen {seen}{revoked}",
+                    a.name, a.created_at
+                );
+            }
+        }
+        AgentCommand::Revoke { name } => {
+            match operator
+                .revoke(name.clone())
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                Revoked::Now { at } => println!("revoked {name} at {at}"),
+                Revoked::Already { at } => println!("{name} was already revoked at {at}"),
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Where a server's settings came from, so a bad one can be traced to the

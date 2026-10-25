@@ -4,7 +4,28 @@ use crate::config::MAX_NAME_ATTEMPTS;
 impl Rules {
     /// Creates a new agent with a server-chosen name and a fresh token.
     /// Only the token's hash is stored.
+    /// Refused when the server is over `registrations_per_minute` or already
+    /// has `max_agents` agents that are not revoked.
     pub async fn register(&self) -> Result<Registration> {
+        let now = self.inner.deps.clock.now();
+        if !self.inner.deps.registrations.allow(now) {
+            return Err(RuleError::new(
+                Code::RateLimited,
+                format!(
+                    "this server accepts at most {} registrations a minute; wait and try again",
+                    self.limits().registrations_per_minute
+                ),
+            ));
+        }
+        let registered = self.insert_new_agent().await;
+        if registered.is_err() {
+            self.inner.deps.registrations.refund();
+        }
+        registered
+    }
+
+    async fn insert_new_agent(&self) -> Result<Registration> {
+        let max_agents = self.limits().max_agents;
         let entropy = self.inner.deps.entropy.clone();
         let base = names::agent_name(entropy.as_ref());
         let token = auth::token(entropy.as_ref());
@@ -14,6 +35,17 @@ impl Rules {
         let name = self
             .db()
             .write(move |store| {
+                // A cap too large for the database's count type is no cap.
+                let cap = i64::try_from(max_agents).unwrap_or(i64::MAX);
+                if store.active_agent_count()? >= cap {
+                    return Err(RuleError::new(
+                        Code::LimitReached,
+                        format!(
+                            "this server already has its limit of {max_agents} agents; \
+                             ask its operator to revoke unused ones"
+                        ),
+                    ));
+                }
                 let name = free_name(store, &base)?;
                 store.insert_agent(&NewAgentRecord {
                     name: name.clone(),
@@ -93,6 +125,7 @@ pub struct AgentInfo {
     pub run_id: Option<i64>,
 }
 
+// Agents see revoked agents like any other: their names and messages stay.
 impl From<AgentRecord> for AgentInfo {
     fn from(a: AgentRecord) -> AgentInfo {
         AgentInfo {
