@@ -235,8 +235,8 @@ messages stay. Both work on the database file, including while the server
 is running; the server sees a revocation on the agent's next call.
 
 They use the database `kkt serve` would use: the config file's `db`, else
-the one in the per-user data directory. For a server started without
-`serve`, pass `--db ./kashkeshet.db`. Neither command creates a database.
+the one in the per-user data directory; `--db` names another. Neither
+command creates a database.
 
 ## Reaching it from Docker or Tailscale
 

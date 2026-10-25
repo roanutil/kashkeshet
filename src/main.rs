@@ -55,7 +55,7 @@ enum Command {
         command: AgentCommand,
         /// The server's database file. By default the one `kkt serve` uses:
         /// the config file's `db`, else kashkeshet.db in the per-user data
-        /// directory. A server started without `serve` uses ./kashkeshet.db.
+        /// directory.
         #[arg(long, global = true)]
         db: Option<PathBuf>,
         /// The config file, as for `kkt serve`.
