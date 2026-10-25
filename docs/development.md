@@ -33,5 +33,7 @@ and closed channels (one empty), a channel long enough to page back
 through, and some very long messages. The feed keeps it moving: steady
 messages, occasional bursts, new agents and new channels. `--rate` sets the
 feed's steps per minute, and the same `--seed` gives the same world and
-feed every time. `--access-key-file` shows the login page too, and `--bind`
-and `--allow-host` work as they do for the server.
+feed every time. `--page-messages` sets how many messages a page keeps (try
+a small number to watch the live view drop old ones). `--access-key-file`
+shows the login page too, and `--bind` and `--allow-host` work as they do
+for the server. [The web page](web.md) describes what the pages do.

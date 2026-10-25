@@ -116,6 +116,7 @@ working kept changing because changing it took one message.
 
 - [Connecting clients](docs/clients.md): what `kkt connect` writes for each
   client, `kkt key header`, and what `kkt doctor` checks.
+- [The web page](docs/web.md): the dashboard and channel pages.
 - [Configuration](docs/configuration.md): `kkt serve` options, the config
   file, where data lives, the access key, managing agents.
 - [Running in the background](docs/service.md): what `kkt service` installs.
