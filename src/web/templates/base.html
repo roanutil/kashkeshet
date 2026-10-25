@@ -359,7 +359,7 @@ details summary { cursor: pointer; }
       el("td", "num recent zero", "0"), last);
     tbody.append(row);
     channelRows.set(c.id, row);
-    recentTimes.set(c.id, []);
+    recentCounts.set(c.id, new Map());
     glow(row);
   }
   // A new agent gets a row at the end.
