@@ -115,14 +115,19 @@ details summary { cursor: pointer; }
 // Live updates. New messages go into any list marked data-live; a list with
 // data-channel only takes that channel's. A list keeps at most data-max
 // messages, dropping the oldest. A data-follow list (a channel page) scrolls
-// to new messages only if the reader is at the bottom; otherwise it shows a
-// "N new" button and leaves the oldest in place until the reader is back.
+// to new messages only if the reader is at the bottom of the list; otherwise
+// it shows a "N new" button and leaves the oldest in place until the reader
+// is back. "Bottom" is the list's, not the page's: on a narrow screen the
+// member list comes after it.
 (function () {
   const status = document.getElementById("live");
   const lists = document.querySelectorAll("ol[data-live]");
   const jump = document.getElementById("jump");
   const older = document.getElementById("older");
+  const followed = document.querySelector("ol[data-follow]");
   const NEAR_BOTTOM = 120;
+  // Room left below the newest message when following.
+  const BELOW_NEWEST = 16;
   let unseen = 0;
 
   function setStatus(state, text) {
@@ -130,10 +135,16 @@ details summary { cursor: pointer; }
     status.dataset.state = state;
     status.textContent = text;
   }
+  // Whether the end of the followed list is in view (or nearly).
   function nearBottom() {
-    return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - NEAR_BOTTOM;
+    return !followed || followed.getBoundingClientRect().bottom <= window.innerHeight + NEAR_BOTTOM;
   }
-  function toBottom() { window.scrollTo(0, document.documentElement.scrollHeight); }
+  // Scrolls so the end of the followed list is at the bottom of the view.
+  function toBottom() {
+    if (!followed) return;
+    const by = followed.getBoundingClientRect().bottom - window.innerHeight + BELOW_NEWEST;
+    window.scrollTo(0, Math.max(0, window.scrollY + by));
+  }
   function follows(list) { return list.dataset.follow !== undefined; }
 
   // Drops the oldest messages over the list's limit. On a channel page, the
@@ -164,7 +175,7 @@ details summary { cursor: pointer; }
       fade(li);
     });
     lists.forEach((list) => { if (follows(list)) trim(list); });
-    if (document.querySelector("ol[data-follow]")) toBottom();
+    toBottom();
   }
   if (jump) jump.addEventListener("click", () => { toBottom(); caughtUp(); });
   window.addEventListener("scroll", () => { if (unseen && nearBottom()) caughtUp(); }, { passive: true });
@@ -241,7 +252,7 @@ details summary { cursor: pointer; }
   }
 
   // A live channel page opens at its newest messages.
-  if (document.querySelector("ol[data-follow]")) toBottom();
+  toBottom();
 })();
 </script>
 {% endblock %}

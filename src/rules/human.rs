@@ -7,6 +7,8 @@ use crate::config::WEB_RECENT_MESSAGES;
 impl Rules {
     pub async fn overview(&self) -> Result<Overview> {
         let preview = self.limits().member_preview;
+        // The front page's list keeps at most a page of messages.
+        let recent_count = WEB_RECENT_MESSAGES.min(self.limits().web_page_messages);
         self.db()
             .read(move |store| {
                 let channels = store
@@ -20,7 +22,7 @@ impl Rules {
                     .map(AgentInfo::from)
                     .collect();
                 let mut recent: Vec<Message> = store
-                    .recent_messages(WEB_RECENT_MESSAGES)?
+                    .recent_messages(recent_count)?
                     .into_iter()
                     .map(Message::from)
                     .collect();

@@ -208,7 +208,9 @@ impl Source for Preview {
         let world = self.world();
         let mut agents = world.agents.clone();
         agents.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
-        let skip = world.messages.len().saturating_sub(WEB_RECENT_MESSAGES);
+        // The front page's list keeps at most a page of messages.
+        let recent = WEB_RECENT_MESSAGES.min(self.settings.page_messages);
+        let skip = world.messages.len().saturating_sub(recent);
         let overview = Overview {
             channels: world.channels.iter().map(|c| c.channel.clone()).collect(),
             agents,

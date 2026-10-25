@@ -218,6 +218,23 @@ async fn the_show_older_link_appears_only_when_older_messages_exist() {
 }
 
 #[tokio::test]
+async fn the_preview_front_page_shows_no_more_than_a_page_of_messages() {
+    let p = Arc::new(Preview::new(
+        Arc::new(FixedClock::new(start_time())),
+        Arc::new(SeededEntropy::new(1)),
+        PreviewSettings {
+            page_messages: 5,
+            ..PreviewSettings::DEFAULT
+        },
+        &Shutdown::new(),
+    ));
+    assert_eq!(p.overview().await.expect("overview").recent.len(), 5);
+    let (status, page) = get(&site(p), "/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page.matches("<li class=\"msg\"").count(), 5);
+}
+
+#[tokio::test]
 async fn the_preview_world_repeats_from_its_seed() {
     let shutdown = Shutdown::new();
     let world = |seed| {
