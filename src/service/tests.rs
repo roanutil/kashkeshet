@@ -531,3 +531,89 @@ fn failed_log_and_status_commands_are_errors() {
     let err = linux().status(&linux_system).expect_err("systemctl failed");
     assert_eq!(err.to_string(), format!("`{status}` failed: exit status 1"));
 }
+
+#[test]
+fn launchd_state_reads_installed_and_running() {
+    let none = mac().state(&Fake::default()).expect("state");
+    assert_eq!(
+        none,
+        ServiceState {
+            installed: false,
+            running: false
+        }
+    );
+
+    let running = Fake::default().with_file(PLIST).answer(
+        PRINT,
+        0,
+        "gui/501/com.sam-mfb.kashkeshet = {\n\tstate = running\n\tpid = 7\n}\n",
+        "",
+    );
+    assert_eq!(
+        mac().state(&running).expect("state"),
+        ServiceState {
+            installed: true,
+            running: true
+        }
+    );
+
+    let waiting = Fake::default().with_file(PLIST).answer(
+        PRINT,
+        0,
+        "gui/501/com.sam-mfb.kashkeshet = {\n\tstate = not running\n}\n",
+        "",
+    );
+    assert!(!mac().state(&waiting).expect("state").running);
+
+    let unloaded = Fake::default().with_file(PLIST).not_loaded();
+    assert_eq!(
+        mac().state(&unloaded).expect("state"),
+        ServiceState {
+            installed: true,
+            running: false
+        }
+    );
+
+    let broken = Fake::default()
+        .with_file(PLIST)
+        .answer(PRINT, 5, "", "Input/output error");
+    assert!(matches!(
+        mac().state(&broken),
+        Err(ServiceError::Failed { .. })
+    ));
+}
+
+#[test]
+fn systemd_state_reads_is_active() {
+    let is_active = "systemctl --user is-active kashkeshet.service";
+    let missing = Fake::default();
+    assert!(!linux().state(&missing).expect("state").installed);
+    assert!(missing.ran().is_empty(), "no unit, so nothing to ask");
+
+    let active = Fake::default()
+        .with_file(UNIT)
+        .answer(is_active, 0, "active\n", "");
+    assert_eq!(
+        linux().state(&active).expect("state"),
+        ServiceState {
+            installed: true,
+            running: true
+        }
+    );
+    let inactive = Fake::default()
+        .with_file(UNIT)
+        .answer(is_active, 3, "inactive\n", "");
+    assert!(!linux().state(&inactive).expect("state").running);
+
+    let broken =
+        Fake::default()
+            .with_file(UNIT)
+            .answer(is_active, 1, "", "Failed to connect to bus\n");
+    let err = linux()
+        .state(&broken)
+        .expect_err("a failed query is an error");
+    assert_eq!(
+        err.to_string(),
+        format!("`{is_active}` failed: Failed to connect to bus")
+    );
+}

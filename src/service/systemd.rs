@@ -2,14 +2,14 @@
 //! again only if it fails; its output goes to the journal.
 
 use super::{
-    Command, ServiceError, Spec, System, create_dir, path_text, plain_text, remove_file,
-    run_attached, run_ok, write_file,
+    Command, ServiceError, ServiceState, Spec, System, create_dir, failure_detail, path_text,
+    plain_text, remove_file, run, run_attached, run_ok, write_file,
 };
 use crate::config::{SERVICE_RESTART_DELAY, SERVICE_STOP_TIMEOUT, SYSTEMD_UNIT, SYSTEMD_USER_DIR};
 use std::path::{Path, PathBuf};
 
-/// `systemctl status`'s exit status for a unit that is loaded but not
-/// running (stopped or failed): an answer, not a failure.
+/// `systemctl status` and `is-active`'s exit status for a unit that is
+/// loaded but not running (stopped or failed): an answer, not a failure.
 const INACTIVE: i32 = 3;
 
 pub struct Systemd {
@@ -110,6 +110,31 @@ WantedBy=default.target
             "Stopped kashkeshet. It starts again at the next login, or with `kkt service start`."
                 .to_string(),
         ])
+    }
+
+    pub fn state(&self, system: &dyn System) -> Result<ServiceState, ServiceError> {
+        if !system.exists(&self.unit()) {
+            return Ok(ServiceState {
+                installed: false,
+                running: false,
+            });
+        }
+        let is_active = Command::query("systemctl", &["--user", "is-active", SYSTEMD_UNIT]);
+        let finished = run(system, &is_active)?;
+        let running = match finished.code {
+            Some(0) => true,
+            Some(INACTIVE) => false,
+            _ => {
+                return Err(ServiceError::Failed {
+                    command: is_active.to_string(),
+                    detail: failure_detail(&finished),
+                });
+            }
+        };
+        Ok(ServiceState {
+            installed: true,
+            running,
+        })
     }
 
     pub fn status(&self, system: &dyn System) -> Result<Vec<String>, ServiceError> {
