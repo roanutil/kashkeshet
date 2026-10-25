@@ -1,7 +1,7 @@
 use clap::Parser;
 use kashkeshet::app::{self, AppConfig};
 use kashkeshet::clock::SystemClock;
-use kashkeshet::config::Limits;
+use kashkeshet::config::{self, Limits};
 use kashkeshet::db::Db;
 use kashkeshet::mcp;
 use kashkeshet::names::OsEntropy;
@@ -58,23 +58,18 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    if !args.bind.ip().is_loopback() {
-        return Err(format!(
-            "refusing to listen on {}: only loopback addresses (such as 127.0.0.1) are allowed",
-            args.bind
-        ));
-    }
-    if args.default_limit == 0 || args.max_limit < args.default_limit {
-        return Err("--default-limit must be at least 1 and no more than --max-limit".into());
-    }
     let limits = Limits {
         max_response_bytes: args.max_response_bytes,
         default_limit: args.default_limit,
         max_limit: args.max_limit,
-        max_body_chars: args.max_body_chars.max(1),
+        max_body_chars: args.max_body_chars,
         sends_per_minute: args.sends_per_minute,
         ..Limits::DEFAULT
     };
+    config::check_bind(args.bind).map_err(|e| format!("invalid setting: {e}"))?;
+    limits
+        .check()
+        .map_err(|e| format!("invalid setting: {e}"))?;
     let instructions = match &args.instructions {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|e| format!("could not read {}: {e}", path.display()))?,

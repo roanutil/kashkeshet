@@ -2,11 +2,13 @@
 //! web page at `/`.
 
 use crate::clock::Clock;
-use crate::config::Limits;
+use crate::config::{
+    Limits, MCP_ALLOWED_HOSTS, MCP_MAX_REQUEST_BYTES, MCP_SSE_KEEP_ALIVE, MCP_SSE_RETRY,
+};
 use crate::db::Db;
 use crate::events::Events;
 use crate::format::Formatter;
-use crate::mcp::ChatServer;
+use crate::mcp::{self, ChatServer};
 use crate::names::Entropy;
 use crate::rules::{Deps, Rules};
 use crate::web;
@@ -34,6 +36,7 @@ pub fn build(
     shutdown: CancellationToken,
 ) -> Router {
     let fmt = Formatter::new(config.limits.max_response_bytes, clock.clone());
+    let tools = mcp::tools(&config.limits);
     let rules = Rules::new(Deps {
         db,
         events: Events::new(),
@@ -50,15 +53,40 @@ pub fn build(
                 mcp_rules.clone(),
                 fmt.clone(),
                 instructions.clone(),
+                tools.clone(),
             ))
         },
+        // A session manager with no event store: there are no sessions, and
+        // a broken event stream is not resumed. That is the only state
+        // `default()` can build, so there is nothing further to set.
         Arc::new(NeverSessionManager::default()),
-        StreamableHttpServerConfig::default()
-            .with_legacy_session_mode(false)
-            .with_allowed_origins(config.allowed_origins)
-            .enforce_origin_validation()
-            .with_cancellation_token(shutdown),
+        mcp_transport(config.allowed_origins, shutdown),
     );
 
     web::router(rules).nest_service("/mcp", mcp)
+}
+
+/// The MCP transport settings. Every option is set here by name, so a change
+/// to the library's defaults cannot change the server's behavior.
+fn mcp_transport(
+    allowed_origins: Vec<String>,
+    shutdown: CancellationToken,
+) -> StreamableHttpServerConfig {
+    let mut config = StreamableHttpServerConfig::default()
+        // Serve every request on its own, with no session to resume.
+        .with_legacy_session_mode(false)
+        // Answer with event streams, never with plain JSON bodies.
+        .with_json_response(false)
+        .with_sse_keep_alive(Some(MCP_SSE_KEEP_ALIVE))
+        .with_sse_retry(Some(MCP_SSE_RETRY))
+        .with_allowed_hosts(MCP_ALLOWED_HOSTS.iter().copied())
+        // Refuse any browser origin not listed, even when the list is empty.
+        .with_allowed_origins(allowed_origins)
+        .enforce_origin_validation()
+        .with_max_request_body_bytes(MCP_MAX_REQUEST_BYTES)
+        // Older clients do not send per-request protocol metadata; accept them.
+        .with_stateless_protocol_metadata_required(false)
+        .with_cancellation_token(shutdown);
+    config.session_store = None;
+    config
 }

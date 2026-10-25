@@ -1,7 +1,5 @@
 use super::*;
-
-/// How many random channel IDs to try before giving up.
-const MAX_ID_ATTEMPTS: u32 = 100;
+use crate::config::MAX_CHANNEL_ID_ATTEMPTS;
 
 impl Rules {
     /// Channels `me` can see, in name order. Open channels are visible to
@@ -246,7 +244,7 @@ fn members_page(
 }
 
 fn free_channel_id(conn: &Connection, entropy: &dyn Entropy) -> Result<String> {
-    for _ in 0..MAX_ID_ATTEMPTS {
+    for _ in 0..MAX_CHANNEL_ID_ATTEMPTS {
         let id = names::channel_id(entropy);
         if channel_row(conn, &id)?.is_none() {
             return Ok(id);

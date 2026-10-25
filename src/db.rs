@@ -3,13 +3,13 @@
 //! One connection writes; several others read. In WAL mode the readers do not
 //! block the writer or each other. All calls run on Tokio's blocking pool.
 
+use crate::config::{DB_BUSY_TIMEOUT, DB_READERS};
 use rusqlite::{Connection, OpenFlags, Transaction};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
-const READERS: usize = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -40,7 +40,7 @@ impl Db {
         configure(&writer)?;
         writer.pragma_update(None, "journal_mode", "WAL")?;
         migrate(&mut writer)?;
-        let readers = (0..READERS)
+        let readers = (0..DB_READERS)
             .map(|_| {
                 let conn = Connection::open_with_flags(
                     path,
@@ -125,7 +125,7 @@ where
 
 fn configure(conn: &Connection) -> Result<(), DbError> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.pragma_update(None, "busy_timeout", 5000)?;
+    conn.busy_timeout(DB_BUSY_TIMEOUT)?;
     Ok(())
 }
 

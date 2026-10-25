@@ -1,6 +1,7 @@
 //! The human's read-only view: pages for all channels, one channel, and one
 //! agent, plus a stream of new messages for live updates.
 
+use crate::config::WEB_KEEP_ALIVE;
 use crate::rules::{AgentInfo, ChannelInfo, Code, Message, RuleError, Rules};
 use askama::Template;
 use axum::Router;
@@ -121,7 +122,7 @@ async fn events(State(rules): State<Rules>) -> Sse<impl Stream<Item = Result<Eve
             }
         })
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(WEB_KEEP_ALIVE).text("keep-alive"))
 }
 
 mod filters {

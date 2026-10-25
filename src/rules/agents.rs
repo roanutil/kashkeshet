@@ -1,7 +1,5 @@
 use super::*;
-
-/// How many numbered names to try before giving up on a base name.
-const MAX_NAME_ATTEMPTS: u32 = 10_000;
+use crate::config::MAX_NAME_ATTEMPTS;
 
 impl Rules {
     /// Creates a new agent with a server-chosen name and a fresh token.

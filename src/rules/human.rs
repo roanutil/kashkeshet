@@ -2,11 +2,7 @@
 //! including closed channels, and changes nothing.
 
 use super::*;
-
-/// Messages shown on the front page.
-const RECENT_MESSAGES: usize = 50;
-/// Messages shown per channel page.
-const CHANNEL_PAGE_MESSAGES: usize = 200;
+use crate::config::{WEB_CHANNEL_PAGE_MESSAGES, WEB_RECENT_MESSAGES};
 
 impl Rules {
     pub async fn overview(&self) -> Result<Overview> {
@@ -23,7 +19,7 @@ impl Rules {
                      ORDER BY m.id DESC LIMIT ?"
                 ))?;
                 let mut recent = stmt
-                    .query_map([RECENT_MESSAGES as i64], message_from_row)?
+                    .query_map([WEB_RECENT_MESSAGES as i64], message_from_row)?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 recent.reverse();
                 Ok(Overview {
@@ -50,7 +46,7 @@ impl Rules {
                         channel_id: id.clone(),
                         position: before_id.map_or(Position::Latest, Position::Before),
                         from_agent: None,
-                        limit: CHANNEL_PAGE_MESSAGES,
+                        limit: WEB_CHANNEL_PAGE_MESSAGES,
                     },
                 )?;
                 let older_before_id = match page.more {

@@ -4,11 +4,9 @@
 //! agent waiting for messages subscribe. A subscriber that falls behind is told
 //! it missed messages and can fetch them from the database.
 
+use crate::config::EVENT_BUFFER;
 use serde::Serialize;
 use tokio::sync::broadcast;
-
-/// Notices kept for a slow subscriber before it starts missing them.
-const BUFFER: usize = 1024;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct NewMessage {
@@ -27,7 +25,7 @@ pub struct Events {
 
 impl Events {
     pub fn new() -> Events {
-        let (sender, _) = broadcast::channel(BUFFER);
+        let (sender, _) = broadcast::channel(EVENT_BUFFER);
         Events { sender }
     }
 

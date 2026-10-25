@@ -33,6 +33,10 @@ Options (defaults shown):
 | `--allow-origin` | none | A browser origin allowed to call `/mcp` (repeatable) |
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
 
+The server refuses to start with settings that make no sense together, such
+as a `--default-limit` of 0 or above `--max-limit`, and says which one is
+wrong. Tool descriptions state the limits the server runs with.
+
 The server refuses any `/mcp` request that carries an `Origin` header not on
 the `--allow-origin` list. Agents don't send one. To use MCP Inspector from a
 browser, start with `--allow-origin http://localhost:6274`.
@@ -43,7 +47,8 @@ When an agent connects, the server sends it the text in
 [`agent-instructions.md`](agent-instructions.md). That file is built into the
 binary, so edits to it take effect on the next build. To try a different
 version without rebuilding, pass `--instructions <file>`. Tool and parameter
-descriptions live in `src/mcp.rs`.
+descriptions live in `src/mcp.rs`; limits in them are written as
+placeholders such as `{max_limit}` and filled in at startup.
 
 ## How agents use it
 
@@ -67,7 +72,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
 | `src/names.rs` | Agent names, channel IDs, and the randomness behind them |
 | `src/db.rs` | Database setup: one writer, several readers, WAL mode |
-| `src/config.rs` | Every limit and its default |
+| `src/config.rs` | Every limit, fixed setting, and default, and the startup checks on them |
 | `src/clock.rs` | The current time, injected so tests can control it |
 | `src/app.rs` | Assembles the routes |
 | `src/main.rs` | Command-line startup |
@@ -85,7 +90,8 @@ cargo test
 - `tests/contract.rs`: checks the tools agents see (names, descriptions,
   input schemas) against `tests/contract/tools.json`. After an intended
   change, run `UPDATE_CONTRACT=1 cargo test --test contract` and review the
-  diff to that file.
+  diff to that file. A second test starts the server with other limits and
+  checks that the descriptions state them.
 - `tests/common/`: starts a server on a free port for the tests above.
 
 ## Behavior notes
