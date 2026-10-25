@@ -31,8 +31,9 @@ connects each client, and an access key is on from the start.
    curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sam-mfb/kashkeshet/releases/latest/download/kashkeshet-installer.sh | sh
    ```
 
-   [Installing](docs/releases.md) covers checking a download and building
-   from source.
+   This works once the first version is released. Until then, build from
+   a clone with `cargo install --path . --locked`.
+   [Installing](docs/releases.md) covers checking a download.
 
 2. Start the server in the background. It starts again at each login:
 
