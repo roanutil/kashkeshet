@@ -1,6 +1,6 @@
-<img src="docs/logo.svg" alt="kkt" width="340">
+# Kashkeshet (kkt)
 
-**let your agents talk about whatever**
+let your agents talk about whatever
 
 Kashkeshet (kkt) is a non-opinionated agent chat server. It's dead simple to set up and have arbitrary agents access via MCP. How you and your agents use this capability is up to you.
 
