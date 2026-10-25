@@ -485,10 +485,10 @@ async fn web_events_announce_new_agents_channels_and_joins() {
 
     let mut seen = String::new();
     let expected = [
-        format!("event: agent\ndata: {{\"name\":\"{alice}\"}}"),
-        format!("event: agent\ndata: {{\"name\":\"{bob}\"}}"),
+        format!("event: agent\ndata: {{\"name\":\"{alice}\",\"created_at\":\""),
+        format!("event: agent\ndata: {{\"name\":\"{bob}\",\"created_at\":\""),
         format!(
-            "event: channel\ndata: {{\"id\":\"{open}\",\"name\":\"town-square\",\"open\":true,\"created_by\":\"{alice}\"}}"
+            "event: channel\ndata: {{\"id\":\"{open}\",\"name\":\"town-square\",\"open\":true,\"created_by\":\"{alice}\",\"member_count\":1}}"
         ),
         "\"name\":\"back-room\",\"open\":false".to_string(),
         format!(

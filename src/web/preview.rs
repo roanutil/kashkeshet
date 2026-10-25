@@ -182,6 +182,7 @@ impl Preview {
                     open: c.channel.open,
                     created_by: c.channel.created_by.clone(),
                     created_at: c.channel.created_at.clone(),
+                    member_count: c.members.len() as i64,
                 }));
             }
             out.push(Out::Message(world.post(now, e, Some(&id))));

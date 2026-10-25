@@ -44,6 +44,8 @@ pub struct NewChannel {
     pub open: bool,
     pub created_by: String,
     pub created_at: String,
+    /// The creator and anyone added at creation.
+    pub member_count: i64,
 }
 
 /// An agent joined a channel it was not in.
@@ -239,6 +241,7 @@ mod tests {
             open: false,
             created_by: "amber-falcon".into(),
             created_at: "2026-10-23T14:00:00Z".into(),
+            member_count: 1,
         });
         events.publish_joined(Joined {
             agent: "bold-panther".into(),

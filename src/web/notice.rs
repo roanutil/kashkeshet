@@ -15,12 +15,16 @@ pub fn live_event(notice: Notice) -> LiveEvent {
             created_at: m.created_at,
             run_id: m.run_id,
         }),
-        Notice::Agent(a) => LiveEvent::Agent(NewAgent { name: a.name }),
+        Notice::Agent(a) => LiveEvent::Agent(NewAgent {
+            name: a.name,
+            created_at: a.created_at,
+        }),
         Notice::Channel(c) => LiveEvent::Channel(NewChannel {
             id: c.id,
             name: c.name,
             open: c.open,
             created_by: c.created_by,
+            member_count: c.member_count,
         }),
         Notice::Joined(j) => LiveEvent::Joined(Joined {
             agent: j.agent,

@@ -195,6 +195,7 @@ pub struct AgentView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct NewAgent {
     pub name: String,
+    pub created_at: String,
 }
 
 /// A channel was created, open or closed.
@@ -204,6 +205,7 @@ pub struct NewChannel {
     pub name: String,
     pub open: bool,
     pub created_by: String,
+    pub member_count: i64,
 }
 
 /// An agent joined a channel.

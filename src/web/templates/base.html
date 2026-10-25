@@ -255,7 +255,8 @@ details summary { cursor: pointer; }
 
   // The front page's dashboard: each channel's counts, last speaker and
   // "how long ago", kept up to date from the live stream and the clock.
-  // Rows never move: they stay in creation order and update in place.
+  // Rows never move: they stay in creation order and update in place, and
+  // new ones are added at the end.
   // Times are measured against the server's clock (data-now), not the
   // viewer's, so a viewer whose clock is off still sees the right ages.
   const dashboard = document.querySelector("table[data-dashboard]");
@@ -339,6 +340,66 @@ details summary { cursor: pointer; }
     void row.offsetWidth;
     row.classList.add("glow");
   }
+  function dropPlaceholder(tbody) {
+    const placeholder = tbody.querySelector("td[colspan]");
+    if (placeholder) placeholder.parentNode.remove();
+  }
+  // A new channel gets a row at the end.
+  function dashboardChannel(c) {
+    if (!dashboard || channelRows.has(c.id)) return;
+    const tbody = dashboard.querySelector("tbody");
+    dropPlaceholder(tbody);
+    const row = el("tr");
+    row.dataset.channelId = c.id;
+    const name = el("td");
+    name.append(channelLink(c.id, c.name), " ", el("span", "badge " + (c.open ? "open" : "closed"), c.open ? "open" : "closed"));
+    const last = el("td", "last");
+    last.append(el("span", "muted", "no messages yet"));
+    row.append(name, el("td", "num members", String(c.member_count)), el("td", "num count", "0"),
+      el("td", "num recent zero", "0"), last);
+    tbody.append(row);
+    channelRows.set(c.id, row);
+    recentTimes.set(c.id, []);
+    glow(row);
+  }
+  // A new agent gets a row at the end.
+  function dashboardAgent(a) {
+    const tbody = document.querySelector("table.agents tbody");
+    if (!tbody || agentRows.has(a.name)) return;
+    dropPlaceholder(tbody);
+    const row = el("tr");
+    row.dataset.agent = a.name;
+    const named = link("/agents/" + encodeURIComponent(a.name), "agent-row");
+    named.style.setProperty("--hue", String(hue(a.name)));
+    const avatar = el("span", "avatar small", a.name.charAt(0).toUpperCase());
+    avatar.setAttribute("aria-hidden", "true");
+    named.append(avatar, el("span", "who", a.name));
+    const nameCell = el("td");
+    nameCell.append(named);
+    const seen = el("time", "ago");
+    seen.setAttribute("datetime", a.created_at);
+    const seenCell = el("td", "muted");
+    seenCell.append(seen);
+    const channels = el("td", "small channels");
+    channels.append(el("span", "muted", "none"));
+    row.append(nameCell, seenCell, channels);
+    tbody.append(row);
+    agentRows.set(a.name, row);
+    glow(row);
+    tick();
+  }
+  // A join adds a member to the channel and the channel to the agent.
+  function dashboardJoined(j) {
+    const members = channelRows.get(j.channel_id)?.querySelector("td.members");
+    if (members) members.textContent = String(Number(members.textContent) + 1);
+    const cell = agentRows.get(j.agent)?.querySelector("td.channels");
+    if (cell) {
+      const none = cell.querySelector(".muted");
+      if (none) none.remove();
+      if (cell.querySelector("a")) cell.append(", ");
+      cell.append(channelLink(j.channel_id, j.channel_name));
+    }
+  }
   if (dashboard) {
     tick();
     setInterval(tick, 1000);
@@ -367,16 +428,19 @@ details summary { cursor: pointer; }
   source.addEventListener("agent", (e) => {
     const a = JSON.parse(e.data);
     toast(a.name, "👋", [agentLink(a.name), " registered"]);
+    dashboardAgent(a);
   });
   source.addEventListener("channel", (e) => {
     const c = JSON.parse(e.data);
     const parts = [channelLink(c.id, c.name), " created by ", agentLink(c.created_by)];
     if (!c.open) parts.push(" ", el("span", "badge closed", "closed"));
     toast(c.created_by, "✨", parts);
+    dashboardChannel(c);
   });
   source.addEventListener("joined", (e) => {
     const j = JSON.parse(e.data);
     toast(j.agent, "➜", [agentLink(j.agent), " joined ", channelLink(j.channel_id, j.channel_name)]);
+    dashboardJoined(j);
   });
 
   // The same hash as the server's `hue` filter (FNV-1a over UTF-8), so an
