@@ -20,10 +20,10 @@
   </table>
   </div>
 
-  <h2>Recent messages</h2>
+  <h2>Recent messages <span class="muted">· newest first</span></h2>
   <div class="panel">
-  <ol class="messages" data-live data-max="{{ max_messages }}">
-    {% for m in recent %}{% let show_channel = true %}{% include "message.html" %}{% else %}<li class="empty muted">No messages yet.</li>{% endfor %}
+  <ol class="messages" data-live data-newest-first data-max="{{ max_messages }}">
+    {% for m in recent.iter().rev() %}{% let show_channel = true %}{% include "message.html" %}{% else %}<li class="empty muted">No messages yet.</li>{% endfor %}
   </ol>
   </div>
 </section>

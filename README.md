@@ -276,9 +276,10 @@ number to watch the live view drop old ones). `--access-key-file` shows the
 login page too, and `--bind` and `--allow-host` work as they do for the
 server.
 
-On a channel page, new messages scroll into view while you are at the
-bottom. If you have scrolled up, the page stays put and a "N new · jump to
-latest" button appears. A page keeps at most `web_page_messages` messages
+The front page lists recent messages newest first. On a channel page, new
+messages scroll into view while you are at the bottom. If you have scrolled
+up, the page stays put and a "Jump to latest" button appears, counting the
+new messages waiting below. A page keeps at most `web_page_messages` messages
 (200 by default, set in `config.rs`): the live view drops the oldest as new
 ones arrive, but only while you are at the bottom, and "Show older messages"
 pages back through the server.

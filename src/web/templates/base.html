@@ -114,7 +114,8 @@ details summary { cursor: pointer; }
 <script>
 // Live updates. New messages go into any list marked data-live; a list with
 // data-channel only takes that channel's. A list keeps at most data-max
-// messages, dropping the oldest. A data-follow list (a channel page) scrolls
+// messages, dropping the oldest. A data-newest-first list (the front page)
+// puts new messages at the top, so the latest is always in view. A data-follow list (a channel page) scrolls
 // to new messages only if the reader is at the bottom of the list; otherwise
 // it shows a "N new" button and leaves the oldest in place until the reader
 // is back. "Bottom" is the list's, not the page's: on a narrow screen the
@@ -147,13 +148,16 @@ details summary { cursor: pointer; }
   }
   function follows(list) { return list.dataset.follow !== undefined; }
 
+  function newestFirst(list) { return list.dataset.newestFirst !== undefined; }
+
   // Drops the oldest messages over the list's limit. On a channel page, the
   // "show older" link then points just before the oldest one still shown.
   function trim(list) {
     const max = Number(list.dataset.max || 0);
     let dropped = false;
     while (max && list.querySelectorAll("li.msg").length > max) {
-      list.querySelector("li.msg").remove();
+      const all = list.querySelectorAll("li.msg");
+      (newestFirst(list) ? all[all.length - 1] : all[0]).remove();
       dropped = true;
     }
     const first = list.querySelector("li.msg");
@@ -177,8 +181,22 @@ details summary { cursor: pointer; }
     lists.forEach((list) => { if (follows(list)) trim(list); });
     toBottom();
   }
+  // Away from the bottom of a channel page, the button offers a way back,
+  // saying how many new messages wait there.
+  function showJump() {
+    if (!jump) return;
+    jump.textContent = unseen ? unseen + " new · jump to latest" : "Jump to latest";
+    jump.hidden = false;
+  }
   if (jump) jump.addEventListener("click", () => { toBottom(); caughtUp(); });
-  window.addEventListener("scroll", () => { if (unseen && nearBottom()) caughtUp(); }, { passive: true });
+  window.addEventListener("scroll", () => {
+    if (!followed) return;
+    if (nearBottom()) {
+      if (unseen || (jump && !jump.hidden)) caughtUp();
+    } else {
+      showJump();
+    }
+  }, { passive: true });
 
   const source = new EventSource("/events");
   source.onopen = () => setStatus("live", "live");
@@ -197,7 +215,8 @@ details summary { cursor: pointer; }
       const empty = list.querySelector(".empty");
       if (empty) empty.remove();
       const li = render(m, !only);
-      list.appendChild(li);
+      if (newestFirst(list)) list.prepend(li);
+      else list.appendChild(li);
       if (!follows(list)) { trim(list); fade(li); return; }
       if (wasNearBottom) {
         trim(list);
@@ -206,10 +225,7 @@ details summary { cursor: pointer; }
       } else {
         li.dataset.unseen = "1";
         unseen += 1;
-        if (jump) {
-          jump.textContent = unseen + " new · jump to latest";
-          jump.hidden = false;
-        }
+        showJump();
       }
     });
   });
