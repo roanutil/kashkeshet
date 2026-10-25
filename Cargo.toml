@@ -35,7 +35,7 @@ tracing-subscriber = "0.3.23"
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
 
-# Managed with dist 0.33.1. See README for workflow regeneration.
+# Managed with dist 0.33.1. See docs/releases.md for workflow regeneration.
 [workspace.metadata.dist]
 cargo-dist-version = "0.33.1"
 ci = ["github"]
@@ -55,7 +55,7 @@ github-attestations = true
 github-attestations-phase = "host"
 github-release = "host"
 # The workflow narrows dist's tag filter and checks packaged provenance after
-# each native build. See README before regenerating it.
+# each native build. See docs/releases.md before regenerating it.
 allow-dirty = ["ci"]
 dispatch-releases = false
 pr-run-mode = "plan"
