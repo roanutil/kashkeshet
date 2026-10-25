@@ -1,10 +1,10 @@
 //! Signing in to the web page when an access key is set: the login form,
 //! the session cookie, logout, and the check in front of every page. The
-//! decisions are made by `admission::WebAdmission`; this file only reads
-//! and writes HTTP.
+//! decisions are made by the [`Gate`]; this file only reads and writes
+//! HTTP.
 
 use super::page;
-use crate::admission::{Credentials, Decision, SignIn, WebAdmission};
+use super::source::{Admit, Gate, SignIn};
 use crate::config::WEB_SESSION_COOKIE;
 use crate::hosts;
 use askama::Template;
@@ -38,17 +38,17 @@ pub struct LoginForm {
 /// Lets a request through only with a live session. Pages without one are
 /// sent to the login form; the event stream gets `401`.
 pub async fn require_session(
-    State(gate): State<Arc<WebAdmission>>,
+    State(gate): State<Arc<dyn Gate>>,
     request: Request,
     next: Next,
 ) -> Response {
     let session_id = session_cookie(request.headers());
-    match gate.decide(session_id.as_deref()) {
-        Decision::Admitted(_) => next.run(request).await,
-        Decision::Refused(refusal) if request.uri().path() == EVENTS_PATH => {
-            (StatusCode::UNAUTHORIZED, refusal.to_string()).into_response()
+    match gate.admits(session_id.as_deref()) {
+        Admit::Yes => next.run(request).await,
+        Admit::No(reason) if request.uri().path() == EVENTS_PATH => {
+            (StatusCode::UNAUTHORIZED, reason).into_response()
         }
-        Decision::Refused(_) => Redirect::to(LOGIN_PATH).into_response(),
+        Admit::No(_) => Redirect::to(LOGIN_PATH).into_response(),
     }
 }
 
@@ -62,14 +62,14 @@ pub async fn login_form() -> Response {
 /// Checks the key from the form. On success, sets the session cookie and
 /// goes to the front page.
 pub async fn login(
-    State(gate): State<Arc<WebAdmission>>,
+    State(gate): State<Arc<dyn Gate>>,
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
     if !same_origin(&headers) {
         return cross_site();
     }
-    match gate.sign_in(&Credentials::from_key(&form.key)) {
+    match gate.sign_in(&form.key) {
         SignIn::Started {
             session_id,
             lifetime,
@@ -81,10 +81,10 @@ pub async fn login(
             ],
         )
             .into_response(),
-        SignIn::Refused(refusal) => (
+        SignIn::Refused(reason) => (
             StatusCode::UNAUTHORIZED,
             page(LoginPage {
-                error: Some(refusal.to_string()),
+                error: Some(reason),
                 sign_out: false,
             }),
         )
@@ -93,7 +93,7 @@ pub async fn login(
 }
 
 /// Ends the session, clears the cookie, and goes to the login form.
-pub async fn logout(State(gate): State<Arc<WebAdmission>>, headers: HeaderMap) -> Response {
+pub async fn logout(State(gate): State<Arc<dyn Gate>>, headers: HeaderMap) -> Response {
     if !same_origin(&headers) {
         return cross_site();
     }

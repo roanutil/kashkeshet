@@ -77,6 +77,59 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 /// Where `kkt key create` writes a key, in the config directory.
 pub const ACCESS_KEY_FILE_NAME: &str = "access-key";
 
+// ---- The web preview ----
+//
+// The page with simulated data (`web::Preview`, run by the `web_preview`
+// example), for working on the page without a server or agents.
+
+/// Address the preview listens on: next to the server's default port.
+pub const PREVIEW_BIND: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7421));
+/// Seed for the simulated data when none is given.
+pub const PREVIEW_SEED: u64 = 1;
+/// Agents in the simulated world at the start.
+pub const PREVIEW_AGENTS: usize = 8;
+/// Channels at the start. One of them stays empty until the feed reaches it.
+pub const PREVIEW_CHANNELS: usize = 7;
+/// Messages at the start, spread over the last few hours. Half go to the
+/// first channel, so it has more than one page.
+pub const PREVIEW_MESSAGES: usize = 600;
+/// How far back the starting messages go.
+pub const PREVIEW_HISTORY: Duration = Duration::from_secs(6 * 60 * 60);
+/// One step in this many is a burst of messages.
+pub const PREVIEW_BURST_ONE_IN: usize = 12;
+/// Most messages in a burst.
+pub const PREVIEW_BURST_MAX: usize = 15;
+/// One step in this many is a new agent registering.
+pub const PREVIEW_NEW_AGENT_ONE_IN: usize = 25;
+/// One step in this many is a new channel.
+pub const PREVIEW_NEW_CHANNEL_ONE_IN: usize = 40;
+/// One message in this many is very long.
+pub const PREVIEW_LONG_MESSAGE_ONE_IN: usize = 10;
+
+/// What the preview's operator can change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewSettings {
+    /// Steps of the simulated feed per minute. Most steps are one message.
+    pub steps_per_minute: u32,
+}
+
+impl PreviewSettings {
+    pub const DEFAULT: PreviewSettings = PreviewSettings {
+        steps_per_minute: 30,
+    };
+
+    /// Checks the settings. The preview refuses to start with ones that fail.
+    pub fn check(&self) -> Result<(), InvalidSetting> {
+        if self.steps_per_minute == 0 || self.steps_per_minute > 60_000 {
+            return Err(InvalidSetting::new(
+                "rate",
+                "must be from 1 to 60000 steps per minute",
+            ));
+        }
+        Ok(())
+    }
+}
+
 // ---- Limits ----
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -236,6 +289,17 @@ pub fn check_access_key(key: &str) -> Result<(), InvalidSetting> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_rates_must_be_sensible() {
+        assert_eq!(PreviewSettings::DEFAULT.check(), Ok(()));
+        for bad in [0, 60_001] {
+            let settings = PreviewSettings {
+                steps_per_minute: bad,
+            };
+            assert_eq!(settings.check().map_err(|e| e.name), Err("rate"));
+        }
+    }
 
     #[test]
     fn default_limits_pass() {

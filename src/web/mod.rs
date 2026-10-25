@@ -1,15 +1,26 @@
 //! The human's read-only view: pages for all channels, one channel, and one
 //! agent, plus a stream of new messages for live updates. Requests naming a
-//! host that is not allowed are refused, as they are on `/mcp`. When an
-//! access key is set, viewers log in first (`sign_in`).
+//! host that is not allowed are refused, as they are on `/mcp`. When the
+//! gate requires it, viewers log in first (`sign_in`).
+//!
+//! The pages read only through their own contract (`source`): the server
+//! supplies it over the rules (`real`), and the preview from simulated data
+//! (`preview`), so the page can run and be worked on without a server.
 
+mod preview;
+mod real;
 mod sign_in;
+mod source;
 
-use crate::admission::WebAdmission;
+pub use preview::Preview;
+pub use real::RulesSource;
+pub use source::{
+    Admit, Agent, AgentView, Channel, ChannelView, Gate, LiveEvent, Message, Overview, ServerRun,
+    SignIn, Source, SourceError,
+};
+
 use crate::config::WEB_KEEP_ALIVE;
-use crate::events::Notice;
 use crate::hosts::AllowedHosts;
-use crate::rules::{AgentInfo, ChannelInfo, Code, Message, RuleError, Rules, ServerRunInfo};
 use askama::Template;
 use axum::Router;
 use axum::extract::{Path, Query, Request, State};
@@ -23,17 +34,17 @@ use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::Arc;
 
-/// What the pages need: the rules, and whether to offer a logout button.
+/// What the pages need: their data, and whether to offer a logout button.
 #[derive(Clone)]
 struct Pages {
-    rules: Rules,
+    source: Arc<dyn Source>,
     sign_out: bool,
 }
 
-/// The web page. Every route checks the `Host` against `hosts`. When `gate`
-/// requires sign-in, every page and the event stream need a session, and
-/// `/login` and `/logout` are added.
-pub fn router(rules: Rules, hosts: AllowedHosts, gate: Arc<WebAdmission>) -> Router {
+/// The web page, reading from `source`. Every route checks the `Host`
+/// against `hosts`. When `gate` requires sign-in, every page and the event
+/// stream need a session, and `/login` and `/logout` are added.
+pub fn router(source: Arc<dyn Source>, hosts: AllowedHosts, gate: Arc<dyn Gate>) -> Router {
     let sign_in_required = gate.sign_in_required();
     let pages = Router::new()
         .route("/", get(index))
@@ -41,7 +52,7 @@ pub fn router(rules: Rules, hosts: AllowedHosts, gate: Arc<WebAdmission>) -> Rou
         .route("/agents/{name}", get(agent))
         .route("/events", get(events))
         .with_state(Pages {
-            rules,
+            source,
             sign_out: sign_in_required,
         });
     let site = if sign_in_required {
@@ -89,17 +100,17 @@ async fn check_host(State(hosts): State<AllowedHosts>, request: Request, next: N
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexPage {
-    channels: Vec<ChannelInfo>,
-    agents: Vec<AgentInfo>,
+    channels: Vec<Channel>,
+    agents: Vec<Agent>,
     recent: Vec<Message>,
-    runs: Vec<ServerRunInfo>,
+    runs: Vec<ServerRun>,
     sign_out: bool,
 }
 
 #[derive(Template)]
 #[template(path = "channel.html")]
 struct ChannelPage {
-    channel: ChannelInfo,
+    channel: Channel,
     members: Vec<String>,
     messages: Vec<Message>,
     older_before_id: Option<i64>,
@@ -111,8 +122,8 @@ struct ChannelPage {
 #[derive(Template)]
 #[template(path = "agent.html")]
 struct AgentPage {
-    agent: AgentInfo,
-    channels: Vec<ChannelInfo>,
+    agent: Agent,
+    channels: Vec<Channel>,
     message_count: i64,
     sign_out: bool,
 }
@@ -131,7 +142,7 @@ struct ChannelParams {
 }
 
 async fn index(State(pages): State<Pages>) -> Response {
-    match pages.rules.overview().await {
+    match pages.source.overview().await {
         Ok(o) => page(IndexPage {
             channels: o.channels,
             agents: o.agents,
@@ -148,7 +159,7 @@ async fn channel(
     Path(id): Path<String>,
     Query(params): Query<ChannelParams>,
 ) -> Response {
-    match pages.rules.channel_view(id, params.before_id).await {
+    match pages.source.channel(id, params.before_id).await {
         Ok(v) => page(ChannelPage {
             channel: v.channel,
             members: v.members,
@@ -162,7 +173,7 @@ async fn channel(
 }
 
 async fn agent(State(pages): State<Pages>, Path(name): Path<String>) -> Response {
-    match pages.rules.agent_view(name).await {
+    match pages.source.agent(name).await {
         Ok(v) => page(AgentPage {
             agent: v.agent,
             channels: v.channels,
@@ -177,25 +188,20 @@ async fn agent(State(pages): State<Pages>, Path(name): Path<String>) -> Response
 /// as JSON. A `lagged` event means this stream fell behind and missed some;
 /// the page reloads.
 async fn events(State(pages): State<Pages>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = pages
-        .rules
-        .events()
-        .subscribe()
-        .into_stream()
-        .map(|notice| {
-            Ok(match notice {
-                Notice::Message(message) => {
-                    match Event::default().event("message").json_data(&message) {
-                        Ok(event) => event,
-                        Err(e) => {
-                            tracing::error!(error = %e, "could not encode message event");
-                            Event::default().event("lagged").data("encode error")
-                        }
+    let stream = pages.source.live().map(|event| {
+        Ok(match event {
+            LiveEvent::Message(message) => {
+                match Event::default().event("message").json_data(&message) {
+                    Ok(event) => event,
+                    Err(e) => {
+                        tracing::error!(error = %e, "could not encode message event");
+                        Event::default().event("lagged").data("encode error")
                     }
                 }
-                Notice::Missed(n) => Event::default().event("lagged").data(n.to_string()),
-            })
-        });
+            }
+            LiveEvent::Missed(n) => Event::default().event("lagged").data(n.to_string()),
+        })
+    });
     Sse::new(stream).keep_alive(KeepAlive::new().interval(WEB_KEEP_ALIVE).text("keep-alive"))
 }
 
@@ -232,18 +238,18 @@ fn page(t: impl Template) -> Response {
     }
 }
 
-fn error_page(e: RuleError, sign_out: bool) -> Response {
-    let status = match e.code {
-        Code::NotFound => StatusCode::NOT_FOUND,
-        Code::InvalidArgument => StatusCode::BAD_REQUEST,
-        _ => {
-            tracing::error!(error = %e, "page failed");
-            StatusCode::INTERNAL_SERVER_ERROR
+fn error_page(e: SourceError, sign_out: bool) -> Response {
+    let (status, message) = match e {
+        SourceError::NotFound(message) => (StatusCode::NOT_FOUND, message),
+        SourceError::Invalid(message) => (StatusCode::BAD_REQUEST, message),
+        SourceError::Failed(message) => {
+            tracing::error!(error = %message, "page failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, message)
         }
     };
     let body = ErrorPage {
         status: status.as_u16(),
-        message: e.message,
+        message,
         sign_out,
     };
     match body.render() {
@@ -256,7 +262,10 @@ fn error_page(e: RuleError, sign_out: bool) -> Response {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests;
+
+#[cfg(test)]
+mod filter_tests {
     // Askama finds custom filters through a `filters` module in scope.
     use super::filters;
     use askama::Template;

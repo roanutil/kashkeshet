@@ -17,7 +17,7 @@ require reading another's internals.
 | `store/` | The `Reads`/`Writes` contract and its SQLite implementation | Decide permissions; know about agents' requests |
 | `format/` | Turning rule results into text or JSON within the size cap | Query storage or apply rules |
 | `mcp.rs` | Tool definitions; parse parameters, call `rules`, call `format` | Touch storage or decide permissions |
-| `web/` | The human's read-only pages, and logging in to them | Change anything except sign-in sessions, through `admission` |
+| `web/` | The human's read-only pages, and logging in to them. Pages read only through web's own contract (`web/source.rs`: `Source` and `Gate`), which the server provides over `rules` and `admission` (`web/real.rs`) and the preview provides from simulated data (`web/preview.rs`, run by `examples/web_preview.rs`) | Change anything except sign-in sessions, through `admission`; read `rules` outside `web/real.rs` |
 | `hosts.rs` | Which `Host` names the server answers to, for `/mcp` and the web page | Touch storage, rules, or HTTP library types |
 | `settings/` | Gathering a server's settings from flags, the config file and defaults; default paths | Read files or environment variables itself; check limits (that is `config.rs`) |
 | `config.rs` | Every limit, fixed setting and default, and the startup checks | Hold logic beyond checking settings |
@@ -49,14 +49,16 @@ injected `Entropy`. Never call `Utc::now`, `Instant::now`, tokio's timers, or
 **Injection.** A part receives what it depends on when it is built, through
 `rules::Deps` or `app::Parts`. Do not create a dependency inside the part that
 uses it. Do not add a trait in front of `Rules`; there is one implementation.
+(`web::Source` is not one: it is the web page's contract for its own needs,
+with two implementations, the server's and the preview's.)
 
 **Library types.** Third-party types do not appear in our interfaces. Wrap them
 in our own types inside the part that uses the library: `events::Subscription`
 over tokio's broadcast receiver, `shutdown::Shutdown` over tokio-util's
 cancellation token, `store` over rusqlite. rmcp stays in `mcp.rs` and
-`app.rs`; askama stays in `web/`; axum stays in `web/`, `app.rs`, and
-`main.rs`, which serves the router; toml stays in `settings/`; clap stays in
-`main.rs`.
+`app.rs`; askama stays in `web/`; axum stays in `web/`, `app.rs`, `main.rs`
+and `examples/web_preview.rs`, which serve the router; toml stays in
+`settings/`; clap stays in `main.rs` and `examples/`.
 
 **Settings and defaults.** Every limit or fixed value lives in `config.rs`,
 with its default written out. Settings agents or operators can change are

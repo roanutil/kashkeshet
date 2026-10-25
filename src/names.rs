@@ -20,6 +20,32 @@ impl Entropy for OsEntropy {
     }
 }
 
+/// Entropy that repeats from a seed: the same seed gives the same numbers in
+/// the same order. For simulations such as the web preview; never for tokens
+/// or keys. (SplitMix64.)
+pub struct SeededEntropy(std::sync::atomic::AtomicU64);
+
+impl SeededEntropy {
+    pub fn new(seed: u64) -> SeededEntropy {
+        SeededEntropy(std::sync::atomic::AtomicU64::new(seed))
+    }
+}
+
+impl Entropy for SeededEntropy {
+    fn below(&self, n: usize) -> usize {
+        const GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+        let state = self
+            .0
+            .fetch_add(GAMMA, std::sync::atomic::Ordering::Relaxed)
+            .wrapping_add(GAMMA);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (z % n as u64) as usize
+    }
+}
+
 /// Characters used in channel IDs and tokens.
 pub(crate) const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -122,6 +148,17 @@ pub mod testing {
 mod tests {
     use super::*;
     use testing::SeqEntropy;
+
+    #[test]
+    fn seeded_entropy_repeats_from_its_seed() {
+        let draws = |seed| {
+            let e = SeededEntropy::new(seed);
+            (0..20).map(|_| e.below(1000)).collect::<Vec<_>>()
+        };
+        assert_eq!(draws(7), draws(7));
+        assert_ne!(draws(7), draws(8));
+        assert!(draws(7).iter().all(|&n| n < 1000));
+    }
 
     #[test]
     fn shapes() {

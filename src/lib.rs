@@ -13,11 +13,11 @@ pub mod provenance;
 pub mod settings;
 pub mod shutdown;
 pub mod store;
+pub mod web;
 
 mod events;
 mod format;
 mod mcp;
 mod rules;
-mod web;
 
 pub use mcp::DEFAULT_INSTRUCTIONS;
