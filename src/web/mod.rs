@@ -1,13 +1,16 @@
 //! The human's read-only view: pages for all channels, one channel, and one
-//! agent, plus a stream of new messages for live updates.
+//! agent, plus a stream of new messages for live updates. Requests naming a
+//! host that is not allowed are refused, as they are on `/mcp`.
 
 use crate::config::WEB_KEEP_ALIVE;
 use crate::events::Notice;
+use crate::hosts::AllowedHosts;
 use crate::rules::{AgentInfo, ChannelInfo, Code, Message, RuleError, Rules, ServerRunInfo};
 use askama::Template;
 use axum::Router;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -15,13 +18,36 @@ use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
 
-pub fn router(rules: Rules) -> Router {
+pub fn router(rules: Rules, hosts: AllowedHosts) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/channels/{id}", get(channel))
         .route("/agents/{name}", get(agent))
         .route("/events", get(events))
         .with_state(rules)
+        .layer(middleware::from_fn_with_state(hosts, check_host))
+}
+
+/// Serves the request only if its `Host` is allowed. Without this, a site
+/// whose name was pointed at this machine (DNS rebinding) could read every
+/// page from the human's browser.
+async fn check_host(State(hosts): State<AllowedHosts>, request: Request, next: Next) -> Response {
+    // HTTP/2 carries the host in the URI instead of a `Host` header.
+    let host = match request.headers().get(header::HOST) {
+        Some(value) => value.to_str().ok().map(str::to_string),
+        None => request.uri().authority().map(|a| a.to_string()),
+    };
+    let allowed = host.as_deref().is_some_and(|h| hosts.allows(h));
+    if allowed {
+        next.run(request).await
+    } else {
+        tracing::warn!(host = ?host, "refused a web request naming a host that is not allowed");
+        (
+            StatusCode::FORBIDDEN,
+            "Forbidden: Host header is not allowed",
+        )
+            .into_response()
+    }
 }
 
 #[derive(Template)]

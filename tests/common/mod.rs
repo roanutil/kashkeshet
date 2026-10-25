@@ -5,6 +5,7 @@ use kashkeshet::admission::Admission;
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::Limits;
+use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::shutdown::Shutdown;
@@ -33,6 +34,7 @@ pub fn test_config() -> AppConfig {
         admission: Admission::Open,
         limits: Limits::DEFAULT,
         allowed_origins: vec!["http://localhost:6274".into()],
+        allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
         instructions: "test instructions: call register".into(),
     }
 }
