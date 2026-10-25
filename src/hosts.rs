@@ -82,6 +82,16 @@ impl AllowedHosts {
     }
 }
 
+/// True if `header`, a `Host` header value, names this machine's loopback
+/// interface (one of `ALWAYS_ALLOWED_HOSTS`), on any port.
+pub fn is_loopback(header: &str) -> bool {
+    parse(header).is_some_and(|asked| {
+        ALWAYS_ALLOWED_HOSTS
+            .iter()
+            .any(|name| parse(name).is_some_and(|loopback| loopback.name == asked.name))
+    })
+}
+
 /// A host name or IP address, lowercased and without IPv6 brackets, with an
 /// optional port.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -247,5 +257,28 @@ mod tests {
             h.extra(),
             ["Host.Docker.Internal", "[fd7a::1]:7420", "x.example:8"]
         );
+    }
+
+    #[test]
+    fn loopback_names_are_told_apart() {
+        for header in [
+            "localhost",
+            "LOCALHOST:7420",
+            "127.0.0.1:7420",
+            "[::1]:7420",
+            "::1",
+        ] {
+            assert!(is_loopback(header), "{header}");
+        }
+        for header in [
+            "host.docker.internal:7420",
+            "my-mac.tail1234.ts.net",
+            "127.0.0.2",
+            "localhost.evil.example",
+            "localhost:abc",
+            "",
+        ] {
+            assert!(!is_loopback(header), "{header}");
+        }
     }
 }

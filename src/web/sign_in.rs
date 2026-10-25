@@ -6,6 +6,7 @@
 use super::page;
 use crate::admission::{Credentials, Decision, SignIn, WebAdmission};
 use crate::config::WEB_SESSION_COOKIE;
+use crate::hosts;
 use askama::Template;
 use axum::Form;
 use axum::extract::{Request, State};
@@ -76,7 +77,7 @@ pub async fn login(
             StatusCode::SEE_OTHER,
             [
                 (LOCATION, "/".to_string()),
-                (SET_COOKIE, cookie(&session_id, lifetime)),
+                (SET_COOKIE, cookie(&session_id, lifetime, secure(&headers))),
             ],
         )
             .into_response(),
@@ -103,7 +104,7 @@ pub async fn logout(State(gate): State<Arc<WebAdmission>>, headers: HeaderMap) -
         StatusCode::SEE_OTHER,
         [
             (LOCATION, LOGIN_PATH.to_string()),
-            (SET_COOKIE, cookie("", Duration::ZERO)),
+            (SET_COOKIE, cookie("", Duration::ZERO, secure(&headers))),
         ],
     )
         .into_response()
@@ -117,13 +118,25 @@ fn cross_site() -> Response {
         .into_response()
 }
 
-/// The session cookie, lasting `lifetime`. `Secure` is set: browsers treat
-/// `http://localhost` as secure, and `tailscale serve` gives HTTPS.
-fn cookie(session_id: &str, lifetime: Duration) -> String {
+/// The session cookie, lasting `lifetime`, marked `Secure` if `secure`.
+fn cookie(session_id: &str, lifetime: Duration, secure: bool) -> String {
+    let secure = if secure { " Secure;" } else { "" };
     format!(
-        "{WEB_SESSION_COOKIE}={session_id}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age={}",
+        "{WEB_SESSION_COOKIE}={session_id}; Path=/; HttpOnly; SameSite=Strict;{secure} Max-Age={}",
         lifetime.as_secs()
     )
+}
+
+/// Whether the cookie for this request is marked `Secure`. It is, unless the
+/// request was sent to a loopback name: some browsers (Safari) drop `Secure`
+/// cookies on `http://localhost`, and loopback traffic never leaves the
+/// machine. Other names, such as a tailnet name behind `tailscale serve`'s
+/// HTTPS, keep it. A request without a `Host` header keeps it too.
+fn secure(headers: &HeaderMap) -> bool {
+    !headers
+        .get(HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(hosts::is_loopback)
 }
 
 /// The session ID from the request's cookies, if it sent one.
@@ -206,10 +219,22 @@ mod tests {
 
     #[test]
     fn the_cookie_is_locked_down() {
-        let c = cookie("abc", Duration::from_secs(60));
         assert_eq!(
-            c,
+            cookie("abc", Duration::from_secs(60), true),
             "kkt_session=abc; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=60"
         );
+        assert_eq!(
+            cookie("abc", Duration::from_secs(60), false),
+            "kkt_session=abc; Path=/; HttpOnly; SameSite=Strict; Max-Age=60"
+        );
+    }
+
+    #[test]
+    fn only_loopback_hosts_drop_secure() {
+        assert!(!secure(&headers(&[(HOST, "localhost:7420")])));
+        assert!(!secure(&headers(&[(HOST, "127.0.0.1:7420")])));
+        assert!(secure(&headers(&[(HOST, "mac.tail1234.ts.net")])));
+        assert!(secure(&headers(&[(HOST, "host.docker.internal:7420")])));
+        assert!(secure(&HeaderMap::new()));
     }
 }
