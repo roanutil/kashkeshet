@@ -7,6 +7,7 @@
 //! Tokio's broadcast channel does the work, but stays inside this module.
 
 use crate::config::EVENT_BUFFER;
+use crate::shutdown::Shutdown;
 use futures::Stream;
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -27,6 +28,7 @@ pub struct NewMessage {
 #[derive(Clone)]
 pub struct Events {
     sender: broadcast::Sender<NewMessage>,
+    shutdown: Option<Shutdown>,
 }
 
 impl Events {
@@ -37,7 +39,16 @@ impl Events {
     /// Keeps `buffer` notices for a slow subscriber before it starts missing them.
     pub fn with_buffer(buffer: usize) -> Events {
         let (sender, _) = broadcast::channel(buffer);
-        Events { sender }
+        Events {
+            sender,
+            shutdown: None,
+        }
+    }
+
+    /// Ends subscriptions when the server stops, even while publishers exist.
+    pub fn until_stopped(mut self, shutdown: Shutdown) -> Self {
+        self.shutdown = Some(shutdown);
+        self
     }
 
     /// Tells every current subscriber about a new message.
@@ -53,6 +64,7 @@ impl Events {
     pub fn subscribe(&self) -> Subscription {
         Subscription {
             receiver: self.sender.subscribe(),
+            shutdown: self.shutdown.clone(),
         }
     }
 }
@@ -70,13 +82,24 @@ pub enum Notice {
 /// One subscriber's view of new messages.
 pub struct Subscription {
     receiver: broadcast::Receiver<NewMessage>,
+    shutdown: Option<Shutdown>,
 }
 
 impl Subscription {
     /// The next notice, or `None` once nothing more can be published (every
-    /// `Events` handle is gone, as when the server shuts down).
+    /// `Events` handle is gone), or the server's shutdown signal is stopped.
     pub async fn next(&mut self) -> Option<Notice> {
-        match self.receiver.recv().await {
+        let received = tokio::select! {
+            biased;
+            () = async {
+                match &self.shutdown {
+                    Some(shutdown) => shutdown.stopped().await,
+                    None => std::future::pending().await,
+                }
+            } => return None,
+            received = self.receiver.recv() => received,
+        };
+        match received {
             Ok(message) => Some(Notice::Message(message)),
             Err(RecvError::Lagged(n)) => Some(Notice::Missed(n)),
             Err(RecvError::Closed) => None,
@@ -102,6 +125,20 @@ impl Default for Events {
 mod tests {
     use super::*;
     use futures::StreamExt;
+
+    #[tokio::test]
+    async fn shutdown_ends_pending_and_new_subscriptions_with_publishers_alive() {
+        let shutdown = Shutdown::new();
+        let events = Events::new().until_stopped(shutdown.clone());
+        let mut sub = events.subscribe();
+        let next = sub.next();
+        tokio::pin!(next);
+        assert!(futures::poll!(&mut next).is_pending());
+        shutdown.stop();
+        assert!(next.await.is_none());
+        events.publish(message(1));
+        assert!(events.subscribe().next().await.is_none());
+    }
 
     fn message(id: i64) -> NewMessage {
         NewMessage {

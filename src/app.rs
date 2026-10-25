@@ -86,7 +86,7 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
     let web_admission = Arc::new(WebAdmission::new(admission.clone(), sessions));
     let rules = Rules::new(Deps {
         db: parts.db,
-        events: parts.events,
+        events: parts.events.until_stopped(shutdown.clone()),
         clock: parts.clock,
         entropy: parts.entropy,
         sends: parts.sends,

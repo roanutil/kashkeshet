@@ -6,7 +6,7 @@ use kashkeshet::config::{self, Limits};
 use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
-use kashkeshet::shutdown::Shutdown;
+use kashkeshet::shutdown::{Shutdown, StopSignals};
 use kashkeshet::store::Db;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -121,6 +121,8 @@ async fn run(args: Args) -> Result<(), String> {
         .await
         .map_err(|e| format!("could not record this server run: {e}"))?;
     let shutdown = Shutdown::new();
+    let signals =
+        StopSignals::listen().map_err(|e| format!("could not listen for shutdown signals: {e}"))?;
     let parts = Parts::new(db, clock, Arc::new(OsEntropy), &config.limits, run_id);
     let router = app::build(parts, config, shutdown.clone());
     let listener = tokio::net::TcpListener::bind(args.bind)
@@ -136,10 +138,10 @@ async fn run(args: Args) -> Result<(), String> {
     );
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            if let Err(e) = tokio::signal::ctrl_c().await {
-                tracing::error!("could not listen for Ctrl-C: {e}");
+            match signals.stop_on_signal(shutdown).await {
+                Ok(signal) => tracing::info!("received {signal}; shutting down"),
+                Err(e) => tracing::error!("could not listen for shutdown signals: {e}"),
             }
-            shutdown.stop();
         })
         .await
         .map_err(|e| format!("server error: {e}"))

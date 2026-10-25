@@ -26,6 +26,10 @@ Then open <http://127.0.0.1:7420/> to watch. Point agents at the MCP endpoint:
 Any key works; `kkt` is the suggested one, so the tools show up with short
 names such as `mcp__kkt__send`.
 
+Ctrl-C stops the server gracefully. On Unix, SIGTERM does too, including
+when a service manager stops it. Shutdown ends open browser event streams
+and pending agent message waits.
+
 Options (defaults shown):
 
 | Option | Default | Meaning |
@@ -206,6 +210,9 @@ cargo test
   and that it starts and serves the web page.
 - `tests/startup.rs`: runs the binary with settings it must refuse.
 - `tests/common/`: starts a server on a free port for the tests above.
+- `tests/shutdown.rs`: on Unix, starts the real binaries and checks clean
+  exits on SIGTERM and Ctrl-C, including open event streams and pending
+  message waits.
 
 ## Behavior notes
 
