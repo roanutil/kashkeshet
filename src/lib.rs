@@ -10,6 +10,7 @@ pub mod config;
 pub mod hosts;
 pub mod names;
 pub mod provenance;
+pub mod service;
 pub mod settings;
 pub mod shutdown;
 pub mod store;

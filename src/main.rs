@@ -6,11 +6,12 @@ use kashkeshet::config::{self, DEFAULT_BIND, InvalidSetting, LEGACY_DB_PATH, Lim
 use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
+use kashkeshet::service::{DryRun, Manager, OsSystem, Spec};
 use kashkeshet::settings::{self, Env, Platform, ServeOptions, ServeSettings};
 use kashkeshet::shutdown::{Shutdown, StopSignals};
 use kashkeshet::store::Db;
 use kashkeshet::{Operator, Revoked};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,6 +63,11 @@ enum Command {
         #[arg(long, global = true)]
         config: Option<PathBuf>,
     },
+    /// Run `kkt serve` in the background: launchd on macOS, systemd on Linux.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -73,6 +79,48 @@ enum AgentCommand {
     Revoke {
         /// The agent's name, such as amber-falcon.
         name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ServiceCommand {
+    /// Install the service, start it, and have it start at each login.
+    ///
+    /// The service runs `kkt serve` with absolute paths: this program, the
+    /// config file if there is one, and the database unless the config file
+    /// names it. Other settings are read from the config file each time the
+    /// service starts. Installing again replaces the service.
+    Install {
+        /// The config file. By default ~/.config/kkt/config.toml
+        /// ($XDG_CONFIG_HOME/kkt/config.toml), if it exists.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// The database file, in place of the config file's or the default.
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// The access key file, in place of the config file's.
+        #[arg(long)]
+        access_key_file: Option<PathBuf>,
+        /// Show what would be written and run, and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Stop the service and remove it. The database, config and logs stay.
+    Uninstall,
+    /// Start the installed service.
+    Start,
+    /// Stop the service until it is started again or you next log in.
+    Stop,
+    /// Show whether the service is installed and running.
+    Status,
+    /// Show the service's log.
+    Logs {
+        /// How many of the last lines to show.
+        #[arg(long, default_value_t = config::DEFAULT_LOG_LINES)]
+        lines: usize,
+        /// Keep showing new lines as they come.
+        #[arg(long, short)]
+        follow: bool,
     },
 }
 
@@ -173,7 +221,12 @@ impl ServeFlags {
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt().with_target(false).init();
+    // Color codes only for a terminal: a service's log file or the journal
+    // would show them as raw escape characters.
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_ansi(std::io::stdout().is_terminal())
+        .init();
     let cli = Cli::parse();
     let env = process_env();
     let result = match cli.command {
@@ -190,6 +243,7 @@ async fn main() -> std::process::ExitCode {
             db,
             config,
         }) => agent(&env, command, db, config).await,
+        Some(Command::Service { command }) => service(&env, command),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -221,13 +275,9 @@ async fn serve_from_config(
     config: Option<PathBuf>,
     flags: ServeFlags,
 ) -> Result<(), String> {
-    let (config_file, from_file) = read_config(env, config)?;
-    let flags = flags.options();
-    let sources = Sources {
-        file: config_file.map(|path| (path, from_file.clone())),
-        flags: flags.clone(),
-    };
-    let options = flags.over(from_file);
+    let loaded = load_serve_options(env, config, flags.options())?;
+    let sources = loaded.sources();
+    let options = loaded.flags.over(loaded.from_file);
     let default_db = match &options.db {
         // Given, so the default is never used.
         Some(given) => given.clone(),
@@ -244,6 +294,40 @@ async fn serve_from_config(
     };
     let settings = options.resolve(default_db);
     serve(settings, &sources).await
+}
+
+/// What `kkt serve` reads before applying defaults: the config file, if
+/// any, what it gives, and what the flags give.
+struct Loaded {
+    config_file: Option<PathBuf>,
+    from_file: ServeOptions,
+    flags: ServeOptions,
+}
+
+impl Loaded {
+    fn sources(&self) -> Sources {
+        Sources {
+            file: self
+                .config_file
+                .clone()
+                .map(|path| (path, self.from_file.clone())),
+            flags: self.flags.clone(),
+        }
+    }
+}
+
+/// Reads the config file `kkt serve` would read, and puts it with `flags`.
+fn load_serve_options(
+    env: &Env,
+    config: Option<PathBuf>,
+    flags: ServeOptions,
+) -> Result<Loaded, String> {
+    let (config_file, from_file) = read_config(env, config)?;
+    Ok(Loaded {
+        config_file,
+        from_file,
+        flags,
+    })
 }
 
 /// The config file to use (`config`, else the default one if it exists),
@@ -357,7 +441,16 @@ impl Sources {
     }
 }
 
-async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String> {
+/// Settings that passed every startup check, with the files they name read.
+struct Checked {
+    db_path: PathBuf,
+    bind: SocketAddr,
+    config: AppConfig,
+}
+
+/// Runs the startup checks on `settings` and reads the files they name.
+/// The errors name the bad setting, and the config file if it set it.
+fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked, String> {
     let ServeSettings {
         db: db_path,
         bind,
@@ -389,8 +482,6 @@ async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String>
         }
         None => Admission::Open,
     };
-    let db =
-        Db::open(&db_path).map_err(|e| format!("could not open {}: {e}", db_path.display()))?;
     let config = AppConfig {
         admission,
         limits,
@@ -399,6 +490,21 @@ async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String>
         instructions,
         config_file: sources.file.as_ref().map(|(p, _)| p.display().to_string()),
     };
+    Ok(Checked {
+        db_path,
+        bind,
+        config,
+    })
+}
+
+async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String> {
+    let Checked {
+        db_path,
+        bind,
+        config,
+    } = check_settings(settings, sources)?;
+    let db =
+        Db::open(&db_path).map_err(|e| format!("could not open {}: {e}", db_path.display()))?;
     let clock = Arc::new(SystemClock);
     let run = ServerRun::new(Build::CURRENT, &config);
     let access = match config.admission.key_source() {
@@ -446,12 +552,7 @@ fn create_key(env: &Env, path: Option<PathBuf>, force: bool, show: bool) -> Resu
             .access_key_file()
             .ok_or("no home directory to keep the key in: set HOME or pass --path".to_string())?,
     };
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    }
-    let key = SharedKey::generate(&OsEntropy);
-    write_key_file(&path, &key, force)?;
+    let key = new_key_file(&path, force)?;
     let shown = path.display();
     println!("Wrote a new access key to {shown}");
     println!();
@@ -468,6 +569,18 @@ fn create_key(env: &Env, path: Option<PathBuf>, force: bool, show: bool) -> Resu
         println!("{key}");
     }
     Ok(())
+}
+
+/// Makes a new random key and writes it to `path`, creating its folder if
+/// needed. Returns the key.
+fn new_key_file(path: &Path, force: bool) -> Result<String, String> {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    }
+    let key = SharedKey::generate(&OsEntropy);
+    write_key_file(path, &key, force)?;
+    Ok(key)
 }
 
 /// Writes `key` to `path`, readable and writable only by its owner. Refuses
@@ -503,4 +616,167 @@ fn write_key_file(path: &Path, key: &str, force: bool) -> Result<(), String> {
         .map_err(|e| format!("could not restrict {}: {e}", path.display()))?;
     }
     writeln!(file, "{key}").map_err(|e| format!("could not write {}: {e}", path.display()))
+}
+
+/// `kkt service ...`: runs the command against this system's service
+/// manager and prints what happened.
+fn service(env: &Env, command: ServiceCommand) -> Result<(), String> {
+    let manager = Manager::for_this_os(env).map_err(|e| e.to_string())?;
+    let system = OsSystem;
+    let said = match command {
+        ServiceCommand::Install {
+            config,
+            db,
+            access_key_file,
+            dry_run,
+        } => {
+            let plan = service_plan(env, config, db, access_key_file)?;
+            if dry_run {
+                let dry = DryRun::new(&system);
+                manager
+                    .install(&dry, &plan.spec)
+                    .map_err(|e| e.to_string())?;
+                let mut said = vec!["Dry run: nothing was changed.".to_string()];
+                if let Some(key) = &plan.new_key {
+                    said.push(format!(
+                        "Would create a new access key at {}",
+                        key.display()
+                    ));
+                }
+                said.extend(dry.actions());
+                Ok(said)
+            } else {
+                let mut said = Vec::new();
+                if let Some(key) = &plan.new_key {
+                    new_key_file(key, false)?;
+                    said.push(format!("Created a new access key at {}", key.display()));
+                }
+                manager.install(&system, &plan.spec).map(|done| {
+                    said.extend(done);
+                    said
+                })
+            }
+        }
+        ServiceCommand::Uninstall => manager.uninstall(&system),
+        ServiceCommand::Start => manager.start(&system),
+        ServiceCommand::Stop => manager.stop(&system),
+        ServiceCommand::Status => manager.status(&system),
+        ServiceCommand::Logs { lines, follow } => manager.logs(&system, lines, follow),
+    }
+    .map_err(|e| e.to_string())?;
+    for line in said {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// What `kkt service install` does: the service to install, and the access
+/// key to create first, if any.
+struct ServicePlan {
+    spec: Spec,
+    new_key: Option<PathBuf>,
+}
+
+/// What the service runs: `kkt serve` with absolute paths, since a service
+/// starts in a working directory of the manager's choosing. The config file
+/// is passed if there is one. The database and the access key file are
+/// passed unless the config file names them, so the service never depends
+/// on a default being worked out the same way later. A key is always in
+/// effect: with none given, the default key file is used, and made if it
+/// is missing. The settings are checked now, so a bad one fails here rather
+/// than in a loop of restarts.
+fn service_plan(
+    env: &Env,
+    config: Option<PathBuf>,
+    db: Option<PathBuf>,
+    access_key_file: Option<PathBuf>,
+) -> Result<ServicePlan, String> {
+    let program = std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .map_err(|e| format!("could not find this program's path: {e}"))?;
+    let config = match config {
+        Some(path) => Some(path.canonicalize().map_err(|e| {
+            format!(
+                "invalid setting: config could not be read from {}: {e}",
+                path.display()
+            )
+        })?),
+        None => None,
+    };
+    let absolute = |path: PathBuf| {
+        std::path::absolute(&path)
+            .map_err(|e| format!("could not make {} absolute: {e}", path.display()))
+    };
+    let flags = ServeOptions {
+        db: db.map(absolute).transpose()?,
+        access_key_file: access_key_file.map(absolute).transpose()?,
+        ..ServeOptions::NONE
+    };
+    let loaded = load_serve_options(env, config, flags)?;
+    let passed_db = match (&loaded.flags.db, &loaded.from_file.db) {
+        (Some(db), _) => Some(db.clone()),
+        // Read from the config file each time the service starts.
+        (None, Some(_)) => None,
+        (None, None) => Some(env.default_db(Platform::CURRENT).ok_or(
+            "no home directory to keep the database in: set HOME or pass --db".to_string(),
+        )?),
+    };
+    let (passed_key, new_key) = match (
+        &loaded.flags.access_key_file,
+        &loaded.from_file.access_key_file,
+    ) {
+        (Some(key), _) => (Some(key.clone()), None),
+        // Read from the config file each time the service starts.
+        (None, Some(_)) => (None, None),
+        (None, None) => {
+            let key = env.access_key_file().ok_or(
+                "no home directory to keep the access key in: set HOME or pass --access-key-file"
+                    .to_string(),
+            )?;
+            let new = (!key.exists()).then(|| key.clone());
+            (Some(key), new)
+        }
+    };
+    let mut options = loaded.flags.clone().over(loaded.from_file.clone());
+    let db_in_effect = match (&passed_db, &options.db) {
+        (Some(db), _) | (None, Some(db)) => db.clone(),
+        (None, None) => return Err("no database for the service".to_string()),
+    };
+    // A key about to be made is good by construction; check any other.
+    options.access_key_file = match &new_key {
+        Some(_) => None,
+        None => passed_key.clone().or(options.access_key_file),
+    };
+    let db_folder = db_in_effect.parent().map(Path::to_path_buf);
+    check_settings(options.resolve(db_in_effect), &loaded.sources())?;
+
+    let text = |path: &Path| {
+        path.to_str()
+            .map(str::to_string)
+            .ok_or_else(|| format!("{} is not valid UTF-8", path.display()))
+    };
+    let mut args = vec!["serve".to_string()];
+    let mut dirs = Vec::new();
+    if let Some(config) = &loaded.config_file {
+        args.extend(["--config".to_string(), text(config)?]);
+    }
+    if let Some(db) = &passed_db {
+        args.extend(["--db".to_string(), text(db)?]);
+    }
+    // serve makes the database's folder only for the default database, so
+    // make it here for whichever one the service will use.
+    if let Some(dir) = db_folder {
+        dirs.push(dir);
+    }
+    if let Some(key) = &passed_key {
+        args.extend(["--access-key-file".to_string(), text(key)?]);
+    }
+    Ok(ServicePlan {
+        spec: Spec {
+            program,
+            args,
+            dirs,
+        },
+        new_key,
+    })
 }
