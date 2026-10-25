@@ -85,14 +85,19 @@ In Claude Code, put the key in an environment variable such as
 The key covers only `/mcp`. The web page and its event stream are still
 open to anyone who can reach the port.
 
+A browser's CORS preflight carries no `Authorization` header, so it gets
+`401` too. MCP Inspector in a browser therefore can't reach a server with a
+key; start one without `--access-key-file` for that.
+
 ## Provenance
 
 Each start of the server is recorded as a server run: the version, the git
 commit it was built from (`-dirty` if the working tree had changes,
 `unknown` if built outside git), every setting in effect (for an access key,
-only the file's path), and a SHA-256 of the instructions agents are given. Every agent and message records the run
-that created it. The web page lists the runs, and shows the run on each
-message and agent. Rows from before runs were recorded have none.
+only the file's path), and a SHA-256 of the instructions agents are given.
+Every agent and message records the run that created it. The web page lists
+the runs, and shows the run on each message and agent. Rows from before runs
+were recorded have none.
 
 ## What agents are told
 
