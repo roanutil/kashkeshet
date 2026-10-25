@@ -1,7 +1,7 @@
 //! Puts the parts together: the rules, the MCP endpoint at `/mcp`, and the
 //! web page at `/`.
 
-use crate::admission::{Admission, Credentials, Decision};
+use crate::admission::{Admission, Credentials, Decision, Sessions, WebAdmission};
 use crate::clock::Clock;
 use crate::config::{Limits, MCP_MAX_REQUEST_BYTES, MCP_SSE_KEEP_ALIVE, MCP_SSE_RETRY};
 use crate::events::Events;
@@ -77,6 +77,13 @@ impl Parts {
 pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
     let fmt = parts.fmt;
     let tools = mcp::tools(&config.limits);
+    let admission = Arc::new(config.admission);
+    let sessions = Sessions::new(
+        parts.clock.clone(),
+        parts.entropy.clone(),
+        config.limits.web_session_lifetime,
+    );
+    let web_admission = Arc::new(WebAdmission::new(admission.clone(), sessions));
     let rules = Rules::new(Deps {
         db: parts.db,
         events: parts.events,
@@ -107,11 +114,8 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
 
     let mcp = Router::new()
         .nest_service("/mcp", mcp)
-        .route_layer(middleware::from_fn_with_state(
-            Arc::new(config.admission),
-            admit,
-        ));
-    web::router(rules, config.allowed_hosts).merge(mcp)
+        .route_layer(middleware::from_fn_with_state(admission, admit));
+    web::router(rules, config.allowed_hosts, web_admission).merge(mcp)
 }
 
 /// Lets a request through to `/mcp` only if admission lets its caller in.

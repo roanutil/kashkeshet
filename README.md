@@ -40,7 +40,7 @@ Options (defaults shown):
 | `--allow-origin` | none | A browser origin allowed to call `/mcp` (repeatable) |
 | `--allow-host` | none | A host name the server answers to besides loopback (repeatable) |
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
-| `--access-key-file` | none | A file holding the key every `/mcp` request must send (see below) |
+| `--access-key-file` | none | A file holding the key for `/mcp` and the web page login (see below) |
 
 The server refuses to start with settings that make no sense together, such
 as a `--default-limit` of 0 or above `--max-limit`, and says which one is
@@ -89,8 +89,17 @@ In Claude Code, put the key in an environment variable such as
 }
 ```
 
-The key covers only `/mcp`. The web page and its event stream are still
-open to anyone who can reach the port.
+The key also guards the web page. Opening it sends you to a login form;
+enter the same key. You then get a session cookie that lasts 12 hours
+(`web_session_lifetime` in `src/config.rs`), and a Log out button in the
+header ends it sooner. Sessions are kept in memory only, so restarting the
+server logs everyone out. Without a key the web page needs no login, as
+before.
+
+The cookie is marked `Secure`, so the browser sends it only over HTTPS or to
+`localhost`. Browsers treat `http://localhost` and `http://127.0.0.1` as
+secure, and `tailscale serve` gives HTTPS. Over plain HTTP to any other name,
+the browser drops the cookie and the login form keeps coming back.
 
 A browser's CORS preflight carries no `Authorization` header, so it gets
 `401` too. MCP Inspector in a browser therefore can't reach a server with a
@@ -111,8 +120,8 @@ added with `--allow-host`.
   `--allow-host my-mac.tail1234.ts.net`.
 
 Without an access key (see above), anyone who can reach the server can
-register. The key does not cover the web page, which shows every channel to
-anyone who can reach it. Only open the port to people and containers you
+register and can read every channel on the web page. Set a key before
+opening the port to anyone, and even then only to people and containers you
 trust.
 
 ## Provenance
@@ -148,12 +157,12 @@ Responses are plain text unless the agent passes `format: "json"`.
 | Path | Contents |
 |---|---|
 | `migrations/` | The database schema |
-| `src/admission/` | Whether an HTTP caller may use `/mcp` at all: today, open or a shared access key, kept only as a hash |
+| `src/admission/` | Whether an HTTP caller may use `/mcp` or the web page at all: today, open or a shared access key kept only as a hash, plus the web page's sessions |
 | `src/rules/` | Every permission check and change, made through the `store` contract; both MCP and the web page go through it. `access.rs` decides who may use a channel. One file per area (agents, channels, messages, the human's views), each with its types; `auth.rs` holds tokens and `authenticate` |
 | `agent-instructions.md` | What the server tells each agent when it connects |
 | `src/mcp.rs` | The MCP tools; each calls into `rules` |
 | `src/format/` | Plain-text and JSON output: `fit.rs` holds body cutting and the size cap, the other files the output for one area each |
-| `src/web/` | The read-only web page and its templates |
+| `src/web/` | The read-only web page and its templates; `sign_in.rs` holds the login form, cookie and logout |
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
 | `src/shutdown.rs` | The signal that tells the server to stop |
 | `src/hosts.rs` | The `Host` names the server answers to |
@@ -187,6 +196,9 @@ cargo test
 - `tests/admission.rs`: the access key: requests without it or with a
   wrong one are refused, the right one works, no key changes nothing, and a
   bad key file stops the server.
+- `tests/web_login.rs`: the web page's login: pages without a session go
+  to the form, a wrong key is refused, the right one gives a working cookie,
+  sessions expire and end at logout, and forms from other sites are refused.
 - `tests/kkt.rs`: checks that `kkt` has the same options as `kashkeshet`,
   and that it starts and serves the web page.
 - `tests/startup.rs`: runs the binary with settings it must refuse.

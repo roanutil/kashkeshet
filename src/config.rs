@@ -33,6 +33,11 @@ pub const MCP_MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 /// `Host` names the server always accepts, on any port, for both `/mcp` and
 /// the web page. `--allow-host` adds more. See `hosts`.
 pub const ALWAYS_ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "::1"];
+/// Characters in a web session ID, from the 36-character alphabet: about
+/// 165 bits.
+pub const WEB_SESSION_ID_CHARS: usize = 32;
+/// The cookie that carries a web session ID.
+pub const WEB_SESSION_COOKIE: &str = "kkt_session";
 /// Shortest access key, in bytes. 32 random hex digits carry 128 bits.
 pub const MIN_ACCESS_KEY_BYTES: usize = 32;
 /// Smallest allowed `max_response_bytes`. A smaller cap could cut a
@@ -69,6 +74,8 @@ pub struct Limits {
     pub member_preview: usize,
     /// Characters of a channel purpose shown in `list_channels`.
     pub purpose_preview_chars: usize,
+    /// How long a web page sign-in lasts, when an access key is set.
+    pub web_session_lifetime: Duration,
 }
 
 impl Limits {
@@ -87,6 +94,7 @@ impl Limits {
         last_seen_interval: Duration::from_secs(60),
         member_preview: 3,
         purpose_preview_chars: 120,
+        web_session_lifetime: Duration::from_secs(12 * 60 * 60),
     };
 
     /// Checks that these limits make sense together. The server refuses to
@@ -113,6 +121,12 @@ impl Limits {
             return Err(InvalidSetting::new(
                 "max_limit",
                 "must be at least default_limit",
+            ));
+        }
+        if self.web_session_lifetime < Duration::from_secs(1) {
+            return Err(InvalidSetting::new(
+                "web_session_lifetime",
+                "must be at least 1 second",
             ));
         }
         if self.max_wait < self.default_wait {
@@ -252,6 +266,18 @@ mod tests {
             ..Limits::DEFAULT
         };
         assert_eq!(limits.check().map_err(|e| e.name), Err("max_wait"));
+    }
+
+    #[test]
+    fn web_sessions_last_at_least_a_second() {
+        let limits = Limits {
+            web_session_lifetime: Duration::from_millis(999),
+            ..Limits::DEFAULT
+        };
+        assert_eq!(
+            limits.check().map_err(|e| e.name),
+            Err("web_session_lifetime")
+        );
     }
 
     #[test]

@@ -1,15 +1,25 @@
-//! Admission: whether an HTTP caller is let in to `/mcp` at all. This comes
-//! before agent tokens (`rules::auth`) and channel access (`rules::access`),
-//! and knows nothing about either.
+//! Admission: whether an HTTP caller is let in to `/mcp` or the web page at
+//! all. This comes before agent tokens (`rules::auth`) and channel access
+//! (`rules::access`), and knows nothing about either.
 //!
-//! The HTTP layer turns a request into [`Credentials`], asks
+//! For `/mcp`, the HTTP layer turns a request into [`Credentials`], asks
 //! [`Admission::decide`], and then acts on the [`Decision`]. Each way of
 //! admitting callers is one variant of [`Admission`]; a bearer-token
 //! validator for OAuth would be another.
+//!
+//! The web page asks [`WebAdmission`] instead. A viewer signs in once with
+//! credentials [`Admission`] accepts and gets a session; later requests are
+//! let in by the session alone.
 
+mod session;
 mod shared_key;
 
+pub use session::Sessions;
 pub use shared_key::SharedKey;
+
+use session::Lookup;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// How callers are admitted.
 pub enum Admission {
@@ -49,6 +59,13 @@ impl Credentials {
         };
         Credentials { presented }
     }
+
+    /// A key typed into a sign-in form, without surrounding whitespace.
+    pub fn from_key(key: &str) -> Credentials {
+        Credentials {
+            presented: Presented::Bearer(key.trim().as_bytes().to_vec()),
+        }
+    }
 }
 
 /// The answer for one caller.
@@ -76,6 +93,10 @@ pub enum Refusal {
     NotBearer,
     #[error("the access key is wrong")]
     WrongKey,
+    #[error("sign in first")]
+    NoSession,
+    #[error("the session has ended; sign in again")]
+    SessionEnded,
 }
 
 impl Admission {
@@ -104,9 +125,72 @@ impl Admission {
     }
 }
 
+/// Admission for the web page. With [`Admission::Open`], everyone sees it.
+/// Otherwise a viewer needs a live session.
+pub struct WebAdmission {
+    admission: Arc<Admission>,
+    sessions: Sessions,
+}
+
+/// The answer to a sign-in.
+pub enum SignIn {
+    /// Signed in. `session_id` goes back to the viewer and nowhere else; the
+    /// session lasts `lifetime`.
+    Started {
+        session_id: String,
+        lifetime: Duration,
+    },
+    Refused(Refusal),
+}
+
+impl WebAdmission {
+    pub fn new(admission: Arc<Admission>, sessions: Sessions) -> WebAdmission {
+        WebAdmission {
+            admission,
+            sessions,
+        }
+    }
+
+    /// Whether viewers must sign in. When false, `decide` admits everyone.
+    pub fn sign_in_required(&self) -> bool {
+        !matches!(*self.admission, Admission::Open)
+    }
+
+    /// Decides whether the viewer holding `session_id`, if any, is let in.
+    pub fn decide(&self, session_id: Option<&str>) -> Decision {
+        if !self.sign_in_required() {
+            return Decision::Admitted(Principal::Anyone);
+        }
+        match session_id.map(|id| self.sessions.lookup(id)) {
+            None => Decision::Refused(Refusal::NoSession),
+            Some(Lookup::Live(principal)) => Decision::Admitted(principal),
+            Some(Lookup::Unknown) => Decision::Refused(Refusal::SessionEnded),
+        }
+    }
+
+    /// Starts a session if `credentials` would be admitted to `/mcp`.
+    pub fn sign_in(&self, credentials: &Credentials) -> SignIn {
+        match self.admission.decide(credentials) {
+            Decision::Admitted(principal) => SignIn::Started {
+                session_id: self.sessions.start(principal),
+                lifetime: self.sessions.lifetime(),
+            },
+            Decision::Refused(refusal) => SignIn::Refused(refusal),
+        }
+    }
+
+    /// Ends the session with `session_id`, if there is one.
+    pub fn sign_out(&self, session_id: &str) {
+        self.sessions.end(session_id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::testing::FixedClock;
+    use crate::names::testing::SeqEntropy;
+    use chrono::{TimeZone, Utc};
 
     const KEY: &str = "0123456789abcdef0123456789abcdef";
 
@@ -171,5 +255,71 @@ mod tests {
     #[test]
     fn the_key_source_is_recorded_but_not_the_key() {
         assert_eq!(keyed().key_source(), Some("/keys/kkt"));
+    }
+
+    fn web(admission: Admission) -> (Arc<FixedClock>, WebAdmission) {
+        let start = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let clock = Arc::new(FixedClock::new(start));
+        let sessions = Sessions::new(
+            clock.clone(),
+            Arc::new(SeqEntropy::new(7)),
+            Duration::from_secs(3600),
+        );
+        (clock, WebAdmission::new(Arc::new(admission), sessions))
+    }
+
+    fn started(sign_in: SignIn) -> String {
+        match sign_in {
+            SignIn::Started { session_id, .. } => session_id,
+            SignIn::Refused(r) => panic!("refused: {r}"),
+        }
+    }
+
+    #[test]
+    fn an_open_web_page_needs_no_session() {
+        let (_, web) = web(Admission::Open);
+        assert!(!web.sign_in_required());
+        assert_eq!(web.decide(None), Decision::Admitted(Principal::Anyone));
+    }
+
+    #[test]
+    fn signing_in_with_the_key_gives_a_session_that_expires() {
+        let (clock, web) = web(keyed());
+        assert!(web.sign_in_required());
+        assert_eq!(web.decide(None), Decision::Refused(Refusal::NoSession));
+        let id = started(web.sign_in(&Credentials::from_key(&format!(" {KEY}\n"))));
+        assert_eq!(
+            web.decide(Some(&id)),
+            Decision::Admitted(Principal::KeyHolder)
+        );
+        clock.advance(chrono::Duration::seconds(3600));
+        assert_eq!(
+            web.decide(Some(&id)),
+            Decision::Refused(Refusal::SessionEnded)
+        );
+    }
+
+    #[test]
+    fn a_wrong_key_gives_no_session() {
+        let (_, web) = web(keyed());
+        assert!(matches!(
+            web.sign_in(&Credentials::from_key("0123456789abcdef0123456789abcdeX")),
+            SignIn::Refused(Refusal::WrongKey)
+        ));
+        assert_eq!(
+            web.decide(Some("guess")),
+            Decision::Refused(Refusal::SessionEnded)
+        );
+    }
+
+    #[test]
+    fn signing_out_ends_the_session() {
+        let (_, web) = web(keyed());
+        let id = started(web.sign_in(&Credentials::from_key(KEY)));
+        web.sign_out(&id);
+        assert_eq!(
+            web.decide(Some(&id)),
+            Decision::Refused(Refusal::SessionEnded)
+        );
     }
 }

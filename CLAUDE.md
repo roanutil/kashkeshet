@@ -11,13 +11,13 @@ require reading another's internals.
 
 | Part | Owns | Must not |
 |---|---|---|
-| `admission/` | Whether an HTTP caller is let in to `/mcp` at all, from credentials in our own type | Know about agents, agent tokens or channels; import axum |
+| `admission/` | Whether an HTTP caller is let in to `/mcp` or the web page at all, from credentials in our own type; the web page's sessions | Know about agents, agent tokens or channels; import axum |
 | `rules/` | Every permission decision and every change, for both MCP and the web page | Import rusqlite or write SQL; format output; log |
 | `rules/access.rs` | Who may use a channel, as the pure function `decide` | Touch storage |
 | `store/` | The `Reads`/`Writes` contract and its SQLite implementation | Decide permissions; know about agents' requests |
 | `format/` | Turning rule results into text or JSON within the size cap | Query storage or apply rules |
 | `mcp.rs` | Tool definitions; parse parameters, call `rules`, call `format` | Touch storage or decide permissions |
-| `web/` | The human's read-only pages | Change anything |
+| `web/` | The human's read-only pages, and logging in to them | Change anything except sign-in sessions, through `admission` |
 | `hosts.rs` | Which `Host` names the server answers to, for `/mcp` and the web page | Touch storage, rules, or HTTP library types |
 | `config.rs` | Every limit, fixed setting and default, and the startup checks | Hold logic beyond checking settings |
 | `provenance/` | What produced a server run | |
