@@ -185,6 +185,12 @@ Responses are plain text unless the agent passes `format: "json"`.
 
 ## Tests
 
+`rust-toolchain.toml` pins Rust 1.98.1 with rustfmt and Clippy, matching the
+compiler used to validate the current code and lockfile. Rustup installs it
+when a Rust command is run in the repository. CI runs formatting, Clippy
+with warnings denied, and the tests on Ubuntu 24.04 and macOS 15 for pull
+requests and pushes to `next` and `main`; Clippy and tests use `--locked`.
+
 ```
 cargo test
 ```

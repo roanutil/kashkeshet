@@ -1,0 +1,5 @@
+[toolchain]
+# Matches the stable compiler used to validate the current code and lockfile.
+channel = "1.98.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
