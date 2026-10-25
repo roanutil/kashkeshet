@@ -97,8 +97,11 @@ python3 .github/scripts/check-release.py aarch64-unknown-linux-gnu
 rm -rf "$RELEASE_TOOLS"
 ```
 
-Run the archive check from a clean committed tree; a local build of edited
-sources deliberately records `-dirty` and fails that check. `dist build
+Run the archive check from a clean committed tree with fresh native build
+output. When switching package versions, use a fresh checkout or clear that
+target's dist-profile build directory: Cargo may retain build-script records
+from the previous version. A local build of edited sources deliberately
+records `-dirty` and fails the check. `dist build
 --artifacts=global` builds the installer after the native artifacts exist.
 
 `.github/workflows/release.yml` starts from dist's generated workflow but
