@@ -5,8 +5,10 @@
 
 pub mod admission;
 pub mod app;
+pub mod clients;
 pub mod clock;
 pub mod config;
+pub mod diagnostics;
 pub mod hosts;
 pub mod names;
 pub mod provenance;

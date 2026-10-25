@@ -86,6 +86,16 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 /// Where `kkt key create` writes a key, in the config directory.
 pub const ACCESS_KEY_FILE_NAME: &str = "access-key";
 
+// Client setup and diagnostics.
+pub const CODEX_CONFIG: &str = ".codex/config.toml";
+pub const CLAUDE_CONFIG: &str = ".claude.json";
+pub const AGY_CONFIG: &str = ".gemini/config/mcp_config.json";
+pub const AGY_LEGACY_CONFIG: &str = ".gemini/antigravity/mcp_config.json";
+pub const OPENCODE_CONFIG: &str = ".config/opencode/opencode.json";
+pub const DOCTOR_TIMEOUT: Duration = Duration::from_secs(5);
+pub const DOCTOR_MAX_RESPONSE_BYTES: usize = 64 * 1024;
+pub const DOCTOR_PROTOCOL_VERSION: &str = "2026-07-28";
+
 // ---- The web preview ----
 //
 // The page with simulated data (`web::Preview`, run by the `web_preview`

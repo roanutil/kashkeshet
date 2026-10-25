@@ -1,0 +1,67 @@
+# Connecting clients
+
+Start the server with `kkt service install` or `kkt serve`, then choose a client:
+
+```sh
+kkt connect claude-code --write
+kkt connect codex --write
+kkt connect agy --write
+kkt connect opencode --write
+```
+
+Run without `--write` to see the config or command and its destination first.
+The URL comes from the serve config's `bind`. `--url https://your-host/mcp`
+overrides it, for example when forwarding over a tailnet. `--config PATH`
+selects a serve config; `--key-file PATH` overrides its key file. Without an
+override, connect uses the same key as serve and creates a missing default
+key with mode 0600. A config with `no_access_key = true` adds no credentials.
+
+Writes preserve other servers and settings. Changed files are backed up as
+`.bak`, then `.bak.1`, and so on; an existing backup is never overwritten.
+Repeating the same command does not change the file or make another backup.
+Malformed files are refused before any change. Config files and backups
+written by kkt are readable only by their owner. Claude Code writes its own
+config through its CLI; kkt backs it up before invoking that CLI.
+
+| Client | Destination | Credentials |
+|---|---|---|
+| Claude Code | `~/.claude.json`, user scope | `headersHelper` calls this `kkt` executable with the absolute key path. `claude` must be on PATH for `--write`. |
+| Codex | `~/.codex/config.toml` | `http_headers_helper` calls `kkt`; existing TOML comments are retained. |
+| Antigravity (`agy`) | `~/.gemini/config/mcp_config.json` | Copies the key into `headers`. An existing legacy `~/.gemini/antigravity/mcp_config.json` is used instead if the newer path is absent. |
+| OpenCode | `~/.config/opencode/opencode.json` | `Authorization` uses `{file:<absolute key path>}`; OpenCode trims surrounding whitespace. OAuth is disabled for this static key. |
+
+Antigravity requires the key in its config file. Connect warns about this,
+sets mode 0600, and redacts the key in previews. The other clients refer to
+the key file, so they pick up its current contents without copying it or
+requiring a shell environment variable.
+
+`kkt key header` prints `Authorization: Bearer <key>` for helper use.
+`kkt key header --json` prints the JSON header map Claude Code and Codex
+require. Both accept `--key-file PATH`; neither creates a key. They print
+the key intentionally, so use them as helpers rather than in shared logs.
+
+## Check a connection
+
+```sh
+kkt doctor
+```
+
+Doctor reads the serve config and checks the key file and mode, server
+reachability, Host acceptance, MCP authentication, and service state. Each
+problem includes a fix. It accepts the same `--config`, `--url` and
+`--key-file` overrides as connect. It does not create keys, register an
+agent, or change server data. Its short MCP session is closed after the
+probe. HTTP redirects are not followed with the key.
+An absent service is optional: the server may be running in a terminal.
+An installed service that has stopped is reported with a start command.
+
+The MCP initialize response exposes the running version. It does not expose
+the commit; the web page's server runs show that provenance.
+
+The config formats follow the vendors' documentation:
+[Claude Code MCP](https://code.claude.com/docs/en/mcp),
+[OpenAI Docs for Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+[Antigravity MCP](https://antigravity.google/docs/mcp), and
+[OpenCode configuration](https://opencode.ai/docs/config/).
+OpenCode's file substitution trims contents in its
+[configuration loader](https://github.com/anomalyco/opencode/blob/dev/packages/core/src/config/variable.ts).

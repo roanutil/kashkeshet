@@ -1,0 +1,311 @@
+use kashkeshet::clients::{self, Client, Setup};
+use kashkeshet::settings::Env;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const KEY: &str = "0123456789abcdef0123456789abcdef";
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+struct Home(PathBuf);
+impl Home {
+    fn new() -> Home {
+        let path = std::env::temp_dir().join(format!(
+            "kkt-clients-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&path).expect("home");
+        Home(path)
+    }
+
+    fn env(&self) -> Env {
+        Env {
+            home: Some(self.0.clone()),
+            xdg_config_home: None,
+            xdg_data_home: None,
+        }
+    }
+
+    fn put(&self, name: &str, text: &str) -> PathBuf {
+        let path = self.0.join(name);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("parent");
+        std::fs::write(&path, text).expect("file");
+        path
+    }
+}
+impl Drop for Home {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).expect("cleanup");
+    }
+}
+
+#[test]
+fn previews_use_vendor_shapes_and_never_show_the_key() {
+    let home = Home::new();
+    let key = home.put("key", &format!("{KEY}\n"));
+    let env = home.env();
+    let setup = Setup {
+        env: &env,
+        url: "http://127.0.0.1:7420/mcp",
+        executable: Path::new("/path with ' quote/kkt"),
+        key_file: Some(&key),
+    };
+    for (client, required) in [
+        (Client::ClaudeCode, "headersHelper"),
+        (Client::Codex, "http_headers_helper"),
+        (Client::Agy, "serverUrl"),
+        (Client::OpenCode, "{file:"),
+    ] {
+        let out = clients::configure(client, &setup, false).expect("preview");
+        assert!(out.contains(required), "{out}");
+        assert!(!out.contains(KEY), "preview exposed key");
+        assert!(!home.0.join(".claude.json").exists());
+    }
+    let out = clients::header(KEY, true).expect("header");
+    let header: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+    assert_eq!(header["Authorization"], format!("Bearer {KEY}"));
+    assert_eq!(
+        clients::header(KEY, false).expect("header"),
+        format!("Authorization: Bearer {KEY}")
+    );
+}
+
+#[test]
+fn codex_merge_preserves_comments_other_servers_and_options_and_is_idempotent() {
+    let home = Home::new();
+    let original = "# keep my comment\nmodel = 'custom'\n[mcp_servers.other]\ncommand = 'other'\n[mcp_servers.kkt]\nurl = 'http://old/mcp'\nbearer_token_env_var = 'OLD_KEY'\ntool_timeout_sec = 91\n";
+    let file = home.put(".codex/config.toml", original);
+    let key = home.put("key", KEY);
+    let env = home.env();
+    let setup = Setup {
+        env: &env,
+        url: "https://tail.example/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: Some(&key),
+    };
+    clients::configure(Client::Codex, &setup, true).expect("write");
+    let first = std::fs::read_to_string(&file).expect("config");
+    assert!(first.contains("# keep my comment"));
+    let parsed: toml::Value = toml::from_str(&first).expect("TOML");
+    assert_eq!(parsed["model"].as_str(), Some("custom"));
+    assert_eq!(
+        parsed["mcp_servers"]["other"]["command"].as_str(),
+        Some("other")
+    );
+    assert_eq!(
+        parsed["mcp_servers"]["kkt"]["tool_timeout_sec"].as_integer(),
+        Some(91)
+    );
+    assert!(
+        parsed["mcp_servers"]["kkt"]
+            .get("bearer_token_env_var")
+            .is_none()
+    );
+    assert!(
+        parsed["mcp_servers"]["kkt"]["http_headers_helper"]
+            .as_str()
+            .expect("helper")
+            .contains("key header --json")
+    );
+    assert_eq!(
+        std::fs::read_to_string(file.with_file_name("config.toml.bak")).expect("backup"),
+        original
+    );
+    let out = clients::configure(Client::Codex, &setup, true).expect("again");
+    assert!(out.contains("Already configured"));
+    assert_eq!(std::fs::read_to_string(&file).expect("config"), first);
+    assert!(!file.with_file_name("config.toml.bak.1").exists());
+}
+
+#[test]
+fn json_clients_merge_without_losing_other_settings_and_back_up_once() {
+    for (client, name, group) in [
+        (Client::Agy, ".gemini/config/mcp_config.json", "mcpServers"),
+        (Client::OpenCode, ".config/opencode/opencode.json", "mcp"),
+    ] {
+        let home = Home::new();
+        let original = serde_json::json!({"theme":"custom", group:{"other":{"url":"https://other"},"kkt":{"enabled":true,"headers":{"X-Custom":"keep","authorization":"stale"}}}}).to_string();
+        let file = home.put(name, &original);
+        let key = home.put("key", &format!("{KEY}\n"));
+        let env = home.env();
+        let setup = Setup {
+            env: &env,
+            url: "http://localhost:7420/mcp",
+            executable: Path::new("/opt/kkt"),
+            key_file: Some(&key),
+        };
+        let out = clients::configure(client, &setup, true).expect("write");
+        assert!(!out.contains(KEY));
+        let first = std::fs::read_to_string(&file).expect("config");
+        let parsed: serde_json::Value = serde_json::from_str(&first).expect("JSON");
+        assert_eq!(parsed["theme"], "custom");
+        assert_eq!(parsed[group]["other"]["url"], "https://other");
+        assert_eq!(parsed[group]["kkt"]["enabled"], true);
+        assert_eq!(parsed[group]["kkt"]["headers"]["X-Custom"], "keep");
+        assert!(
+            parsed[group]["kkt"]["headers"]
+                .get("authorization")
+                .is_none()
+        );
+        if client == Client::Agy {
+            assert_eq!(
+                parsed[group]["kkt"]["headers"]["Authorization"],
+                format!("Bearer {KEY}")
+            );
+        } else {
+            assert_eq!(parsed[group]["kkt"]["oauth"], false);
+            assert!(
+                parsed[group]["kkt"]["headers"]["Authorization"]
+                    .as_str()
+                    .expect("file")
+                    .contains("{file:")
+            );
+            assert!(!first.contains(KEY));
+        }
+        clients::configure(client, &setup, true).expect("again");
+        assert_eq!(std::fs::read_to_string(&file).expect("config"), first);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&file).expect("mode").permissions().mode() & 0o777,
+                0o600
+            );
+            let backup = file.with_file_name(format!(
+                "{}.bak",
+                file.file_name().expect("name").to_string_lossy()
+            ));
+            assert_eq!(std::fs::read_to_string(&backup).expect("backup"), original);
+            assert_eq!(
+                std::fs::metadata(backup)
+                    .expect("mode")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+}
+
+#[test]
+fn malformed_client_files_are_left_intact_and_errors_do_not_echo_secrets() {
+    for (client, file, original) in [
+        (
+            Client::Codex,
+            ".codex/config.toml",
+            "secret = '0123456789abcdef0123456789abcdef\n",
+        ),
+        (
+            Client::OpenCode,
+            ".config/opencode/opencode.json",
+            "{\"secret\":\"0123456789abcdef0123456789abcdef",
+        ),
+    ] {
+        let home = Home::new();
+        let file = home.put(file, original);
+        let env = home.env();
+        let setup = Setup {
+            env: &env,
+            url: "http://localhost:7420/mcp",
+            executable: Path::new("/opt/kkt"),
+            key_file: None,
+        };
+        let error = clients::configure(client, &setup, true).expect_err("invalid");
+        assert!(!error.contains(KEY));
+        assert_eq!(std::fs::read_to_string(file).expect("config"), original);
+    }
+}
+
+#[test]
+fn legacy_antigravity_path_is_used_when_it_is_the_existing_file() {
+    let home = Home::new();
+    let file = home.put(".gemini/antigravity/mcp_config.json", "{}");
+    let env = home.env();
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: None,
+    };
+    clients::configure(Client::Agy, &setup, true).expect("write");
+    assert!(
+        std::fs::read_to_string(file)
+            .expect("config")
+            .contains("serverUrl")
+    );
+    assert!(!home.0.join(".gemini/config/mcp_config.json").exists());
+}
+
+#[test]
+fn later_changes_keep_the_original_backup_and_save_the_previous_configuration() {
+    let home = Home::new();
+    let original = "{\"theme\":\"keep\"}";
+    let file = home.put(".config/opencode/opencode.json", original);
+    let env = home.env();
+    let mut setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: None,
+    };
+    clients::configure(Client::OpenCode, &setup, true).expect("first");
+    let first = std::fs::read_to_string(&file).expect("first");
+    setup.url = "https://tail.example/mcp";
+    clients::configure(Client::OpenCode, &setup, true).expect("second");
+    assert_eq!(
+        std::fs::read_to_string(file.with_file_name("opencode.json.bak")).expect("original backup"),
+        original
+    );
+    assert_eq!(
+        std::fs::read_to_string(file.with_file_name("opencode.json.bak.1"))
+            .expect("previous backup"),
+        first
+    );
+}
+
+#[test]
+fn opencode_refuses_key_paths_its_file_substitution_cannot_represent() {
+    let home = Home::new();
+    let env = home.env();
+    for name in ["key{brace", "key\"quote", "key\\slash", "key\nnewline"] {
+        let key = home.put(name, KEY);
+        let setup = Setup {
+            env: &env,
+            url: "http://localhost:7420/mcp",
+            executable: Path::new("/opt/kkt"),
+            key_file: Some(&key),
+        };
+        let error =
+            clients::configure(Client::OpenCode, &setup, true).expect_err("unsupported reference");
+        assert!(error.contains("file references cannot represent"));
+        assert!(!home.0.join(".config/opencode/opencode.json").exists());
+    }
+}
+
+#[test]
+fn codex_accepts_inline_server_tables_without_losing_existing_entries() {
+    let home = Home::new();
+    let file = home.put(
+        ".codex/config.toml",
+        "mcp_servers = { other = { url = 'https://other/mcp' } }\n",
+    );
+    let env = home.env();
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: None,
+    };
+    clients::configure(Client::Codex, &setup, true).expect("inline write");
+    let contents = std::fs::read_to_string(file).expect("config");
+    let parsed: toml::Value = toml::from_str(&contents).expect("valid TOML");
+    assert_eq!(
+        parsed["mcp_servers"]["other"]["url"].as_str(),
+        Some("https://other/mcp")
+    );
+    assert_eq!(
+        parsed["mcp_servers"]["kkt"]["url"].as_str(),
+        Some("http://localhost:7420/mcp")
+    );
+}
