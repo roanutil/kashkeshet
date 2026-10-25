@@ -14,6 +14,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0001_init.sql"),
     include_str!("../../migrations/0002_server_runs.sql"),
     include_str!("../../migrations/0003_revoked_agents.sql"),
+    include_str!("../../migrations/0004_identity_recovery.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -217,6 +218,17 @@ impl Reads for Sql<'_> {
             .query_row(
                 &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE token_hash = ?"),
                 [hash],
+                agent_from_row,
+            )
+            .optional()?)
+    }
+
+    fn agent_by_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<Option<AgentRecord>> {
+        Ok(self
+            .0
+            .query_row(
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE name = ? AND recovery_hash = ?"),
+                rusqlite::params![name, hash],
                 agent_from_row,
             )
             .optional()?)
@@ -598,15 +610,24 @@ impl Reads for Sql<'_> {
 impl Writes for Sql<'_> {
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()> {
         self.0.execute(
-            "INSERT INTO agents (name, token_hash, created_at, last_seen, run_id)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO agents (name, token_hash, recovery_hash, created_at, last_seen, run_id)
+             VALUES (?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 agent.name,
                 agent.token_hash,
+                agent.recovery_hash,
                 agent.created_at,
                 agent.last_seen,
                 agent.run_id
             ],
+        )?;
+        Ok(())
+    }
+
+    fn set_token_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET token_hash = ? WHERE name = ?",
+            rusqlite::params![hash, name],
         )?;
         Ok(())
     }

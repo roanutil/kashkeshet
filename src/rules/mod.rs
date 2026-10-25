@@ -31,7 +31,7 @@ mod rate;
 #[cfg(test)]
 mod tests;
 
-pub use agents::{Agent, AgentInfo, Registration};
+pub use agents::{Agent, AgentInfo, Reclaimed, Registration};
 pub use channels::{ChannelInfo, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
 pub use human::ServerRunInfo;

@@ -1125,3 +1125,165 @@ async fn the_operator_lists_agents_with_their_revocations() {
         Some("2026-10-23T14:05:00Z")
     );
 }
+
+#[tokio::test]
+async fn reclaim_preserves_identity_history_membership_and_provenance() {
+    let w = world().await;
+    let reg = w.rules.register().await.unwrap();
+    let me = w.rules.authenticate(Some(&reg.token)).await.unwrap();
+    let channel = w.channel(&me, "private", false, &[]).await;
+    let sent = w
+        .rules
+        .send(&me, channel.clone(), "before restart".into())
+        .await
+        .unwrap();
+    let name = reg.name.clone();
+    let before = w
+        .rules
+        .db()
+        .read(move |r| r.agent(&name))
+        .await
+        .unwrap()
+        .unwrap();
+    w.clock.advance(chrono::Duration::seconds(75));
+    let recovered = w
+        .rules
+        .reclaim(reg.name.clone(), reg.recovery_code.clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered.name, reg.name);
+    assert_ne!(recovered.token, reg.token);
+    assert_eq!(
+        code(w.rules.authenticate(Some(&reg.token)).await),
+        Code::Unauthenticated
+    );
+    let me = w.rules.authenticate(Some(&recovered.token)).await.unwrap();
+    assert_eq!(w.visible_ids(&me).await, [channel]);
+    assert_eq!(
+        w.rules.get_message(&me, sent.id).await.unwrap().body,
+        "before restart"
+    );
+    let name = reg.name.clone();
+    let after = w
+        .rules
+        .db()
+        .read(move |r| r.agent(&name))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.created_at, before.created_at);
+    assert_eq!(after.run_id, before.run_id);
+    assert_eq!(after.last_seen, Some(w.rules.now_text()));
+    // The code still works after a successful recovery (including a lost response).
+    let again = w.rules.reclaim(reg.name, reg.recovery_code).await.unwrap();
+    assert_ne!(again.token, recovered.token);
+    assert_eq!(
+        code(w.rules.authenticate(Some(&recovered.token)).await),
+        Code::Unauthenticated
+    );
+    w.rules.authenticate(Some(&again.token)).await.unwrap();
+}
+
+#[tokio::test]
+async fn reclaim_rejects_wrong_credentials_and_revoked_identities_identically() {
+    let w = world().await;
+    let a = w.rules.register().await.unwrap();
+    let b = w.rules.register().await.unwrap();
+    let mut errors = vec![];
+    for (name, recovery) in [
+        (a.name.clone(), b.recovery_code.clone()),
+        ("missing-agent".into(), a.recovery_code.clone()),
+        (a.name.clone(), String::new()),
+        (a.name.clone(), a.token.clone()),
+    ] {
+        errors.push(w.rules.reclaim(name, recovery).await.unwrap_err());
+    }
+    // Failed attempts leave the current token usable.
+    w.rules.authenticate(Some(&a.token)).await.unwrap();
+    w.operator.revoke(a.name.clone()).await.unwrap();
+    errors.push(w.rules.reclaim(a.name, a.recovery_code).await.unwrap_err());
+    for error in errors {
+        assert_eq!(error.code, Code::Unauthenticated);
+        assert_eq!(
+            error.message,
+            "unknown name or recovery code, or identity unavailable"
+        );
+    }
+}
+
+#[tokio::test]
+async fn recovery_codes_are_hashed_and_rejected_in_messages() {
+    let w = world().await;
+    let reg = w.rules.register().await.unwrap();
+    let me = w.rules.authenticate(Some(&reg.token)).await.unwrap();
+    let channel = w.channel(&me, "general", true, &[]).await;
+    let name = reg.name.clone();
+    let recovery = reg.recovery_code.clone();
+    assert!(
+        w.rules
+            .db()
+            .read(move |r| r.agent_by_recovery_hash(&name, recovery.as_bytes()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let name = reg.name.clone();
+    let hash = auth::hash_token(&reg.recovery_code);
+    assert!(
+        w.rules
+            .db()
+            .read(move |r| r.agent_by_recovery_hash(&name, &hash))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        code(w.rules.authenticate(Some(&reg.recovery_code)).await),
+        Code::Unauthenticated
+    );
+    let err = w
+        .rules
+        .send(&me, channel, format!("recovery: {}", reg.recovery_code))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, Code::ContainsSecret);
+    assert!(!err.message.contains(&reg.recovery_code));
+}
+
+#[tokio::test]
+async fn legacy_agents_keep_their_token_but_have_no_recovery_code() {
+    let w = world().await;
+    let run_id = w.run_id;
+    w.rules
+        .db()
+        .write(move |store| {
+            store.insert_agent(&NewAgentRecord {
+                name: "legacy-agent".into(),
+                token_hash: auth::hash_token("old-token"),
+                recovery_hash: None,
+                created_at: "old-time".into(),
+                last_seen: None,
+                run_id,
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        w.rules.authenticate(Some("old-token")).await.unwrap().name,
+        "legacy-agent"
+    );
+    let reg = w.rules.register().await.unwrap();
+    assert_eq!(
+        code(
+            w.rules
+                .reclaim("legacy-agent".into(), reg.recovery_code)
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    assert_eq!(
+        code(w.rules.reclaim("legacy-agent".into(), String::new()).await),
+        Code::Unauthenticated
+    );
+    w.rules.authenticate(Some("old-token")).await.unwrap();
+}

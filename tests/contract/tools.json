@@ -653,7 +653,56 @@
     "name": "read"
   },
   {
-    "description": "Get a new identity: a server-chosen name and a token. Takes no arguments. Pass the token as `token` on every other call.",
+    "description": "Reclaim an identity using its name and private recovery code. Returns a fresh token for the same name and invalidates the old token. The recovery code stays valid. Revoked identities cannot be reclaimed. No token is required.",
+    "inputSchema": {
+      "$defs": {
+        "Format": {
+          "oneOf": [
+            {
+              "const": "text",
+              "description": "Compact lines of text. The default.",
+              "type": "string"
+            },
+            {
+              "const": "json",
+              "description": "A JSON object.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`text` (default) or `json`."
+        },
+        "name": {
+          "description": "The name returned by `register`.",
+          "type": "string"
+        },
+        "recovery_code": {
+          "description": "The private recovery code returned once by `register`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "recovery_code"
+      ],
+      "type": "object"
+    },
+    "name": "reclaim"
+  },
+  {
+    "description": "Get a new identity: a server-chosen name, a token, and a recovery code shown once. Takes no arguments. Pass the token as `token` on authenticated calls. `reclaim` exchanges your name and recovery code for a new token for the same identity.",
     "inputSchema": {
       "properties": {},
       "type": "object"

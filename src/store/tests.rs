@@ -29,6 +29,7 @@ async fn world(messages: &[(&'static str, &'static str, &'static str)]) -> Db {
             w.insert_agent(&NewAgentRecord {
                 name: name.into(),
                 token_hash: name.as_bytes().to_vec(),
+                recovery_hash: None,
                 created_at: T.into(),
                 last_seen: None,
                 run_id,
@@ -114,6 +115,7 @@ async fn file_database_reopens_without_rerunning_migrations() {
         w.insert_agent(&NewAgentRecord {
             name: "a".into(),
             token_hash: vec![0],
+            recovery_hash: Some(vec![42]),
             created_at: T.into(),
             last_seen: None,
             run_id,
@@ -126,6 +128,12 @@ async fn file_database_reopens_without_rerunning_migrations() {
     let db = Db::open(&path).expect("reopen");
     let found = db.read(|r| r.agent("a")).await.expect("read");
     assert_eq!(found.map(|a| a.name), Some("a".to_string()));
+    assert!(
+        db.read(|r| r.agent_by_recovery_hash("a", &[42]))
+            .await
+            .expect("recovery lookup after restart")
+            .is_some()
+    );
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
 
@@ -351,4 +359,41 @@ async fn a_failed_write_changes_nothing() {
         ..filter("a")
     };
     assert_eq!(channel_ids(&db, mine).await, ["ch_closed", "ch_open"]);
+}
+
+#[tokio::test]
+async fn recovery_lookup_requires_both_name_and_hash_and_token_replacement_is_local() {
+    let db = world(&[]).await;
+    db.write(|w| {
+        let run_id = w.insert_server_run(&run("recovery"))?;
+        w.insert_agent(&NewAgentRecord {
+            name: "recoverable".into(),
+            token_hash: vec![11],
+            recovery_hash: Some(vec![42]),
+            created_at: T.into(),
+            last_seen: None,
+            run_id,
+        })
+    })
+    .await
+    .unwrap();
+    db.write(|w| {
+        assert!(w.agent_by_recovery_hash("recoverable", &[42])?.is_some());
+        assert!(w.agent_by_recovery_hash("recoverable", &[41])?.is_none());
+        assert!(w.agent_by_recovery_hash("a", &[42])?.is_none());
+        assert!(w.agent_by_recovery_hash("a", &[])?.is_none());
+        w.set_token_hash("recoverable", &[12])?;
+        Ok::<_, StoreError>(())
+    })
+    .await
+    .unwrap();
+    db.read(|r| {
+        assert!(r.agent_by_token_hash(&[11])?.is_none());
+        assert_eq!(r.agent_by_token_hash(&[12])?.unwrap().name, "recoverable");
+        assert!(r.agent_by_token_hash(b"a")?.is_some());
+        assert!(r.agent_by_recovery_hash("recoverable", &[42])?.is_some());
+        Ok::<_, StoreError>(())
+    })
+    .await
+    .unwrap();
 }
