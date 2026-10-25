@@ -3,11 +3,10 @@
 
 use crate::admission::{Admission, Credentials, Decision};
 use crate::clock::Clock;
-use crate::config::{
-    Limits, MCP_ALLOWED_HOSTS, MCP_MAX_REQUEST_BYTES, MCP_SSE_KEEP_ALIVE, MCP_SSE_RETRY,
-};
+use crate::config::{Limits, MCP_MAX_REQUEST_BYTES, MCP_SSE_KEEP_ALIVE, MCP_SSE_RETRY};
 use crate::events::Events;
 use crate::format::Formatter;
+use crate::hosts::AllowedHosts;
 use crate::mcp::{self, ChatServer};
 use crate::names::Entropy;
 use crate::rules::{Deps, Rules, SendLimiter};
@@ -32,6 +31,9 @@ pub struct AppConfig {
     /// Browser origins allowed to call `/mcp`. Requests with any other
     /// `Origin` header are refused; requests without one (agents) pass.
     pub allowed_origins: Vec<String>,
+    /// `Host` names `/mcp` and the web page answer to. Requests naming any
+    /// other host are refused.
+    pub allowed_hosts: AllowedHosts,
     /// Sent to every agent that connects. See [`crate::DEFAULT_INSTRUCTIONS`].
     pub instructions: String,
 }
@@ -100,7 +102,7 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
         // a broken event stream is not resumed. That is the only state
         // `default()` can build, so there is nothing further to set.
         Arc::new(NeverSessionManager::default()),
-        mcp_transport(config.allowed_origins, shutdown),
+        mcp_transport(config.allowed_origins, &config.allowed_hosts, shutdown),
     );
 
     let mcp = Router::new()
@@ -109,7 +111,7 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
             Arc::new(config.admission),
             admit,
         ));
-    web::router(rules).merge(mcp)
+    web::router(rules, config.allowed_hosts).merge(mcp)
 }
 
 /// Lets a request through to `/mcp` only if admission lets its caller in.
@@ -130,7 +132,11 @@ async fn admit(State(admission): State<Arc<Admission>>, request: Request, next: 
 
 /// The MCP transport settings. Every option is set here by name, so a change
 /// to the library's defaults cannot change the server's behavior.
-fn mcp_transport(allowed_origins: Vec<String>, shutdown: Shutdown) -> StreamableHttpServerConfig {
+fn mcp_transport(
+    allowed_origins: Vec<String>,
+    allowed_hosts: &AllowedHosts,
+    shutdown: Shutdown,
+) -> StreamableHttpServerConfig {
     let mut config = StreamableHttpServerConfig::default()
         // Serve every request on its own, with no session to resume.
         .with_legacy_session_mode(false)
@@ -138,7 +144,7 @@ fn mcp_transport(allowed_origins: Vec<String>, shutdown: Shutdown) -> Streamable
         .with_json_response(false)
         .with_sse_keep_alive(Some(MCP_SSE_KEEP_ALIVE))
         .with_sse_retry(Some(MCP_SSE_RETRY))
-        .with_allowed_hosts(MCP_ALLOWED_HOSTS.iter().copied())
+        .with_allowed_hosts(allowed_hosts.entries())
         // Refuse any browser origin not listed, even when the list is empty.
         .with_allowed_origins(allowed_origins)
         .enforce_origin_validation()

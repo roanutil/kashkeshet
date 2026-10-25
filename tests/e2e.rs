@@ -3,7 +3,8 @@
 
 mod common;
 
-use common::{Client, connect, connect_new, start};
+use common::{Client, Server, connect, connect_new, start, start_with, test_config};
+use kashkeshet::hosts::AllowedHosts;
 use rmcp::ClientLifecycleMode;
 use rmcp::model::{CallToolRequestParams, ProtocolVersion};
 use serde_json::{Value, json};
@@ -291,6 +292,60 @@ async fn browser_origins_are_refused_unless_allowed() {
         "{status}: {}",
         allowed.text().await.unwrap_or_default()
     );
+}
+
+/// Status codes for `/mcp` and the web page when a request names `host`.
+async fn statuses_for_host(server: &Server, host: &str) -> (u16, u16) {
+    let http = reqwest::Client::new();
+    let port = server.base.rsplit(':').next().expect("port");
+    let host = format!("{host}:{port}");
+    let mcp = http
+        .post(format!("{}/mcp", server.base))
+        .header("Host", &host)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "server/discover")
+        .body(
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "server/discover",
+                "params": { "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }},
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .expect("mcp request");
+    let web = http
+        .get(format!("{}/", server.base))
+        .header("Host", &host)
+        .send()
+        .await
+        .expect("web request");
+    (mcp.status().as_u16(), web.status().as_u16())
+}
+
+#[tokio::test]
+async fn other_host_names_are_refused_unless_allowed() {
+    let server = start().await;
+    assert_eq!(statuses_for_host(&server, "localhost").await, (200, 200));
+    assert_eq!(
+        statuses_for_host(&server, "host.docker.internal").await,
+        (403, 403)
+    );
+
+    let mut config = test_config();
+    config.allowed_hosts = AllowedHosts::new(&["host.docker.internal".into()]).expect("valid host");
+    let server = start_with(config).await;
+    assert_eq!(
+        statuses_for_host(&server, "host.docker.internal").await,
+        (200, 200)
+    );
+    assert_eq!(statuses_for_host(&server, "localhost").await, (200, 200));
+    assert_eq!(statuses_for_host(&server, "evil.example").await, (403, 403));
 }
 
 #[tokio::test]

@@ -30,9 +30,9 @@ pub const MCP_SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
 pub const MCP_SSE_RETRY: Duration = Duration::from_secs(3);
 /// Largest MCP request, in bytes. Requests over it get `413 Payload Too Large`.
 pub const MCP_MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
-/// `Host` header values the MCP endpoint accepts. Only loopback names, which
-/// blocks DNS rebinding from a web page.
-pub const MCP_ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "::1"];
+/// `Host` names the server always accepts, on any port, for both `/mcp` and
+/// the web page. `--allow-host` adds more. See `hosts`.
+pub const ALWAYS_ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "::1"];
 /// Shortest access key, in bytes. 32 random hex digits carry 128 bits.
 pub const MIN_ACCESS_KEY_BYTES: usize = 32;
 /// Smallest allowed `max_response_bytes`. A smaller cap could cut a
@@ -142,7 +142,7 @@ pub struct InvalidSetting {
 }
 
 impl InvalidSetting {
-    fn new(name: &'static str, rule: impl Into<String>) -> InvalidSetting {
+    pub(crate) fn new(name: &'static str, rule: impl Into<String>) -> InvalidSetting {
         InvalidSetting {
             name,
             rule: rule.into(),

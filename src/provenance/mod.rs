@@ -48,6 +48,7 @@ impl ServerRun {
             settings: settings_text(
                 &config.limits,
                 &config.allowed_origins,
+                config.allowed_hosts.extra(),
                 config.admission.key_source(),
             ),
             instructions_sha256: sha256_hex(&config.instructions),
@@ -70,11 +71,12 @@ pub async fn record(db: &Db, run: &ServerRun, started_at: DateTime<Utc>) -> Stor
 
 /// The settings as text that stays the same for the same settings: one
 /// `name=value` line each, in a fixed order, with times in milliseconds and
-/// origins sorted. When an access key is set, the file it came from is the
+/// origins and added host names sorted. When an access key is set, the file it came from is the
 /// last line; the key itself is never recorded.
 pub fn settings_text(
     limits: &Limits,
     allowed_origins: &[String],
+    allowed_hosts: &[String],
     access_key_file: Option<&str>,
 ) -> String {
     // Listing every field, with no `..`, makes a new limit fail to compile
@@ -112,6 +114,9 @@ pub fn settings_text(
     let mut origins = allowed_origins.to_vec();
     origins.sort();
     lines.extend(origins.iter().map(|o| format!("allowed_origin={o}")));
+    let mut hosts = allowed_hosts.to_vec();
+    hosts.sort();
+    lines.extend(hosts.iter().map(|h| format!("allowed_host={h}")));
     lines.extend(access_key_file.map(|f| format!("access_key_file={f}")));
     lines.join("\n")
 }
@@ -127,12 +132,14 @@ fn sha256_hex(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::admission::{Admission, SharedKey};
+    use crate::hosts::AllowedHosts;
 
     fn config(limits: Limits, origins: &[&str], instructions: &str) -> AppConfig {
         AppConfig {
             admission: Admission::Open,
             limits,
             allowed_origins: origins.iter().map(|o| o.to_string()).collect(),
+            allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
             instructions: instructions.into(),
         }
     }
@@ -147,7 +154,7 @@ mod tests {
         let run = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
         assert_eq!(run.version, "9.9.9");
         assert_eq!(run.commit, "abc123");
-        assert_eq!(run.settings, settings_text(&Limits::DEFAULT, &[], None));
+        assert_eq!(run.settings, settings_text(&Limits::DEFAULT, &[], &[], None));
         // SHA-256 of the empty string.
         assert_eq!(
             run.instructions_sha256,
@@ -158,7 +165,12 @@ mod tests {
     #[test]
     fn default_settings_text_is_fixed() {
         assert_eq!(
-            settings_text(&Limits::DEFAULT, &["http://localhost:6274".into()], None),
+            settings_text(
+                &Limits::DEFAULT,
+                &["http://localhost:6274".into()],
+                &["host.docker.internal".into()],
+                None
+            ),
             "max_response_bytes=8192\n\
              default_limit=20\n\
              max_limit=100\n\
@@ -172,7 +184,8 @@ mod tests {
              last_seen_interval_ms=60000\n\
              member_preview=3\n\
              purpose_preview_chars=120\n\
-             allowed_origin=http://localhost:6274"
+             allowed_origin=http://localhost:6274\n\
+             allowed_host=host.docker.internal"
         );
     }
 
@@ -181,14 +194,44 @@ mod tests {
         let a = settings_text(
             &Limits::DEFAULT,
             &["http://b".into(), "http://a".into()],
+            &[],
             None,
         );
         let b = settings_text(
             &Limits::DEFAULT,
             &["http://a".into(), "http://b".into()],
+            &[],
             None,
         );
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn host_order_does_not_change_the_text() {
+        let a = settings_text(
+            &Limits::DEFAULT,
+            &[],
+            &["b.example".into(), "a.example".into()],
+            None,
+        );
+        let b = settings_text(
+            &Limits::DEFAULT,
+            &[],
+            &["a.example".into(), "b.example".into()],
+            None,
+        );
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn added_hosts_give_a_different_run() {
+        let base = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
+        let mut with_host = config(Limits::DEFAULT, &[], "");
+        with_host.allowed_hosts =
+            AllowedHosts::new(&["host.docker.internal".into()]).expect("valid host");
+        let changed = ServerRun::new(TEST_BUILD, &with_host);
+        assert_ne!(base.settings, changed.settings);
+        assert!(changed.settings.ends_with("\nallowed_host=host.docker.internal"));
     }
 
     #[test]

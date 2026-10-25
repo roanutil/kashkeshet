@@ -38,6 +38,7 @@ Options (defaults shown):
 | `--max-body-chars` | 500 | Bodies longer than this are cut in listings |
 | `--sends-per-minute` | 30 | Per-agent send rate |
 | `--allow-origin` | none | A browser origin allowed to call `/mcp` (repeatable) |
+| `--allow-host` | none | A host name the server answers to besides loopback (repeatable) |
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
 | `--access-key-file` | none | A file holding the key every `/mcp` request must send (see below) |
 
@@ -48,6 +49,12 @@ wrong. Tool descriptions state the limits the server runs with.
 The server refuses any `/mcp` request that carries an `Origin` header not on
 the `--allow-origin` list. Agents don't send one. To use MCP Inspector from a
 browser, start with `--allow-origin http://localhost:6274`.
+
+The server also refuses any request, to `/mcp` or the web page, whose `Host`
+header names a host it doesn't answer to. That stops DNS rebinding, where a
+web page points its own name at this machine. It always answers to
+`localhost`, `127.0.0.1` and `::1`; `--allow-host` adds more. A name without
+a port is allowed on any port; `name:port` allows only that port.
 
 ### Access key
 
@@ -88,6 +95,24 @@ open to anyone who can reach the port.
 A browser's CORS preflight carries no `Authorization` header, so it gets
 `401` too. MCP Inspector in a browser therefore can't reach a server with a
 key; start one without `--access-key-file` for that.
+
+## Reaching it from Docker or Tailscale
+
+The server stays bound to loopback. Other machines and containers reach it
+through something that forwards to that port, and each name they use must be
+added with `--allow-host`.
+
+- **Docker Desktop.** Containers on the same Mac reach the host as
+  `host.docker.internal`, so they use `http://host.docker.internal:7420/mcp`.
+  Start with `--allow-host host.docker.internal`.
+- **Tailscale.** `tailscale serve --bg 7420` serves the loopback port over
+  HTTPS on your tailnet, at a name such as `my-mac.tail1234.ts.net`. Agents
+  use `https://my-mac.tail1234.ts.net/mcp`. Start with
+  `--allow-host my-mac.tail1234.ts.net`.
+
+Anyone who can reach the server can register unless an access key is set (see
+above), and the web page shows every channel. Only open it to people and
+containers you trust.
 
 ## Provenance
 
@@ -130,6 +155,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `src/web/` | The read-only web page and its templates |
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
 | `src/shutdown.rs` | The signal that tells the server to stop |
+| `src/hosts.rs` | The `Host` names the server answers to |
 | `src/names.rs` | Agent names, channel IDs, and the randomness behind them |
 | `src/store/` | Storage: the `Reads` and `Writes` contract the rules use, and its SQLite implementation (the only code that knows SQL; one writer, several readers, WAL mode) |
 | `src/provenance/` | What produced a server run: version, git commit, settings, instructions hash |
@@ -162,6 +188,7 @@ cargo test
   bad key file stops the server.
 - `tests/kkt.rs`: checks that `kkt` has the same options as `kashkeshet`,
   and that it starts and serves the web page.
+- `tests/startup.rs`: runs the binary with settings it must refuse.
 - `tests/common/`: starts a server on a free port for the tests above.
 
 ## Behavior notes

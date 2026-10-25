@@ -3,6 +3,7 @@ use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::{self, Limits};
+use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::shutdown::Shutdown;
@@ -40,6 +41,11 @@ struct Args {
     /// MCP Inspector. Repeat for more. By default no browser origin is allowed.
     #[arg(long = "allow-origin")]
     allow_origins: Vec<String>,
+    /// A host name the server answers to besides localhost, 127.0.0.1 and
+    /// ::1, e.g. host.docker.internal or a Tailscale name. Add `:port` to
+    /// allow only that port. Repeat for more.
+    #[arg(long = "allow-host")]
+    allow_hosts: Vec<String>,
     /// A file whose text is sent to every agent that connects, in place of
     /// the built-in instructions (agent-instructions.md).
     #[arg(long)]
@@ -75,6 +81,8 @@ async fn run(args: Args) -> Result<(), String> {
     limits
         .check()
         .map_err(|e| format!("invalid setting: {e}"))?;
+    let allowed_hosts =
+        AllowedHosts::new(&args.allow_hosts).map_err(|e| format!("invalid setting: {e}"))?;
     let instructions = match &args.instructions {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|e| format!("could not read {}: {e}", path.display()))?,
@@ -100,6 +108,7 @@ async fn run(args: Args) -> Result<(), String> {
         admission,
         limits,
         allowed_origins: args.allow_origins,
+        allowed_hosts,
         instructions,
     };
     let clock = Arc::new(SystemClock);
