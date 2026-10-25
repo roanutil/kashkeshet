@@ -43,6 +43,14 @@ fn take(bucket: Option<Bucket>, now: DateTime<Utc>, per_minute: u32) -> (Bucket,
     }
 }
 
+/// Gives one send back to `bucket`, never filling it past `per_minute`.
+fn refund(bucket: Bucket, per_minute: u32) -> Bucket {
+    Bucket {
+        available: (bucket.available + 1.0).min(f64::from(per_minute)),
+        updated: bucket.updated,
+    }
+}
+
 pub struct SendLimiter {
     per_minute: u32,
     buckets: Mutex<HashMap<String, Bucket>>,
@@ -65,6 +73,15 @@ impl SendLimiter {
         buckets.insert(agent.to_string(), bucket);
         allowed
     }
+
+    /// Gives back a send that `allow` counted but that did not happen.
+    pub fn refund(&self, agent: &str) {
+        // See `allow` on why a poisoned lock is still usable.
+        let mut buckets = self.buckets.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(bucket) = buckets.get(agent).copied() {
+            buckets.insert(agent.to_string(), refund(bucket, self.per_minute));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -85,5 +102,42 @@ mod tests {
         // One third of a minute refills one send.
         assert!(limiter.allow("a", t0 + Duration::seconds(20)));
         assert!(!limiter.allow("a", t0 + Duration::seconds(20)));
+    }
+
+    #[test]
+    fn refund_gives_back_one_send_up_to_capacity() {
+        let t0 = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let (empty, _) = take(
+            Some(Bucket {
+                available: 1.0,
+                updated: t0,
+            }),
+            t0,
+            3,
+        );
+        assert_eq!(
+            refund(empty, 3),
+            Bucket {
+                available: 1.0,
+                updated: t0
+            }
+        );
+        let full = Bucket {
+            available: 3.0,
+            updated: t0,
+        };
+        assert_eq!(refund(full, 3), full);
+    }
+
+    #[test]
+    fn a_refunded_send_can_be_used_again() {
+        let limiter = SendLimiter::new(1);
+        let t0 = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        assert!(limiter.allow("a", t0));
+        assert!(!limiter.allow("a", t0));
+        limiter.refund("a");
+        assert!(limiter.allow("a", t0));
+        // Refunding an agent with no bucket does nothing.
+        limiter.refund("b");
     }
 }

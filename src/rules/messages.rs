@@ -1,5 +1,6 @@
 use super::*;
 use crate::events::NewMessage;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast::error::RecvError;
 
 impl Rules {
@@ -25,9 +26,15 @@ impl Rules {
         let me = me.name.clone();
         let now = self.inner.deps.clock.now();
         let rules = self.clone();
-        let message = self
+        // Set once the rate limiter has counted this send, so a failed write
+        // can give it back.
+        let charged = Arc::new(AtomicBool::new(false));
+        let charged_in_tx = charged.clone();
+        let sender = me.clone();
+        let written = self
             .db()
             .write(move |tx| {
+                let me = sender;
                 let row = member_channel(tx, &me, &channel_id)?;
                 if !rules.inner.sends.allow(&me, now) {
                     return Err(RuleError::new(
@@ -38,6 +45,7 @@ impl Rules {
                         ),
                     ));
                 }
+                charged_in_tx.store(true, Ordering::SeqCst);
                 let created_at = clock::to_text(now);
                 tx.execute(
                     "INSERT INTO messages (channel_id, agent, body, created_at) VALUES (?, ?, ?, ?)",
@@ -52,7 +60,16 @@ impl Rules {
                     created_at,
                 })
             })
-            .await?;
+            .await;
+        let message = match written {
+            Ok(message) => message,
+            Err(e) => {
+                if charged.load(Ordering::SeqCst) {
+                    self.inner.sends.refund(&me);
+                }
+                return Err(e);
+            }
+        };
         self.events().publish(NewMessage {
             id: message.id,
             channel_id: message.channel_id.clone(),
@@ -206,7 +223,10 @@ impl Rules {
 
         // Subscribe before the first look, so a message sent in between is not missed.
         let mut notices = self.events().subscribe();
-        let deadline = tokio::time::Instant::now() + q.timeout;
+        let clock = &self.inner.deps.clock;
+        let timeout = chrono::Duration::from_std(q.timeout)
+            .map_err(|e| RuleError::invalid(format!("`timeout_s` is out of range: {e}")))?;
+        let mut deadline = clock.sleep_until(clock.now() + timeout);
         loop {
             let found = self
                 .newer_messages(me, q.after_id, filter.clone(), q.limit)
@@ -215,14 +235,16 @@ impl Rules {
                 return Ok(found);
             }
             loop {
-                match tokio::time::timeout_at(deadline, notices.recv()).await {
-                    Err(_elapsed) => return Ok(found),
-                    Ok(Ok(notice)) if notice.id > q.after_id => break,
-                    Ok(Ok(_older)) => continue,
-                    // Missed some notices; look in the database instead.
-                    Ok(Err(RecvError::Lagged(_))) => break,
-                    // The server is shutting down.
-                    Ok(Err(RecvError::Closed)) => return Ok(found),
+                tokio::select! {
+                    () = &mut deadline => return Ok(found),
+                    notice = notices.recv() => match notice {
+                        Ok(notice) if notice.id > q.after_id => break,
+                        Ok(_older) => continue,
+                        // Missed some notices; look in the database instead.
+                        Err(RecvError::Lagged(_)) => break,
+                        // The server is shutting down.
+                        Err(RecvError::Closed) => return Ok(found),
+                    },
                 }
             }
         }

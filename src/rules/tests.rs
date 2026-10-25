@@ -627,6 +627,36 @@ async fn send_is_rate_limited() {
 }
 
 #[tokio::test]
+async fn a_failed_send_does_not_use_up_the_allowance() {
+    let limits = Limits {
+        sends_per_minute: 1,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(1)));
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    let sql = |sql: &'static str| {
+        w.rules
+            .db()
+            .write(move |tx| Ok::<_, RuleError>(tx.execute_batch(sql)?))
+    };
+    sql("CREATE TRIGGER fail BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'boom'); END")
+        .await
+        .unwrap();
+    assert_eq!(
+        code(w.rules.send(&a, ch.clone(), "lost".into()).await),
+        Code::Internal
+    );
+    sql("DROP TRIGGER fail").await.unwrap();
+    w.rules.send(&a, ch.clone(), "kept".into()).await.unwrap();
+    // The allowance is one a minute, so the refunded send was the only one.
+    assert_eq!(
+        code(w.rules.send(&a, ch, "too many".into()).await),
+        Code::RateLimited
+    );
+}
+
+#[tokio::test]
 async fn read_pages_both_ways() {
     let w = world();
     let a = w.agent().await;
@@ -818,6 +848,17 @@ async fn wait_wakes_when_a_message_arrives() {
     assert_eq!(got.messages[0].body, "ping");
 }
 
+/// Waits (in real time, briefly) until a wait has started sleeping on the test clock.
+async fn until_sleeping(clock: &FixedClock) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while clock.sleepers() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the wait should start sleeping");
+}
+
 #[tokio::test]
 async fn wait_ignores_channels_i_am_not_in_and_times_out() {
     let w = world();
@@ -833,16 +874,54 @@ async fn wait_ignores_channels_i_am_not_in_and_times_out() {
                     WaitQuery {
                         after_id: 0,
                         channel_ids: None,
-                        timeout: Duration::from_millis(300),
+                        timeout: Duration::from_secs(30),
                         limit: 10,
                     },
                 )
                 .await
         })
     };
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    until_sleeping(&w.clock).await;
     w.rules.send(&a, ch, "not for b".into()).await.unwrap();
-    let got = waiter.await.expect("join").expect("wait");
+    w.clock.advance(chrono::Duration::seconds(30));
+    let got = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the wait should time out")
+        .expect("join")
+        .expect("wait");
+    assert!(got.messages.is_empty());
+}
+
+#[tokio::test]
+async fn wait_times_out_by_the_injected_clock() {
+    let w = world();
+    let b = w.agent().await;
+    let waiter = {
+        let rules = w.rules.clone();
+        tokio::spawn(async move {
+            rules
+                .wait_for_messages(
+                    &b,
+                    WaitQuery {
+                        after_id: 0,
+                        channel_ids: None,
+                        timeout: Duration::from_secs(30),
+                        limit: 10,
+                    },
+                )
+                .await
+        })
+    };
+    until_sleeping(&w.clock).await;
+    w.clock.advance(chrono::Duration::seconds(29));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiter.is_finished(), "the wait ended before its deadline");
+    w.clock.advance(chrono::Duration::seconds(1));
+    let got = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the wait should time out")
+        .expect("join")
+        .expect("wait");
     assert!(got.messages.is_empty());
 }
 
