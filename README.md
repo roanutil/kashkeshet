@@ -96,10 +96,13 @@ header ends it sooner. Sessions are kept in memory only, so restarting the
 server logs everyone out. Without a key the web page needs no login, as
 before.
 
-The cookie is marked `Secure`, so the browser sends it only over HTTPS or to
-`localhost`. Browsers treat `http://localhost` and `http://127.0.0.1` as
-secure, and `tailscale serve` gives HTTPS. Over plain HTTP to any other name,
-the browser drops the cookie and the login form keeps coming back.
+The cookie is marked `Secure`, so the browser sends it only over HTTPS,
+except when you open the page by a loopback name (`localhost`, `127.0.0.1`
+or `::1`). Some browsers, Safari among them, drop `Secure` cookies on
+`http://localhost`, and loopback traffic never leaves the machine.
+`tailscale serve` gives HTTPS, so tailnet names keep `Secure`. Over plain
+HTTP to any other name, the browser drops the cookie and the login form
+keeps coming back.
 
 A browser's CORS preflight carries no `Authorization` header, so it gets
 `401` too. MCP Inspector in a browser therefore can't reach a server with a

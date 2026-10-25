@@ -6,6 +6,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use futures::future::BoxFuture;
 use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::clock::Clock;
+use kashkeshet::hosts::AllowedHosts;
 use reqwest::StatusCode;
 use reqwest::redirect::Policy;
 use std::sync::Arc;
@@ -49,6 +50,7 @@ async fn start(admission: Admission) -> Site {
     )));
     let mut config = common::test_config();
     config.admission = admission;
+    config.allowed_hosts = AllowedHosts::new(&["host.docker.internal".into()]).expect("valid host");
     let server = common::start_with_clock(config, clock.clone()).await;
     let http = reqwest::Client::builder()
         .redirect(Policy::none())
@@ -193,15 +195,11 @@ async fn the_right_key_gives_a_working_cookie() {
         )
         .await;
     let set = header(&response, "set-cookie").expect("set-cookie");
-    for attribute in [
-        "HttpOnly",
-        "SameSite=Strict",
-        "Path=/",
-        "Secure",
-        "Max-Age=43200",
-    ] {
+    for attribute in ["HttpOnly", "SameSite=Strict", "Path=/", "Max-Age=43200"] {
         assert!(set.contains(attribute), "{set}");
     }
+    // Sent to 127.0.0.1, a loopback name, so not `Secure`.
+    assert!(!set.contains("Secure"), "{set}");
     assert!(!set.contains(KEY));
 
     let cookie = site.log_in().await;
@@ -312,4 +310,50 @@ async fn login_and_logout_check_the_host() {
         .expect("get");
     assert_eq!(form.status(), StatusCode::FORBIDDEN);
     assert_eq!(site.get("/", Some(&cookie)).await.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn cookies_are_secure_except_on_loopback_names() {
+    let site = start_keyed().await;
+    let port = site
+        .server
+        .base
+        .rsplit(':')
+        .next()
+        .expect("port")
+        .to_string();
+    let host = format!("host.docker.internal:{port}");
+    let origin = format!("http://{host}");
+    let response = site
+        .http
+        .post(site.url("/login"))
+        .header("host", &host)
+        .header("origin", &origin)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("key={KEY}"))
+        .send()
+        .await
+        .expect("login");
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let set = header(&response, "set-cookie").expect("set-cookie");
+    assert!(set.contains("; Secure;"), "{set}");
+    let cookie = set.split(';').next().expect("name=value").to_string();
+
+    let response = site
+        .http
+        .post(site.url("/logout"))
+        .header("host", &host)
+        .header("origin", &origin)
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .expect("logout");
+    let cleared = header(&response, "set-cookie").expect("set-cookie");
+    assert!(cleared.contains("; Secure;"), "{cleared}");
+
+    let response = site
+        .post_form("/logout", "", None, Some(&site.own_origin()))
+        .await;
+    let cleared = header(&response, "set-cookie").expect("set-cookie");
+    assert!(!cleared.contains("Secure"), "{cleared}");
 }
