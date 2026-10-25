@@ -154,7 +154,10 @@ mod tests {
         let run = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
         assert_eq!(run.version, "9.9.9");
         assert_eq!(run.commit, "abc123");
-        assert_eq!(run.settings, settings_text(&Limits::DEFAULT, &[], &[], None));
+        assert_eq!(
+            run.settings,
+            settings_text(&Limits::DEFAULT, &[], &[], None)
+        );
         // SHA-256 of the empty string.
         assert_eq!(
             run.instructions_sha256,
@@ -231,7 +234,11 @@ mod tests {
             AllowedHosts::new(&["host.docker.internal".into()]).expect("valid host");
         let changed = ServerRun::new(TEST_BUILD, &with_host);
         assert_ne!(base.settings, changed.settings);
-        assert!(changed.settings.ends_with("\nallowed_host=host.docker.internal"));
+        assert!(
+            changed
+                .settings
+                .ends_with("\nallowed_host=host.docker.internal")
+        );
     }
 
     #[test]
