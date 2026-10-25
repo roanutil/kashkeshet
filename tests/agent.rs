@@ -29,10 +29,15 @@ async fn start_server(db: &Path) -> (Child, String) {
         .local_addr()
         .expect("addr")
         .port();
+    let home = db.parent().expect("temp dir");
     let mut child = Command::new(KKT)
+        .arg("serve")
         .arg("--db")
         .arg(db)
-        .args(["--bind", &format!("127.0.0.1:{port}")])
+        .args(["--bind", &format!("127.0.0.1:{port}"), "--no-access-key"])
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
@@ -55,9 +60,13 @@ async fn start_server(db: &Path) -> (Child, String) {
 }
 
 async fn kkt_agent(args: &[&str]) -> Output {
+    // A home with no config file in it, so only the arguments decide.
     let run = Command::new(KKT)
         .arg("agent")
         .args(args)
+        .env("HOME", std::env::temp_dir())
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
         .kill_on_drop(true)
         .output();
     tokio::time::timeout(TIMEOUT, run)

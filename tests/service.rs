@@ -225,3 +225,54 @@ async fn an_existing_key_is_used_and_a_configured_one_left_to_the_config() {
     assert!(!said.contains("--access-key-file"), "{said}");
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[tokio::test]
+async fn no_access_key_installs_without_a_key() {
+    let home = temp_home("no-key");
+    let key = home.join(".config/kkt/access-key");
+
+    // As a flag: passed on to serve, and no key made.
+    let out = kkt(
+        &home,
+        &["service", "install", "--dry-run", "--no-access-key"],
+    )
+    .await;
+    let said = text(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(!said.contains("Would create a new access key"), "{said}");
+    assert!(!said.contains("--access-key-file"), "{said}");
+    assert!(said.contains("--no-access-key"), "{said}");
+    assert!(!key.exists());
+
+    // From the config file: left to the config, which serve reads at start.
+    let config_dir = home.join(".config/kkt");
+    std::fs::create_dir_all(&config_dir).expect("config dir");
+    std::fs::write(config_dir.join("config.toml"), "no_access_key = true\n").expect("config");
+    let out = kkt(&home, &["service", "install", "--dry-run"]).await;
+    let said = text(&out);
+    assert!(out.status.success(), "{said}");
+    assert!(!said.contains("Would create a new access key"), "{said}");
+    assert!(!said.contains("--access-key-file"), "{said}");
+    assert!(!said.contains("--no-access-key"), "{said}");
+
+    // With a key file as well, install is refused, as serve would be.
+    let out = kkt(
+        &home,
+        &[
+            "service",
+            "install",
+            "--dry-run",
+            "--access-key-file",
+            "/keys/k",
+        ],
+    )
+    .await;
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("invalid setting: no_access_key cannot be set together"),
+        "{}",
+        text(&out)
+    );
+    assert!(!key.exists());
+    let _ = std::fs::remove_dir_all(&home);
+}

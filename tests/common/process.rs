@@ -1,4 +1,4 @@
-//! Exercise actual OS signals against both installed binary names.
+//! Exercise actual OS signals against `kkt serve`.
 #![cfg(unix)]
 
 use rmcp::{ServiceExt, model::CallToolRequestParams, transport::StreamableHttpClientTransport};
@@ -17,7 +17,7 @@ pub enum OpenRequest {
     Wait,
 }
 
-pub async fn stops_cleanly(binary: &str, signal: &str, log_signal: &str, open: OpenRequest) {
+pub async fn stops_cleanly(signal: &str, log_signal: &str, open: OpenRequest) {
     let addr = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("free port")
         .local_addr()
@@ -29,10 +29,16 @@ pub async fn stops_cleanly(binary: &str, signal: &str, log_signal: &str, open: O
         addr.port()
     ));
     std::fs::create_dir_all(&dir).expect("temporary database directory");
-    let mut child = Command::new(binary)
+    // Its own home, so the server reads no real config file; no key, so the
+    // requests below need none.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kkt"))
+        .arg("serve")
         .arg("--db")
         .arg(dir.join("server.db"))
-        .args(["--bind", &addr.to_string()])
+        .args(["--bind", &addr.to_string(), "--no-access-key"])
+        .env("HOME", &dir)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
