@@ -164,6 +164,12 @@ Where the tests are:
 - `tests/kkt.rs`, `tests/serve.rs`, `tests/startup.rs`, `tests/key.rs`: the
   `kkt` command, `kkt serve` with its config file and defaults, settings it
   must refuse, and `kkt key create`.
+- `tests/agent.rs`: `kkt agent` revoking an agent in the database of a
+  running server, and listing agents.
+- `tests/service.rs`: `kkt service install --dry-run` with the real binary.
+  The other service commands are tested against a fake system in
+  `src/service/tests.rs`, and the plist and unit are pinned by the files in
+  `src/service/golden/`.
 - `tests/shutdown.rs`: on Unix, stops a real server with SIGTERM and Ctrl-C,
   including with open event streams and pending message waits.
 - `tests/common/`: starts a server on a free port for the tests above.
