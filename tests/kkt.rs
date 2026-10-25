@@ -27,6 +27,20 @@ async fn kkt_has_the_same_flags_and_defaults() {
     assert_eq!(kkt.replace("Usage: kkt ", "Usage: kashkeshet "), long);
 }
 
+/// With two binaries, `cargo run` (as the README says to start the server)
+/// fails unless the package names a default. Running cargo from inside
+/// `cargo test` would wait on the build lock, so this checks the manifest.
+#[test]
+fn cargo_run_starts_kashkeshet() {
+    let manifest = include_str!("../Cargo.toml");
+    assert!(
+        manifest
+            .lines()
+            .any(|l| l.trim() == r#"default-run = "kashkeshet""#),
+        "Cargo.toml must set default-run = \"kashkeshet\""
+    );
+}
+
 #[tokio::test]
 async fn kkt_starts_and_serves() {
     let dir = std::env::temp_dir().join(format!("kashkeshet-kkt-{}", std::process::id()));
