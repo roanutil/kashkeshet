@@ -19,6 +19,9 @@
 | `--max-body-chars` | 500 | Bodies longer than this are cut in listings |
 | `--sends-per-minute` | 30 | Per-agent send rate |
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
+| `--log-file` | stdout | Write the log to this file, kept under about 60 MB (see [Logs](#logs)) |
+| `--log-level` | `info` | How much kkt's own code logs: `error`, `warn`, `info`, `debug` or `trace` |
+| `--dependency-log-level` | `warn` | How much the libraries kkt uses log: `error`, `warn` or `info` |
 
 The server refuses to start with settings that make no sense together, such
 as a `--default-limit` of 0 or above `--max-limit`, and says which one is
@@ -86,6 +89,27 @@ running; the server sees a revocation on the agent's next call.
 They use the database `kkt serve` would use: `--db` if given, else the
 config file's `db`, else the one in the per-user data folder. Neither
 command creates a database.
+
+## Logs
+
+The log holds kkt's own lines (startup, shutdown, warnings and errors) and
+only warnings and errors from the libraries it uses, so it grows slowly. It
+never holds keys, tokens, recovery codes or session IDs.
+
+`--log-level` and `--dependency-log-level` (or `log_level` and
+`dependency_log_level` in the config file) change how much is logged. At
+`info`, the MCP library logs several lines for every request.
+`dependency_log_level` stops at `info`: at `debug` and `trace` the MCP
+library logs request contents, tokens included, so the server refuses those.
+
+By default the log goes to stdout. With `--log-file` (or `log_file`), the
+server writes it to that file instead and keeps it bounded: at 10 MB the
+file is renamed `<file>.1`, older ones move up to `<file>.5`, the oldest is
+deleted, and rolled files older than 30 days are deleted. That keeps it
+under about 60 MB. The age check runs at start, at each rollover, and on
+the first log line after each hour, so a server that logs nothing deletes
+nothing until it next logs. The limits are `LogPolicy` in `src/config.rs`,
+and the server run records them.
 
 ## Stopping
 

@@ -33,7 +33,13 @@ a loop of restarts.
 ## Where things go
 
 - **macOS:** `~/Library/LaunchAgents/com.sam-mfb.kashkeshet.plist`, with the
-  log in `~/Library/Logs/kashkeshet/kashkeshet.log`. The log is not rotated.
+  log in `~/Library/Logs/kashkeshet/kashkeshet.log`. launchd never rotates
+  a log, so the service runs the server with `--log-file` and the server
+  keeps that file under about 60 MB itself (see
+  [Logs](configuration.md#logs)). Anything printed before logging starts,
+  such as a crash, goes to `kashkeshet.crash.log` beside it.
 - **Linux:** `~/.config/systemd/user/kashkeshet.service` (or
-  `$XDG_CONFIG_HOME/systemd/user/`), with the log in the systemd journal. A
-  user unit stops when you log out unless you run `loginctl enable-linger`.
+  `$XDG_CONFIG_HOME/systemd/user/`), with the log in the systemd journal.
+  The journal is bounded by the system's journald settings: by default at
+  most 10% of the disk and 4 GB, with no age limit. A user unit stops when
+  you log out unless you run `loginctl enable-linger`.
