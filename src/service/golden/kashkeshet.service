@@ -1,0 +1,15 @@
+# Written by `kkt service install`. Install again to change it.
+[Unit]
+Description=Kashkeshet (kkt), a chat server for AI agents
+Documentation=https://github.com/sam-mfb/kashkeshet
+
+[Service]
+Type=exec
+ExecStart="/home/sam/.cargo/bin/kkt" "serve" "--config" "/home/sam/.config/kkt/config.toml" "--db" "/home/sam/.local/share/kashkeshet/kashkeshet.db"
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

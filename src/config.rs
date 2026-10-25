@@ -130,6 +130,32 @@ impl PreviewSettings {
     }
 }
 
+// ---- Running as a service ----
+//
+// What `kkt service` writes and runs. See `service`.
+
+/// The launchd job label on macOS. The plist is `<label>.plist`.
+pub const LAUNCHD_LABEL: &str = "com.sam-mfb.kashkeshet";
+/// Where launchd user agents live, under the home directory.
+pub const LAUNCH_AGENTS_DIR: &str = "Library/LaunchAgents";
+/// Where the service's log goes on macOS, under the home directory. Linux
+/// services log to the journal.
+pub const MACOS_LOG_DIR: &str = "Library/Logs/kashkeshet";
+/// The service's log file on macOS, in [`MACOS_LOG_DIR`].
+pub const MACOS_LOG_FILE_NAME: &str = "kashkeshet.log";
+/// The systemd user unit on Linux.
+pub const SYSTEMD_UNIT: &str = "kashkeshet.service";
+/// Where systemd user units live, under `$XDG_CONFIG_HOME`.
+pub const SYSTEMD_USER_DIR: &str = "systemd/user";
+/// How long the service manager waits before starting the server again
+/// after it failed.
+pub const SERVICE_RESTART_DELAY: Duration = Duration::from_secs(5);
+/// How long the service manager waits for the server to stop before it
+/// kills it.
+pub const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Log lines `kkt service logs` shows when not told how many.
+pub const DEFAULT_LOG_LINES: usize = 100;
+
 // ---- Limits ----
 
 #[derive(Clone, Debug, PartialEq, Eq)]

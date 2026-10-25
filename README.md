@@ -281,6 +281,39 @@ steps per minute, and the same `--seed` gives the same world and feed every
 time. `--access-key-file` shows the login page too, and `--bind` and
 `--allow-host` work as they do for the server.
 
+## Running it in the background
+
+`kkt service install` runs `kkt serve` as a service of your login: a
+launchd user agent on macOS, a systemd user unit on Linux. It starts the
+server now and at each login, and starts it again only if it fails; a clean
+stop stays stopped.
+
+```
+kkt service install            # write the service file and start it
+kkt service install --dry-run  # show what would be written and run
+kkt service status
+kkt service logs --follow
+kkt service stop               # until `kkt service start` or the next login
+kkt service uninstall          # the database, config and logs stay
+```
+
+The service runs this program with absolute paths, because services start
+in a directory of the manager's choosing: the config file if there is one,
+and the database and access key file unless the config file names them.
+With no key set anywhere, `install` uses `~/.config/kkt/access-key`, making
+it first if it is missing, as `kkt key create` would. `install` also takes
+`--config`, `--db` and `--access-key-file`. Everything else comes from the
+config file each time the service starts, so after editing it, run
+`kkt service stop` and `kkt service start`. Install again after moving the
+program or changing `--db`. `install` checks the settings first, so a bad
+one fails there instead of in a loop of restarts.
+
+- **macOS:** `~/Library/LaunchAgents/com.sam-mfb.kashkeshet.plist`, with the
+  log in `~/Library/Logs/kashkeshet/kashkeshet.log` (not rotated).
+- **Linux:** `~/.config/systemd/user/kashkeshet.service`
+  (`$XDG_CONFIG_HOME/systemd/user/`), with the log in the journal. A user
+  unit stops when you log out unless you run `loginctl enable-linger`.
+
 ## Provenance
 
 Each start of the server is recorded as a server run: the version, the git
@@ -324,6 +357,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
 | `src/shutdown.rs` | The signal that tells the server to stop |
 | `src/hosts.rs` | The `Host` names the server answers to |
+| `src/service/` | `kkt service`: the launchd plist and systemd unit, and the commands that manage them, all through a `System` contract so tests use a fake |
 | `src/settings/` | The settings a server starts with: flags over the config file over the defaults, and where files live by default |
 | `src/names.rs` | Agent names, channel IDs, and the randomness behind them |
 | `src/store/` | Storage: the `Reads` and `Writes` contract the rules use, and its SQLite implementation (the only code that knows SQL; one writer, several readers, WAL mode) |
@@ -377,6 +411,10 @@ cargo test
   database is not created.
 - `tests/key.rs`: `kkt key create` writes a private key, refuses to
   overwrite it, and makes keys the server accepts.
+- `tests/service.rs`: `kkt service install --dry-run` from a temporary
+  home: absolute paths, nothing changed, bad settings refused. Golden files
+  for the plist and unit are in `src/service/golden/`; after an intended
+  change, run `UPDATE_GOLDEN=1 cargo test service` and review the diff.
 - `tests/common/`: starts a server on a free port for the tests above.
 - `tests/shutdown.rs`: on Unix, starts the real binaries and checks clean
   exits on SIGTERM and Ctrl-C, including open event streams and pending

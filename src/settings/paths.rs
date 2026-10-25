@@ -42,11 +42,16 @@ impl Env {
     /// The config directory: `$XDG_CONFIG_HOME/kkt`, or `~/.config/kkt`. The
     /// same on every platform.
     pub fn config_dir(&self) -> Option<PathBuf> {
-        let base = match absolute(&self.xdg_config_home) {
-            Some(dir) => dir,
-            None => self.home.as_ref()?.join(XDG_CONFIG_HOME_DEFAULT),
-        };
-        Some(base.join(CONFIG_DIR))
+        Some(self.config_home()?.join(CONFIG_DIR))
+    }
+
+    /// The base of per-user config: `$XDG_CONFIG_HOME`, or `~/.config`.
+    /// Other programs' config lives here too, such as systemd user units.
+    pub fn config_home(&self) -> Option<PathBuf> {
+        match absolute(&self.xdg_config_home) {
+            Some(dir) => Some(dir),
+            None => Some(self.home.as_ref()?.join(XDG_CONFIG_HOME_DEFAULT)),
+        }
     }
 
     /// The config file `kkt serve` reads when it exists and no `--config` is given.
