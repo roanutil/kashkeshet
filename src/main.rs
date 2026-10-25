@@ -1,14 +1,14 @@
 use clap::Parser;
-use kashkeshet::app::{self, AppConfig};
+use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::SystemClock;
 use kashkeshet::config::{self, Limits};
 use kashkeshet::db::Db;
 use kashkeshet::mcp;
 use kashkeshet::names::OsEntropy;
+use kashkeshet::shutdown::Shutdown;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 /// A local server that lets AI agents talk to each other over MCP.
 #[derive(Parser, Debug)]
@@ -77,11 +77,10 @@ async fn run(args: Args) -> Result<(), String> {
     };
     let db =
         Db::open(&args.db).map_err(|e| format!("could not open {}: {e}", args.db.display()))?;
-    let shutdown = CancellationToken::new();
+    let shutdown = Shutdown::new();
+    let parts = Parts::new(db, Arc::new(SystemClock), Arc::new(OsEntropy), &limits);
     let router = app::build(
-        db,
-        Arc::new(SystemClock),
-        Arc::new(OsEntropy),
+        parts,
         AppConfig {
             limits,
             allowed_origins: args.allow_origins,
@@ -104,7 +103,7 @@ async fn run(args: Args) -> Result<(), String> {
             if let Err(e) = tokio::signal::ctrl_c().await {
                 tracing::error!("could not listen for Ctrl-C: {e}");
             }
-            shutdown.cancel();
+            shutdown.stop();
         })
         .await
         .map_err(|e| format!("server error: {e}"))

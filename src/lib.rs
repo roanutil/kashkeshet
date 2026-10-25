@@ -9,4 +9,5 @@ pub mod format;
 pub mod mcp;
 pub mod names;
 pub mod rules;
+pub mod shutdown;
 pub mod web;

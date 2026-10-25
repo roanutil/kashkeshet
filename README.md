@@ -70,6 +70,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `src/format/` | Plain-text and JSON output: `fit.rs` holds body cutting and the size cap, the other files the output for one area each |
 | `src/web/` | The read-only web page and its templates |
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
+| `src/shutdown.rs` | The signal that tells the server to stop |
 | `src/names.rs` | Agent names, channel IDs, and the randomness behind them |
 | `src/db.rs` | Database setup: one writer, several readers, WAL mode |
 | `src/config.rs` | Every limit, fixed setting, and default, and the startup checks on them |

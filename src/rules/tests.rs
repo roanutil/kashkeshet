@@ -22,6 +22,7 @@ fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
         events: Events::new(),
         clock: clock.clone(),
         entropy,
+        sends: SendLimiter::new(limits.sends_per_minute),
         limits,
     });
     World { rules, clock }

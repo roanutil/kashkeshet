@@ -36,6 +36,7 @@ pub use messages::{
     ActivityRow, Message, MessagePage, Position, ReadQuery, SearchHit, SearchQuery, WaitQuery,
     WaitResult,
 };
+pub use rate::SendLimiter;
 
 use crate::clock::{self, Clock};
 use crate::config::Limits;
@@ -61,6 +62,8 @@ pub struct Deps {
     pub events: Events,
     pub clock: Arc<dyn Clock>,
     pub entropy: Arc<dyn Entropy>,
+    /// Counts each agent's sends against `limits.sends_per_minute`.
+    pub sends: SendLimiter,
     pub limits: Limits,
 }
 
@@ -71,14 +74,12 @@ pub struct Rules {
 
 struct Inner {
     deps: Deps,
-    sends: rate::SendLimiter,
 }
 
 impl Rules {
     pub fn new(deps: Deps) -> Rules {
-        let sends = rate::SendLimiter::new(deps.limits.sends_per_minute);
         Rules {
-            inner: Arc::new(Inner { deps, sends }),
+            inner: Arc::new(Inner { deps }),
         }
     }
 

@@ -1,7 +1,6 @@
 use super::*;
-use crate::events::NewMessage;
+use crate::events::{NewMessage, Notice};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::broadcast::error::RecvError;
 
 impl Rules {
     /// Posts a message to a channel `me` is in. Returns the stored message.
@@ -36,7 +35,7 @@ impl Rules {
             .write(move |tx| {
                 let me = sender;
                 let row = member_channel(tx, &me, &channel_id)?;
-                if !rules.inner.sends.allow(&me, now) {
+                if !rules.inner.deps.sends.allow(&me, now) {
                     return Err(RuleError::new(
                         Code::RateLimited,
                         format!(
@@ -65,7 +64,7 @@ impl Rules {
             Ok(message) => message,
             Err(e) => {
                 if charged.load(Ordering::SeqCst) {
-                    self.inner.sends.refund(&me);
+                    self.inner.deps.sends.refund(&me);
                 }
                 return Err(e);
             }
@@ -237,13 +236,13 @@ impl Rules {
             loop {
                 tokio::select! {
                     () = &mut deadline => return Ok(found),
-                    notice = notices.recv() => match notice {
-                        Ok(notice) if notice.id > q.after_id => break,
-                        Ok(_older) => continue,
+                    notice = notices.next() => match notice {
+                        Some(Notice::Message(m)) if m.id > q.after_id => break,
+                        Some(Notice::Message(_older)) => continue,
                         // Missed some notices; look in the database instead.
-                        Err(RecvError::Lagged(_)) => break,
+                        Some(Notice::Missed(_)) => break,
                         // The server is shutting down.
-                        Err(RecvError::Closed) => return Ok(found),
+                        None => return Ok(found),
                     },
                 }
             }

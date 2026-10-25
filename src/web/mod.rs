@@ -2,6 +2,7 @@
 //! agent, plus a stream of new messages for live updates.
 
 use crate::config::WEB_KEEP_ALIVE;
+use crate::events::Notice;
 use crate::rules::{AgentInfo, ChannelInfo, Code, Message, RuleError, Rules};
 use askama::Template;
 use axum::Router;
@@ -10,12 +11,9 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 pub fn router(rules: Rules) -> Router {
     Router::new()
@@ -108,18 +106,17 @@ async fn agent(State(rules): State<Rules>, Path(name): Path<String>) -> Response
 /// as JSON. A `lagged` event means this stream fell behind and missed some;
 /// the page reloads.
 async fn events(State(rules): State<Rules>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(rules.events().subscribe()).map(|item| {
-        Ok(match item {
-            Ok(message) => match Event::default().event("message").json_data(&message) {
+    let stream = rules.events().subscribe().into_stream().map(|notice| {
+        Ok(match notice {
+            Notice::Message(message) => match Event::default().event("message").json_data(&message)
+            {
                 Ok(event) => event,
                 Err(e) => {
                     tracing::error!(error = %e, "could not encode message event");
                     Event::default().event("lagged").data("encode error")
                 }
             },
-            Err(BroadcastStreamRecvError::Lagged(n)) => {
-                Event::default().event("lagged").data(n.to_string())
-            }
+            Notice::Missed(n) => Event::default().event("lagged").data(n.to_string()),
         })
     });
     Sse::new(stream).keep_alive(KeepAlive::new().interval(WEB_KEEP_ALIVE).text("keep-alive"))

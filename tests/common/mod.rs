@@ -1,27 +1,27 @@
 //! Shared by the integration tests: start a server on a free port and connect
 //! an MCP client to it.
 
-use kashkeshet::app::{self, AppConfig};
+use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::SystemClock;
 use kashkeshet::config::Limits;
 use kashkeshet::db::Db;
 use kashkeshet::names::OsEntropy;
+use kashkeshet::shutdown::Shutdown;
 use rmcp::model::ProtocolVersion;
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::{ClientLifecycleMode, ClientServiceExt};
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 pub struct Server {
     pub base: String,
-    shutdown: CancellationToken,
+    shutdown: Shutdown,
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        self.shutdown.cancel();
+        self.shutdown.stop();
     }
 }
 
@@ -39,14 +39,14 @@ pub async fn start() -> Server {
 }
 
 pub async fn start_with(config: AppConfig) -> Server {
-    let shutdown = CancellationToken::new();
-    let router = app::build(
+    let shutdown = Shutdown::new();
+    let parts = Parts::new(
         Db::open_in_memory().expect("db"),
         Arc::new(SystemClock),
         Arc::new(OsEntropy),
-        config,
-        shutdown.child_token(),
+        &config.limits,
     );
+    let router = app::build(parts, config, shutdown.child());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -54,7 +54,7 @@ pub async fn start_with(config: AppConfig) -> Server {
     let ct = shutdown.clone();
     tokio::spawn(async move {
         axum::serve(listener, router)
-            .with_graceful_shutdown(async move { ct.cancelled_owned().await })
+            .with_graceful_shutdown(async move { ct.stopped().await })
             .await
             .expect("serve");
     });

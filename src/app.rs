@@ -10,14 +10,14 @@ use crate::events::Events;
 use crate::format::Formatter;
 use crate::mcp::{self, ChatServer};
 use crate::names::Entropy;
-use crate::rules::{Deps, Rules};
+use crate::rules::{Deps, Rules, SendLimiter};
+use crate::shutdown::Shutdown;
 use crate::web;
 use axum::Router;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
 };
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 pub struct AppConfig {
     pub limits: Limits,
@@ -28,20 +28,40 @@ pub struct AppConfig {
     pub instructions: String,
 }
 
-pub fn build(
-    db: Db,
-    clock: Arc<dyn Clock>,
-    entropy: Arc<dyn Entropy>,
-    config: AppConfig,
-    shutdown: CancellationToken,
-) -> Router {
-    let fmt = Formatter::new(config.limits.max_response_bytes, clock.clone());
+/// The parts the server is built from. The caller makes them, so tests can
+/// supply their own.
+pub struct Parts {
+    pub db: Db,
+    pub clock: Arc<dyn Clock>,
+    pub entropy: Arc<dyn Entropy>,
+    pub events: Events,
+    pub fmt: Formatter,
+    pub sends: SendLimiter,
+}
+
+impl Parts {
+    /// The usual parts around `db`, `clock` and `entropy`, sized by `limits`.
+    pub fn new(db: Db, clock: Arc<dyn Clock>, entropy: Arc<dyn Entropy>, limits: &Limits) -> Parts {
+        Parts {
+            db,
+            fmt: Formatter::new(limits.max_response_bytes, clock.clone()),
+            clock,
+            entropy,
+            events: Events::new(),
+            sends: SendLimiter::new(limits.sends_per_minute),
+        }
+    }
+}
+
+pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
+    let fmt = parts.fmt;
     let tools = mcp::tools(&config.limits);
     let rules = Rules::new(Deps {
-        db,
-        events: Events::new(),
-        clock,
-        entropy,
+        db: parts.db,
+        events: parts.events,
+        clock: parts.clock,
+        entropy: parts.entropy,
+        sends: parts.sends,
         limits: config.limits,
     });
 
@@ -68,10 +88,7 @@ pub fn build(
 
 /// The MCP transport settings. Every option is set here by name, so a change
 /// to the library's defaults cannot change the server's behavior.
-fn mcp_transport(
-    allowed_origins: Vec<String>,
-    shutdown: CancellationToken,
-) -> StreamableHttpServerConfig {
+fn mcp_transport(allowed_origins: Vec<String>, shutdown: Shutdown) -> StreamableHttpServerConfig {
     let mut config = StreamableHttpServerConfig::default()
         // Serve every request on its own, with no session to resume.
         .with_legacy_session_mode(false)
@@ -86,7 +103,7 @@ fn mcp_transport(
         .with_max_request_body_bytes(MCP_MAX_REQUEST_BYTES)
         // Older clients do not send per-request protocol metadata; accept them.
         .with_stateless_protocol_metadata_required(false)
-        .with_cancellation_token(shutdown);
+        .with_cancellation_token(shutdown.cancellation_token());
     config.session_store = None;
     config
 }
