@@ -15,6 +15,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0002_server_runs.sql"),
     include_str!("../../migrations/0003_revoked_agents.sql"),
     include_str!("../../migrations/0004_identity_recovery.sql"),
+    include_str!("../../migrations/0005_messages_by_time.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -584,6 +585,64 @@ impl Reads for Sql<'_> {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+
+    fn channel_use(&self) -> StoreResult<Vec<ChannelUseRecord>> {
+        // The newest message is found through the (channel_id, id) index.
+        let mut stmt = self.0.prepare_cached(
+            "SELECT c.id,
+                    (SELECT count(*) FROM messages m WHERE m.channel_id = c.id),
+                    last.created_at, last.agent
+             FROM channels c
+             LEFT JOIN messages last ON last.id =
+                 (SELECT max(m.id) FROM messages m WHERE m.channel_id = c.id)",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ChannelUseRecord {
+                    channel_id: r.get(0)?,
+                    message_count: r.get(1)?,
+                    last_message_at: r.get(2)?,
+                    last_speaker: r.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    fn memberships(&self) -> StoreResult<Vec<MembershipRecord>> {
+        let mut stmt = self.0.prepare_cached(
+            "SELECT m.channel_id, c.name, m.agent
+             FROM memberships m JOIN channels c ON c.id = m.channel_id
+             ORDER BY m.joined_at, m.rowid",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(MembershipRecord {
+                    channel_id: r.get(0)?,
+                    channel_name: r.get(1)?,
+                    agent: r.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    fn message_times_since(&self, since: &str) -> StoreResult<Vec<MessageTimeRecord>> {
+        // A range on the messages_by_time index: it reads only the answer,
+        // and does not assume times follow message IDs.
+        let mut stmt = self.0.prepare_cached(
+            "SELECT channel_id, created_at FROM messages WHERE created_at >= ? ORDER BY created_at",
+        )?;
+        let times = stmt
+            .query_map([since], |r| {
+                Ok(MessageTimeRecord {
+                    channel_id: r.get(0)?,
+                    created_at: r.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(times)
     }
 
     fn server_runs(&self) -> StoreResult<Vec<ServerRunRecord>> {

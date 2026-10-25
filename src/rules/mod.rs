@@ -47,9 +47,9 @@ use crate::config::Limits;
 use crate::events::Events;
 use crate::names::{self, Entropy};
 use crate::store::{
-    ActivityRecord, AgentRecord, ChannelFacts, ChannelFilter, Db, MessageRange, MessageRecord,
-    NewAgentRecord, NewChannelRecord, NewMessageRecord, NewerFilter, Reads, SearchFilter,
-    SearchHitRecord, ServerRunRecord,
+    ActivityRecord, AgentRecord, ChannelFacts, ChannelFilter, ChannelUseRecord, Db, MessageRange,
+    MessageRecord, NewAgentRecord, NewChannelRecord, NewMessageRecord, NewerFilter, Reads,
+    SearchFilter, SearchHitRecord, ServerRunRecord,
 };
 use access::{Decision, Need};
 use serde::Serialize;

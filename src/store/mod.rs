@@ -195,6 +195,31 @@ pub struct ActivityRecord {
     pub latest_id: i64,
 }
 
+/// How much a channel has been used: for the human's dashboard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelUseRecord {
+    pub channel_id: String,
+    pub message_count: i64,
+    /// When the newest message was sent, and by whom; `None` with no messages.
+    pub last_message_at: Option<String>,
+    pub last_speaker: Option<String>,
+}
+
+/// When a message was sent, and where.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageTimeRecord {
+    pub channel_id: String,
+    pub created_at: String,
+}
+
+/// One agent's membership of one channel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MembershipRecord {
+    pub channel_id: String,
+    pub channel_name: String,
+    pub agent: String,
+}
+
 /// Questions the rules can ask.
 pub trait Reads {
     // ---- agents ----
@@ -285,6 +310,18 @@ pub trait Reads {
     /// For each channel `member` is in with messages above `after_id`: how
     /// many, and the newest ID. The channel with the newest message comes first.
     fn activity(&self, member: &str, after_id: i64) -> StoreResult<Vec<ActivityRecord>>;
+
+    /// For every channel: how many messages it has, and its newest one's
+    /// time and sender. In no particular order.
+    fn channel_use(&self) -> StoreResult<Vec<ChannelUseRecord>>;
+
+    /// Every membership, in the order agents joined.
+    fn memberships(&self) -> StoreResult<Vec<MembershipRecord>>;
+
+    /// The channel and time of every message sent at or after `since` (a
+    /// stored time), oldest first. It reads only those messages, through an
+    /// index on the time, however large the table.
+    fn message_times_since(&self, since: &str) -> StoreResult<Vec<MessageTimeRecord>>;
 
     // ---- server runs ----
 

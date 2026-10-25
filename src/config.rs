@@ -20,9 +20,13 @@ pub const DB_READERS: usize = 4;
 pub const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// New-message notices kept for a slow subscriber before it starts missing them.
 pub const EVENT_BUFFER: usize = 1024;
-/// Messages shown on the web page's front page, or `web_page_messages` if
-/// that is fewer.
-pub const WEB_RECENT_MESSAGES: usize = 50;
+/// The front page counts each channel's messages in this last stretch of
+/// time, to show which channels are busy.
+pub const WEB_ACTIVITY_WINDOW: Duration = Duration::from_secs(5 * 60);
+/// Those messages are counted in stretches this long, so the page gets a few
+/// numbers per channel rather than a time for every message, and a count
+/// leaves the window at most this late.
+pub const WEB_ACTIVITY_BUCKET: Duration = Duration::from_secs(10);
 /// Largest `web_page_messages`. More would make a page slow to load and
 /// heavy to keep live.
 pub const MAX_WEB_PAGE_MESSAGES: usize = 5000;

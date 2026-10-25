@@ -15,11 +15,11 @@ mod source;
 pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
-    Admit, Agent, AgentView, Channel, ChannelView, Gate, LiveEvent, Message, Overview, ServerRun,
-    SignIn, Source, SourceError,
+    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
+    ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
 };
 
-use crate::config::WEB_KEEP_ALIVE;
+use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
 use crate::hosts::AllowedHosts;
 use askama::Template;
 use axum::Router;
@@ -100,12 +100,17 @@ async fn check_host(State(hosts): State<AllowedHosts>, request: Request, next: N
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexPage {
-    channels: Vec<Channel>,
-    agents: Vec<Agent>,
-    recent: Vec<Message>,
+    /// In the order they were created; activity never moves them.
+    channels: Vec<ChannelSummary>,
+    /// In the order they registered.
+    agents: Vec<AgentSummary>,
     runs: Vec<ServerRun>,
-    /// The most messages the live list keeps.
-    max_messages: usize,
+    /// The source's time, for "how long ago".
+    now: String,
+    /// The stretch of time "recent" messages are counted over, in seconds.
+    window_secs: u64,
+    /// The stretches they are counted in, in seconds.
+    bucket_secs: u64,
     sign_out: bool,
 }
 
@@ -148,15 +153,24 @@ struct ChannelParams {
 async fn index(State(pages): State<Pages>) -> Response {
     match pages.source.overview().await {
         Ok(o) => page(IndexPage {
-            channels: o.channels,
-            agents: o.agents,
-            recent: o.recent,
+            channels: in_creation_order(o.channels, |c| (&c.channel.created_at, &c.channel.id)),
+            agents: in_creation_order(o.agents, |a| (&a.agent.created_at, &a.agent.name)),
             runs: o.runs,
-            max_messages: pages.source.page_messages(),
+            now: o.now,
+            window_secs: WEB_ACTIVITY_WINDOW.as_secs(),
+            bucket_secs: WEB_ACTIVITY_BUCKET.as_secs(),
             sign_out: pages.sign_out,
         }),
         Err(e) => error_page(e, pages.sign_out),
     }
+}
+
+/// `items` oldest first, by when they were created and then by a name that
+/// tells ties apart. The front page keeps this order: rows never move, and
+/// new ones are added at the end.
+fn in_creation_order<T>(mut items: Vec<T>, key: impl Fn(&T) -> (&String, &String)) -> Vec<T> {
+    items.sort_by(|a, b| key(a).cmp(&key(b)));
+    items
 }
 
 async fn channel(

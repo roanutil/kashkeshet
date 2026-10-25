@@ -62,9 +62,19 @@ async fn get(site: &Router, path: &str) -> (StatusCode, String) {
 /// channel, and answer 404 for what does not exist.
 async fn pages_work(source: Arc<dyn Source>) {
     let overview = source.overview().await.expect("overview");
-    let channel = overview.channels.first().expect("a channel").clone();
-    let agent = overview.agents.first().expect("an agent").clone();
-    let message = overview.recent.last().expect("a message").clone();
+    let channel = overview
+        .channels
+        .first()
+        .expect("a channel")
+        .channel
+        .clone();
+    let agent = overview.agents.first().expect("an agent").agent.clone();
+    let busy = overview
+        .channels
+        .iter()
+        .find(|c| c.message_count > 0)
+        .expect("a channel with messages")
+        .clone();
     let site = site(source.clone());
 
     let (status, page) = get(&site, "/").await;
@@ -74,11 +84,15 @@ async fn pages_work(source: Arc<dyn Source>) {
         "front page lacks the channel"
     );
     assert!(page.contains(&agent.name), "front page lacks the agent");
+    assert!(page.contains(&format!("data-now=\"{}\"", overview.now)));
     assert!(
-        page.contains(&format!("data-id=\"{}\"", message.id)),
-        "front page lacks the latest message"
+        page.contains(&format!("data-channel-id=\"{}\"", busy.channel.id)),
+        "front page lacks a channel row"
     );
-    assert!(page.contains(&format!("data-max=\"{}\"", source.page_messages())));
+    assert!(
+        !page.contains("<li class=\"msg\""),
+        "the front page lists no messages"
+    );
 
     let (status, page) = get(&site, &format!("/channels/{}", channel.id)).await;
     assert_eq!(status, StatusCode::OK);
@@ -87,13 +101,13 @@ async fn pages_work(source: Arc<dyn Source>) {
     assert!(page.contains(&format!("data-max=\"{}\"", source.page_messages())));
 
     let view = source
-        .channel(message.channel_id.clone(), None)
+        .channel(busy.channel.id.clone(), None)
         .await
         .expect("channel view");
     let newest = view.messages.last().expect("a message").id;
     let (status, page) = get(
         &site,
-        &format!("/channels/{}?before_id={newest}", message.channel_id),
+        &format!("/channels/{}?before_id={newest}", busy.channel.id),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -194,7 +208,7 @@ async fn the_show_older_link_appears_only_when_older_messages_exist() {
     let overview = p.overview().await.expect("overview");
     let mut seen_paged = false;
     let mut seen_single = false;
-    for c in &overview.channels {
+    for c in overview.channels.iter().map(|s| &s.channel) {
         let view = p.channel(c.id.clone(), None).await.expect("view");
         let (status, page) = get(&site, &format!("/channels/{}", c.id)).await;
         assert_eq!(status, StatusCode::OK);
@@ -217,28 +231,129 @@ async fn the_show_older_link_appears_only_when_older_messages_exist() {
     assert!(seen_paged && seen_single);
 }
 
-#[tokio::test]
-async fn the_preview_front_page_shows_no_more_than_a_page_of_messages() {
-    let p = Arc::new(Preview::new(
-        Arc::new(FixedClock::new(start_time())),
-        Arc::new(SeededEntropy::new(1)),
-        PreviewSettings {
-            page_messages: 5,
-            ..PreviewSettings::DEFAULT
-        },
-        &Shutdown::new(),
-    ));
-    let recent = p.overview().await.expect("overview").recent;
-    assert_eq!(recent.len(), 5);
-    let (status, page) = get(&site(p), "/").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(page.matches("<li class=\"msg\"").count(), 5);
-    let shown: Vec<i64> = page
-        .split("data-id=\"")
+/// The front page's summary must agree with what the channel and agent
+/// pages show, for any source.
+async fn summaries_agree_with_the_pages(source: Arc<dyn Source>) {
+    let overview = source.overview().await.expect("overview");
+    for c in &overview.channels {
+        let view = source
+            .channel(c.channel.id.clone(), None)
+            .await
+            .expect("view");
+        let newest = view.messages.last();
+        assert_eq!(c.last_message_at, newest.map(|m| m.created_at.clone()));
+        assert_eq!(c.last_speaker, newest.map(|m| m.agent.clone()));
+        assert!(c.message_count >= view.messages.len() as i64);
+        assert_eq!(c.message_count == 0, view.messages.is_empty());
+        assert_eq!(c.channel.member_count, view.members.len() as i64);
+        let starts: Vec<&str> = c.recent_activity.iter().map(|a| a.start.as_str()).collect();
+        let mut sorted = starts.clone();
+        sorted.sort();
+        assert_eq!(sorted, starts, "recent counts are oldest first");
+        for a in &c.recent_activity {
+            assert_eq!(
+                crate::clock::floor_text(&a.start, crate::config::WEB_ACTIVITY_BUCKET).as_deref(),
+                Some(a.start.as_str()),
+                "stretches start on a stretch boundary"
+            );
+        }
+        // With every message on one page, the recent count is exact.
+        if view.older_before_id.is_none() {
+            let since = crate::clock::to_text(
+                crate::clock::from_text(&overview.now).expect("now")
+                    - chrono::Duration::from_std(crate::config::WEB_ACTIVITY_WINDOW)
+                        .expect("window"),
+            );
+            let in_window = view
+                .messages
+                .iter()
+                .filter(|m| m.created_at >= since)
+                .count();
+            assert_eq!(c.recent_count(), in_window as i64, "{}", c.channel.name);
+        }
+    }
+    for a in &overview.agents {
+        let view = source.agent(a.agent.name.clone()).await.expect("view");
+        let mut theirs: Vec<&str> = view.channels.iter().map(|c| c.id.as_str()).collect();
+        let mut listed: Vec<&str> = a.channels.iter().map(|c| c.id.as_str()).collect();
+        theirs.sort();
+        listed.sort();
+        assert_eq!(listed, theirs, "{}", a.agent.name);
+    }
+    // The front page keeps channels and agents in creation order.
+    let (_, page) = get(&site(source), "/").await;
+    let rows: Vec<&str> = page
+        .split("<tr data-channel-id=\"")
         .skip(1)
-        .filter_map(|rest| rest.split('"').next()?.parse().ok())
+        .filter_map(|rest| rest.split('"').next())
         .collect();
-    assert_eq!(shown, recent.iter().map(|m| m.id).collect::<Vec<_>>());
+    let mut channels = overview.channels.clone();
+    channels.sort_by(|a, b| {
+        (&a.channel.created_at, &a.channel.id).cmp(&(&b.channel.created_at, &b.channel.id))
+    });
+    let expected: Vec<&str> = channels.iter().map(|c| c.channel.id.as_str()).collect();
+    assert_eq!(rows, expected);
+    let agent_rows: Vec<&str> = page
+        .split("<tr data-agent=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect();
+    let mut agents = overview.agents.clone();
+    agents.sort_by(|a, b| {
+        (&a.agent.created_at, &a.agent.name).cmp(&(&b.agent.created_at, &b.agent.name))
+    });
+    let expected: Vec<&str> = agents.iter().map(|a| a.agent.name.as_str()).collect();
+    assert_eq!(agent_rows, expected);
+}
+
+#[tokio::test]
+async fn summaries_agree_with_the_pages_from_the_rules() {
+    summaries_agree_with_the_pages(rules_source().await).await;
+}
+
+#[tokio::test]
+async fn summaries_agree_with_the_pages_from_the_preview() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    let p = preview(4, clock, &Shutdown::new());
+    for _ in 0..30 {
+        p.step();
+    }
+    summaries_agree_with_the_pages(p).await;
+}
+
+#[tokio::test]
+async fn the_preview_counts_recent_messages_in_the_window() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    let p = preview(1, clock.clone(), &Shutdown::new());
+    // The starting history ends now, so some of it is recent.
+    let before: i64 = p
+        .overview()
+        .await
+        .expect("overview")
+        .channels
+        .iter()
+        .map(|c| c.recent_count())
+        .sum();
+    assert!(before > 0);
+    // Ten minutes later, with nothing new, nothing is recent.
+    clock.advance(chrono::Duration::minutes(10));
+    let after = p.overview().await.expect("overview");
+    assert!(after.channels.iter().all(|c| c.recent_activity.is_empty()));
+    assert_eq!(
+        after.now,
+        crate::clock::to_text(start_time() + chrono::Duration::minutes(10))
+    );
+    // A new message is recent again.
+    p.step();
+    let again: i64 = p
+        .overview()
+        .await
+        .expect("overview")
+        .channels
+        .iter()
+        .map(|c| c.recent_count())
+        .sum();
+    assert!(again >= 1);
 }
 
 #[tokio::test]
@@ -264,12 +379,12 @@ async fn the_preview_world_has_what_the_page_must_show() {
     let clock = Arc::new(FixedClock::new(start_time()));
     let p = preview(1, clock, &Shutdown::new());
     let overview = p.overview().await.expect("overview");
-    assert!(overview.channels.iter().any(|c| c.open));
-    assert!(overview.channels.iter().any(|c| !c.open));
+    assert!(overview.channels.iter().any(|c| c.channel.open));
+    assert!(overview.channels.iter().any(|c| !c.channel.open));
     let mut empty = 0;
     let mut paged = 0;
     let mut long = false;
-    for c in &overview.channels {
+    for c in overview.channels.iter().map(|s| &s.channel) {
         let view = p.channel(c.id.clone(), None).await.expect("view");
         if view.messages.is_empty() {
             empty += 1;
