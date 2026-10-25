@@ -1,9 +1,8 @@
-//! Agent names, channel IDs, and tokens.
+//! Agent names and channel IDs, and the random characters that IDs and
+//! tokens are made of.
 //!
 //! Randomness is injected through [`Entropy`] so the rest of the system can be
 //! tested with a predictable source.
-
-use sha2::{Digest, Sha256};
 
 /// A source of random numbers.
 pub trait Entropy: Send + Sync {
@@ -22,10 +21,8 @@ impl Entropy for OsEntropy {
 }
 
 /// Characters used in channel IDs and tokens.
-const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+pub(crate) const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 
-pub const TOKEN_PREFIX: &str = "act_";
-pub const TOKEN_RANDOM_LEN: usize = 26;
 pub const CHANNEL_PREFIX: &str = "ch_";
 pub const CHANNEL_RANDOM_LEN: usize = 8;
 
@@ -73,40 +70,7 @@ pub fn channel_id(entropy: &dyn Entropy) -> String {
     )
 }
 
-/// A random token, such as `act_` followed by 26 characters.
-pub fn token(entropy: &dyn Entropy) -> String {
-    format!("{TOKEN_PREFIX}{}", random_chars(entropy, TOKEN_RANDOM_LEN))
-}
-
-/// The hash stored in place of a token.
-pub fn hash_token(token: &str) -> Vec<u8> {
-    Sha256::digest(token.as_bytes()).to_vec()
-}
-
-/// True if `text` contains something shaped like a token.
-pub fn contains_token(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let prefix = TOKEN_PREFIX.as_bytes();
-    let mut start = 0;
-    while let Some(offset) = find(&bytes[start..], prefix) {
-        let tail = &bytes[start + offset + prefix.len()..];
-        if tail.len() >= TOKEN_RANDOM_LEN
-            && tail[..TOKEN_RANDOM_LEN]
-                .iter()
-                .all(|b| ALPHABET.contains(b))
-        {
-            return true;
-        }
-        start += offset + 1;
-    }
-    false
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
-fn random_chars(entropy: &dyn Entropy, len: usize) -> String {
+pub(crate) fn random_chars(entropy: &dyn Entropy, len: usize) -> String {
     (0..len)
         .map(|_| ALPHABET[entropy.below(ALPHABET.len())] as char)
         .collect()
@@ -166,25 +130,6 @@ mod tests {
         assert_eq!(name.split('-').count(), 2);
         let id = channel_id(&e);
         assert!(id.starts_with("ch_") && id.len() == 11);
-        let t = token(&e);
-        assert!(t.starts_with("act_") && t.len() == 30);
         assert_eq!(numbered_name("amber-falcon", 1), "amber-falcon-2");
-    }
-
-    #[test]
-    fn detects_tokens() {
-        let e = SeqEntropy::new(7);
-        let t = token(&e);
-        assert!(contains_token(&t));
-        assert!(contains_token(&format!("my token is {t}, keep it")));
-        assert!(!contains_token("react_component is fine"));
-        assert!(!contains_token("act_short"));
-        assert!(!contains_token(""));
-    }
-
-    #[test]
-    fn hash_is_stable_and_not_the_token() {
-        assert_eq!(hash_token("act_x"), hash_token("act_x"));
-        assert_ne!(hash_token("act_x"), b"act_x".to_vec());
     }
 }

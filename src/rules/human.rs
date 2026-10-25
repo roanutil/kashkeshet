@@ -2,34 +2,39 @@
 //! including closed channels, and changes nothing.
 
 use super::*;
-
-/// Messages shown on the front page.
-const RECENT_MESSAGES: usize = 50;
-/// Messages shown per channel page.
-const CHANNEL_PAGE_MESSAGES: usize = 200;
+use crate::config::{WEB_CHANNEL_PAGE_MESSAGES, WEB_RECENT_MESSAGES};
 
 impl Rules {
     pub async fn overview(&self) -> Result<Overview> {
         let preview = self.limits().member_preview;
         self.db()
-            .read(move |conn| {
-                let channels = all_channel_ids(conn, None)?
+            .read(move |store| {
+                let channels = store
+                    .all_channel_ids(None)?
                     .iter()
-                    .map(|id| channel_info(conn, id, None, None, preview))
+                    .map(|id| channel_info(store, id, None, None, preview))
                     .collect::<Result<Vec<_>>>()?;
-                let agents = all_agents(conn)?;
-                let mut stmt = conn.prepare_cached(&format!(
-                    "SELECT {MESSAGE_COLUMNS} FROM messages m JOIN channels c ON c.id = m.channel_id
-                     ORDER BY m.id DESC LIMIT ?"
-                ))?;
-                let mut recent = stmt
-                    .query_map([RECENT_MESSAGES as i64], message_from_row)?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let agents = store
+                    .agents_by_last_seen()?
+                    .into_iter()
+                    .map(AgentInfo::from)
+                    .collect();
+                let mut recent: Vec<Message> = store
+                    .recent_messages(WEB_RECENT_MESSAGES)?
+                    .into_iter()
+                    .map(Message::from)
+                    .collect();
                 recent.reverse();
+                let runs = store
+                    .server_runs()?
+                    .into_iter()
+                    .map(ServerRunInfo::from)
+                    .collect();
                 Ok(Overview {
                     channels,
                     agents,
                     recent,
+                    runs,
                 })
             })
             .await
@@ -38,19 +43,19 @@ impl Rules {
     pub async fn channel_view(&self, id: String, before_id: Option<i64>) -> Result<ChannelView> {
         let preview = self.limits().member_preview;
         self.db()
-            .read(move |conn| {
-                if channel_row(conn, &id)?.is_none() {
+            .read(move |store| {
+                if store.channel(&id)?.is_none() {
                     return Err(RuleError::channel_not_found(&id));
                 }
-                let channel = channel_info(conn, &id, None, None, preview)?;
-                let members = member_names(conn, &id, usize::MAX >> 1)?;
+                let channel = channel_info(store, &id, None, None, preview)?;
+                let members = store.members_by_join(&id, usize::MAX >> 1)?;
                 let page = super::messages::read_channel(
-                    conn,
+                    store,
                     &ReadQuery {
                         channel_id: id.clone(),
                         position: before_id.map_or(Position::Latest, Position::Before),
                         from_agent: None,
-                        limit: CHANNEL_PAGE_MESSAGES,
+                        limit: WEB_CHANNEL_PAGE_MESSAGES,
                     },
                 )?;
                 let older_before_id = match page.more {
@@ -70,30 +75,17 @@ impl Rules {
     pub async fn agent_view(&self, name: String) -> Result<AgentView> {
         let preview = self.limits().member_preview;
         self.db()
-            .read(move |conn| {
-                let agent = conn
-                    .query_row(
-                        "SELECT name, created_at, last_seen FROM agents WHERE name = ?",
-                        [&name],
-                        |r| {
-                            Ok(AgentInfo {
-                                name: r.get(0)?,
-                                created_at: r.get(1)?,
-                                last_seen: r.get(2)?,
-                            })
-                        },
-                    )
-                    .optional()?
+            .read(move |store| {
+                let agent = store
+                    .agent(&name)?
+                    .map(AgentInfo::from)
                     .ok_or_else(|| RuleError::agent_not_found(&name))?;
-                let channels = all_channel_ids(conn, Some(&name))?
+                let channels = store
+                    .all_channel_ids(Some(&name))?
                     .iter()
-                    .map(|id| channel_info(conn, id, Some(&name), None, preview))
+                    .map(|id| channel_info(store, id, Some(&name), None, preview))
                     .collect::<Result<Vec<_>>>()?;
-                let message_count = conn.query_row(
-                    "SELECT count(*) FROM messages WHERE agent = ?",
-                    [&name],
-                    |r| r.get(0),
-                )?;
+                let message_count = store.message_count_from(&name)?;
                 Ok(AgentView {
                     agent,
                     channels,
@@ -104,32 +96,52 @@ impl Rules {
     }
 }
 
-/// Every channel ID in name order, or only those `member` is in.
-fn all_channel_ids(conn: &Connection, member: Option<&str>) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT c.id FROM channels c
-         WHERE :member IS NULL
-            OR EXISTS (SELECT 1 FROM memberships m WHERE m.channel_id = c.id AND m.agent = :member)
-         ORDER BY c.name, c.id",
-    )?;
-    let ids = stmt
-        .query_map(named_params! { ":member": member }, |r| r.get(0))?
-        .collect::<rusqlite::Result<Vec<String>>>()?;
-    Ok(ids)
+/// What the human sees on the front page.
+#[derive(Clone, Debug)]
+pub struct Overview {
+    pub channels: Vec<ChannelInfo>,
+    pub agents: Vec<AgentInfo>,
+    pub recent: Vec<Message>,
+    /// Every server run, newest first.
+    pub runs: Vec<ServerRunInfo>,
 }
 
-fn all_agents(conn: &Connection) -> Result<Vec<AgentInfo>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT name, created_at, last_seen FROM agents ORDER BY coalesce(last_seen, created_at) DESC",
-    )?;
-    let agents = stmt
-        .query_map([], |r| {
-            Ok(AgentInfo {
-                name: r.get(0)?,
-                created_at: r.get(1)?,
-                last_seen: r.get(2)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(agents)
+/// One start of the server and what produced it.
+#[derive(Clone, Debug)]
+pub struct ServerRunInfo {
+    pub id: i64,
+    pub started_at: String,
+    pub version: String,
+    pub git_commit: String,
+    pub settings: String,
+    pub instructions_sha256: String,
+}
+
+impl From<ServerRunRecord> for ServerRunInfo {
+    fn from(r: ServerRunRecord) -> ServerRunInfo {
+        ServerRunInfo {
+            id: r.id,
+            started_at: r.started_at,
+            version: r.version,
+            git_commit: r.git_commit,
+            settings: r.settings,
+            instructions_sha256: r.instructions_sha256,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ChannelView {
+    pub channel: ChannelInfo,
+    pub members: Vec<String>,
+    pub messages: Vec<Message>,
+    /// Set when older messages exist.
+    pub older_before_id: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentView {
+    pub agent: AgentInfo,
+    pub channels: Vec<ChannelInfo>,
+    pub message_count: i64,
 }

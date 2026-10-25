@@ -1,6 +1,7 @@
 //! The MCP tools. Each tool checks the caller's token, calls into the rules,
 //! and formats the result. No tool touches the database directly.
 
+use crate::config::Limits;
 use crate::format::{Format, Formatter};
 use crate::rules::{
     self, Agent, ChannelQuery, NewChannel, Position, ReadQuery, RuleError, Rules, SearchQuery,
@@ -11,6 +12,7 @@ use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabiliti
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,12 +30,18 @@ pub struct ChatServer {
 }
 
 impl ChatServer {
-    pub fn new(rules: Rules, fmt: Formatter, instructions: Arc<str>) -> ChatServer {
+    /// `tools` comes from [`tools`], built once with the server's limits.
+    pub fn new(
+        rules: Rules,
+        fmt: Formatter,
+        instructions: Arc<str>,
+        tools: ToolRouter<ChatServer>,
+    ) -> ChatServer {
         ChatServer {
             rules,
             fmt,
             instructions,
-            tool_router: Self::tool_router(),
+            tool_router: tools,
         }
     }
 
@@ -69,6 +77,9 @@ impl ChatServer {
 //
 // `token` is optional in the schema so that a call without it gets a helpful
 // `unauthenticated` answer rather than a schema error.
+//
+// Descriptions name limits as `{placeholders}`, which `tools` fills in with
+// the limits the server runs with. See `describe` for the list.
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TokenOnly {
@@ -84,7 +95,7 @@ pub struct ListAgentsParams {
     pub token: Option<String>,
     /// Only agents whose names contain this text.
     pub query: Option<String>,
-    /// How many to return (default 20, up to 100).
+    /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
     /// From a previous `more: cursor=...` line.
     pub cursor: Option<String>,
@@ -104,7 +115,7 @@ pub struct ListChannelsParams {
     pub with_agent: Option<String>,
     /// If given, each channel shows how many messages are newer than this ID.
     pub after_id: Option<i64>,
-    /// How many to return (default 20, up to 100).
+    /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
     /// From a previous `more: cursor=...` line.
     pub cursor: Option<String>,
@@ -128,7 +139,7 @@ pub struct ListMembersParams {
     pub token: Option<String>,
     /// The channel's ID.
     pub channel_id: String,
-    /// How many to return (default 20, up to 100).
+    /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
     /// From a previous `more: cursor=...` line.
     pub cursor: Option<String>,
@@ -140,11 +151,11 @@ pub struct ListMembersParams {
 pub struct CreateChannelParams {
     /// Your token from `register`.
     pub token: Option<String>,
-    /// A label for the channel, up to 64 characters. Need not be unique.
+    /// A label for the channel, up to {max_channel_name_chars} characters. Need not be unique.
     pub name: String,
     /// True for an open channel anyone can find and join; false for a closed one.
     pub open: bool,
-    /// What the channel is for, up to 500 characters. Others find open channels by it.
+    /// What the channel is for, up to {max_purpose_chars} characters. Others find open channels by it.
     pub purpose: Option<String>,
     /// Agents to add as members right away, besides you.
     pub members: Option<Vec<String>>,
@@ -170,7 +181,7 @@ pub struct SetPurposeParams {
     pub token: Option<String>,
     /// The channel's ID.
     pub channel_id: String,
-    /// The new purpose, up to 500 characters. Empty clears it.
+    /// The new purpose, up to {max_purpose_chars} characters. Empty clears it.
     pub purpose: String,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
@@ -182,7 +193,7 @@ pub struct SendParams {
     pub token: Option<String>,
     /// The channel's ID.
     pub channel_id: String,
-    /// The message text, up to 8 KB.
+    /// The message text, up to {max_body_size}.
     pub body: String,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
@@ -200,9 +211,9 @@ pub struct ReadParams {
     pub before_id: Option<i64>,
     /// Only messages from this agent.
     pub from_agent: Option<String>,
-    /// How many to return (default 20, up to 100).
+    /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
-    /// Cut bodies longer than this many characters (default 500).
+    /// Cut bodies longer than this many characters (default {max_body_chars}).
     pub max_body_chars: Option<u32>,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
@@ -228,7 +239,7 @@ pub struct SearchParams {
     pub channel_id: Option<String>,
     /// Only messages from this agent.
     pub from_agent: Option<String>,
-    /// How many to return (default 20, up to 100).
+    /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
@@ -252,14 +263,83 @@ pub struct WaitParams {
     pub after_id: i64,
     /// Only these channels. Default: every channel you are in.
     pub channel_ids: Option<Vec<String>>,
-    /// Seconds to wait (default 30, up to 50). 0 checks without waiting.
+    /// Seconds to wait (default {default_wait_s}, up to {max_wait_s}). 0 checks without waiting.
     pub timeout_s: Option<u32>,
-    /// How many to return (default 20, up to 100).
+    /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
-    /// Cut bodies longer than this many characters (default 500).
+    /// Cut bodies longer than this many characters (default {max_body_chars}).
     pub max_body_chars: Option<u32>,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
+}
+
+/// The tools, with every limit in their descriptions filled in from `limits`.
+pub fn tools(limits: &Limits) -> ToolRouter<ChatServer> {
+    let mut router = ChatServer::tool_router();
+    for route in router.map.values_mut() {
+        let tool = &mut route.attr;
+        if let Some(text) = &tool.description {
+            tool.description = Some(describe(text, limits).into());
+        }
+        let mut schema = Value::Object(tool.input_schema.as_ref().clone());
+        describe_schema(&mut schema, limits);
+        if let Value::Object(object) = schema {
+            tool.input_schema = Arc::new(object);
+        }
+    }
+    router
+}
+
+/// Fills in the limit placeholders in a tool or parameter description.
+fn describe(text: &str, limits: &Limits) -> String {
+    let values = [
+        ("{default_limit}", limits.default_limit.to_string()),
+        ("{max_limit}", limits.max_limit.to_string()),
+        ("{max_body_chars}", limits.max_body_chars.to_string()),
+        ("{max_body_size}", size(limits.max_body_bytes)),
+        (
+            "{max_channel_name_chars}",
+            limits.max_channel_name_chars.to_string(),
+        ),
+        ("{max_purpose_chars}", limits.max_purpose_chars.to_string()),
+        (
+            "{default_wait_s}",
+            limits.default_wait.as_secs().to_string(),
+        ),
+        ("{max_wait_s}", limits.max_wait.as_secs().to_string()),
+    ];
+    values.iter().fold(text.to_string(), |text, (name, value)| {
+        text.replace(name, value)
+    })
+}
+
+/// Fills in every `description` string found anywhere in a JSON schema.
+fn describe_schema(schema: &mut Value, limits: &Limits) {
+    match schema {
+        Value::Object(object) => {
+            for (key, value) in object.iter_mut() {
+                match value {
+                    Value::String(text) if key == "description" => {
+                        *text = describe(text, limits);
+                    }
+                    _ => describe_schema(value, limits),
+                }
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| describe_schema(item, limits)),
+        _ => {}
+    }
+}
+
+/// A byte count as people say it: `8 KB` for whole kilobytes, else `1500 bytes`.
+fn size(bytes: usize) -> String {
+    if bytes.is_multiple_of(1024) {
+        format!("{} KB", bytes / 1024)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 #[tool_router]
@@ -566,5 +646,58 @@ impl ServerHandler for ChatServer {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("kashkeshet", env!("CARGO_PKG_VERSION")))
             .with_instructions(self.instructions.as_ref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn odd_limits() -> Limits {
+        Limits {
+            default_limit: 7,
+            max_limit: 42,
+            max_body_chars: 99,
+            max_body_bytes: 3000,
+            max_channel_name_chars: 33,
+            max_purpose_chars: 77,
+            default_wait: Duration::from_secs(5),
+            max_wait: Duration::from_secs(9),
+            ..Limits::DEFAULT
+        }
+    }
+
+    #[test]
+    fn describe_fills_every_placeholder() {
+        let text = "{default_limit} {max_limit} {max_body_chars} {max_body_size} \
+            {max_channel_name_chars} {max_purpose_chars} {default_wait_s} {max_wait_s}";
+        assert_eq!(
+            describe(text, &odd_limits()),
+            "7 42 99 3000 bytes 33 77 5 9"
+        );
+    }
+
+    #[test]
+    fn sizes_read_naturally() {
+        assert_eq!(size(8 * 1024), "8 KB");
+        assert_eq!(size(1500), "1500 bytes");
+    }
+
+    #[test]
+    fn no_placeholder_is_left_unfilled() {
+        for tool in tools(&odd_limits()).list_all() {
+            let text = serde_json::to_string(&tool).expect("tool as JSON");
+            assert!(!has_placeholder(&text), "{text}");
+        }
+    }
+
+    /// True if `text` holds `{word}`, where the word is lowercase letters and underscores.
+    fn has_placeholder(text: &str) -> bool {
+        text.split('{').skip(1).any(|rest| {
+            rest.split_once('}').is_some_and(|(word, _)| {
+                !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+            })
+        })
     }
 }

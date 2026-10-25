@@ -1,7 +1,9 @@
 //! The human's read-only view: pages for all channels, one channel, and one
 //! agent, plus a stream of new messages for live updates.
 
-use crate::rules::{AgentInfo, ChannelInfo, Code, Message, RuleError, Rules};
+use crate::config::WEB_KEEP_ALIVE;
+use crate::events::Notice;
+use crate::rules::{AgentInfo, ChannelInfo, Code, Message, RuleError, Rules, ServerRunInfo};
 use askama::Template;
 use axum::Router;
 use axum::extract::{Path, Query, State};
@@ -9,12 +11,9 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 pub fn router(rules: Rules) -> Router {
     Router::new()
@@ -31,6 +30,7 @@ struct IndexPage {
     channels: Vec<ChannelInfo>,
     agents: Vec<AgentInfo>,
     recent: Vec<Message>,
+    runs: Vec<ServerRunInfo>,
 }
 
 #[derive(Template)]
@@ -70,6 +70,7 @@ async fn index(State(rules): State<Rules>) -> Response {
             channels: o.channels,
             agents: o.agents,
             recent: o.recent,
+            runs: o.runs,
         }),
         Err(e) => error_page(e),
     }
@@ -107,21 +108,20 @@ async fn agent(State(rules): State<Rules>, Path(name): Path<String>) -> Response
 /// as JSON. A `lagged` event means this stream fell behind and missed some;
 /// the page reloads.
 async fn events(State(rules): State<Rules>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(rules.events().subscribe()).map(|item| {
-        Ok(match item {
-            Ok(message) => match Event::default().event("message").json_data(&message) {
+    let stream = rules.events().subscribe().into_stream().map(|notice| {
+        Ok(match notice {
+            Notice::Message(message) => match Event::default().event("message").json_data(&message)
+            {
                 Ok(event) => event,
                 Err(e) => {
                     tracing::error!(error = %e, "could not encode message event");
                     Event::default().event("lagged").data("encode error")
                 }
             },
-            Err(BroadcastStreamRecvError::Lagged(n)) => {
-                Event::default().event("lagged").data(n.to_string())
-            }
+            Notice::Missed(n) => Event::default().event("lagged").data(n.to_string()),
         })
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(WEB_KEEP_ALIVE).text("keep-alive"))
 }
 
 mod filters {
@@ -129,6 +129,21 @@ mod filters {
     #[askama::filter_fn]
     pub fn when<T: std::fmt::Display>(stored: T, _: &dyn askama::Values) -> askama::Result<String> {
         Ok(stored.to_string().replace('T', " ").replace('Z', ""))
+    }
+
+    /// The first 12 characters of a hash, as git shows a short commit. Any
+    /// `-dirty` mark is kept.
+    #[askama::filter_fn]
+    pub fn short<T: std::fmt::Display>(hash: T, _: &dyn askama::Values) -> askama::Result<String> {
+        let text = hash.to_string();
+        let (hash, dirty) = match text.strip_suffix("-dirty") {
+            Some(h) => (h, "-dirty"),
+            None => (text.as_str(), ""),
+        };
+        Ok(format!(
+            "{}{dirty}",
+            hash.chars().take(12).collect::<String>()
+        ))
     }
 }
 
@@ -161,5 +176,29 @@ fn error_page(e: RuleError) -> Response {
             tracing::error!(error = %render_error, "could not render error page");
             (status, "error").into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Askama finds custom filters through a `filters` module in scope.
+    use super::filters;
+    use askama::Template;
+
+    #[derive(Template)]
+    #[template(source = "{{ h|short }}", ext = "txt")]
+    struct Short<'a> {
+        h: &'a str,
+    }
+
+    fn render(h: &str) -> String {
+        Short { h }.render().expect("render")
+    }
+
+    #[test]
+    fn short_keeps_twelve_characters_and_the_dirty_mark() {
+        assert_eq!(render("0123456789abcdef0123"), "0123456789ab");
+        assert_eq!(render("0123456789abcdef0123-dirty"), "0123456789ab-dirty");
+        assert_eq!(render("unknown"), "unknown");
     }
 }

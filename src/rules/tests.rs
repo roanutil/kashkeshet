@@ -9,26 +9,49 @@ use std::time::Duration;
 struct World {
     rules: Rules,
     clock: Arc<FixedClock>,
+    run_id: i64,
 }
 
-fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
+/// The run every test world records, so stamped rows can be checked.
+const TEST_RUN: &str = "test-run";
+
+async fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
     let clock = Arc::new(FixedClock::new(
         chrono::Utc
             .with_ymd_and_hms(2026, 10, 23, 14, 0, 0)
             .unwrap(),
     ));
+    let db = Db::open_in_memory().expect("db");
+    let run_id = db
+        .write(|w| {
+            w.insert_server_run(&crate::store::NewServerRunRecord {
+                started_at: "2026-10-23T14:00:00Z".into(),
+                version: TEST_RUN.into(),
+                git_commit: TEST_RUN.into(),
+                settings: TEST_RUN.into(),
+                instructions_sha256: TEST_RUN.into(),
+            })
+        })
+        .await
+        .expect("record run");
     let rules = Rules::new(Deps {
-        db: Db::open_in_memory().expect("db"),
+        db,
         events: Events::new(),
         clock: clock.clone(),
         entropy,
+        sends: SendLimiter::new(limits.sends_per_minute),
+        run_id,
         limits,
     });
-    World { rules, clock }
+    World {
+        rules,
+        clock,
+        run_id,
+    }
 }
 
-fn world() -> World {
-    world_with(Limits::DEFAULT, Arc::new(SeqEntropy::new(42)))
+async fn world() -> World {
+    world_with(Limits::DEFAULT, Arc::new(SeqEntropy::new(42))).await
 }
 
 impl World {
@@ -96,7 +119,7 @@ fn code<T: std::fmt::Debug>(r: Result<T>) -> Code {
 
 #[tokio::test]
 async fn register_gives_a_name_and_a_working_token() {
-    let w = world();
+    let w = world().await;
     let reg = w.rules.register().await.unwrap();
     assert!(reg.token.starts_with("act_"));
     let me = w.rules.authenticate(Some(&reg.token)).await.unwrap();
@@ -105,7 +128,7 @@ async fn register_gives_a_name_and_a_working_token() {
 
 #[tokio::test]
 async fn bad_or_missing_tokens_are_unauthenticated_with_instructions() {
-    let w = world();
+    let w = world().await;
     let err = w.rules.authenticate(None).await.unwrap_err();
     assert_eq!(err.code, Code::Unauthenticated);
     assert!(err.message.contains("register"));
@@ -120,7 +143,8 @@ async fn name_clashes_get_a_number() {
     let w = world_with(
         Limits::DEFAULT,
         Arc::new(SameNameEntropy(SeqEntropy::new(3))),
-    );
+    )
+    .await;
     let a = w.rules.register().await.unwrap();
     let b = w.rules.register().await.unwrap();
     let c = w.rules.register().await.unwrap();
@@ -130,7 +154,7 @@ async fn name_clashes_get_a_number() {
 
 #[tokio::test]
 async fn last_seen_is_written_at_most_once_a_minute() {
-    let w = world();
+    let w = world().await;
     let reg = w.rules.register().await.unwrap();
     let seen = |w: &World| {
         let rules = w.rules.clone();
@@ -154,7 +178,7 @@ async fn last_seen_is_written_at_most_once_a_minute() {
 
 #[tokio::test]
 async fn list_agents_pages_by_name() {
-    let w = world();
+    let w = world().await;
     let me = w.agent().await;
     for _ in 0..4 {
         w.agent().await;
@@ -175,7 +199,7 @@ async fn list_agents_pages_by_name() {
 
 #[tokio::test]
 async fn open_channels_appear_to_everyone() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[]).await;
     assert!(w.visible_ids(&b).await.contains(&ch));
@@ -183,7 +207,7 @@ async fn open_channels_appear_to_everyone() {
 
 #[tokio::test]
 async fn closed_channels_appear_to_members_only() {
-    let w = world();
+    let w = world().await;
     let (a, b, c) = (w.agent().await, w.agent().await, w.agent().await);
     let ch = w.channel(&a, "secret", false, &[&b]).await;
     assert!(w.visible_ids(&a).await.contains(&ch));
@@ -195,7 +219,7 @@ async fn closed_channels_appear_to_members_only() {
 
 #[tokio::test]
 async fn anyone_can_join_an_open_channel() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[]).await;
     let info = w.rules.join_channel(&b, ch.clone()).await.unwrap();
@@ -208,7 +232,7 @@ async fn anyone_can_join_an_open_channel() {
 
 #[tokio::test]
 async fn closed_channels_can_only_be_entered_by_being_added() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "secret", false, &[]).await;
     assert_eq!(
@@ -226,7 +250,7 @@ async fn closed_channels_can_only_be_entered_by_being_added() {
 
 #[tokio::test]
 async fn any_member_can_add_others_to_an_open_channel() {
-    let w = world();
+    let w = world().await;
     let (a, b, c) = (w.agent().await, w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[]).await;
     // A non-member of an open channel is told to join first.
@@ -250,7 +274,7 @@ async fn any_member_can_add_others_to_an_open_channel() {
 
 #[tokio::test]
 async fn any_member_can_add_others_to_a_closed_channel() {
-    let w = world();
+    let w = world().await;
     let (a, b, c, d) = (
         w.agent().await,
         w.agent().await,
@@ -272,7 +296,7 @@ async fn any_member_can_add_others_to_a_closed_channel() {
 
 #[tokio::test]
 async fn adding_an_unknown_agent_is_not_found() {
-    let w = world();
+    let w = world().await;
     let a = w.agent().await;
     let ch = w.channel(&a, "general", true, &[]).await;
     assert_eq!(
@@ -289,7 +313,7 @@ async fn adding_an_unknown_agent_is_not_found() {
 
 #[tokio::test]
 async fn members_of_an_open_channel_can_read_send_and_set_purpose() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[]).await;
 
@@ -312,7 +336,7 @@ async fn members_of_an_open_channel_can_read_send_and_set_purpose() {
 
 #[tokio::test]
 async fn members_of_a_closed_channel_can_read_send_and_set_purpose() {
-    let w = world();
+    let w = world().await;
     let (a, b, c) = (w.agent().await, w.agent().await, w.agent().await);
     let ch = w.channel(&a, "secret", false, &[&b]).await;
 
@@ -338,7 +362,7 @@ async fn members_of_a_closed_channel_can_read_send_and_set_purpose() {
 
 #[tokio::test]
 async fn any_member_can_leave_an_open_channel() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[&b]).await;
     w.rules.leave_channel(&b, ch.clone()).await.unwrap();
@@ -352,7 +376,7 @@ async fn any_member_can_leave_an_open_channel() {
 
 #[tokio::test]
 async fn any_member_can_leave_a_closed_channel_and_it_then_vanishes_for_them() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "secret", false, &[&b]).await;
     w.rules.leave_channel(&b, ch.clone()).await.unwrap();
@@ -362,7 +386,7 @@ async fn any_member_can_leave_a_closed_channel_and_it_then_vanishes_for_them() {
 
 #[tokio::test]
 async fn a_closed_channel_with_no_members_is_unreachable_but_the_human_sees_it() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "secret", false, &[]).await;
     w.rules
@@ -385,7 +409,7 @@ async fn a_closed_channel_with_no_members_is_unreachable_but_the_human_sees_it()
 
 #[tokio::test]
 async fn hidden_and_missing_channels_look_the_same() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "secret", false, &[]).await;
     let msg = w.rules.send(&a, ch.clone(), "psst".into()).await.unwrap();
@@ -450,7 +474,7 @@ async fn hidden_and_missing_channels_look_the_same() {
 
 #[tokio::test]
 async fn channel_names_can_repeat() {
-    let w = world();
+    let w = world().await;
     let a = w.agent().await;
     let one = w.channel(&a, "general", true, &[]).await;
     let two = w.channel(&a, "general", false, &[]).await;
@@ -459,7 +483,7 @@ async fn channel_names_can_repeat() {
 
 #[tokio::test]
 async fn members_can_read_history_from_before_they_joined() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "secret", false, &[]).await;
     w.rules.send(&a, ch.clone(), "before".into()).await.unwrap();
@@ -475,7 +499,7 @@ async fn members_can_read_history_from_before_they_joined() {
 
 #[tokio::test]
 async fn list_channels_filters_and_pages() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let parser = w.channel(&a, "parser", true, &[]).await;
     w.rules
@@ -561,7 +585,7 @@ async fn list_channels_filters_and_pages() {
 
 #[tokio::test]
 async fn list_channels_counts_new_messages() {
-    let w = world();
+    let w = world().await;
     let a = w.agent().await;
     let ch = w.channel(&a, "general", true, &[]).await;
     let first = w.rules.send(&a, ch.clone(), "one".into()).await.unwrap();
@@ -585,7 +609,7 @@ async fn list_channels_counts_new_messages() {
 
 #[tokio::test]
 async fn send_checks_body() {
-    let w = world();
+    let w = world().await;
     let a = w.agent().await;
     let ch = w.channel(&a, "general", true, &[]).await;
     assert_eq!(
@@ -613,7 +637,7 @@ async fn send_is_rate_limited() {
         sends_per_minute: 2,
         ..Limits::DEFAULT
     };
-    let w = world_with(limits, Arc::new(SeqEntropy::new(1)));
+    let w = world_with(limits, Arc::new(SeqEntropy::new(1))).await;
     let a = w.agent().await;
     let ch = w.channel(&a, "general", true, &[]).await;
     w.rules.send(&a, ch.clone(), "1".into()).await.unwrap();
@@ -627,8 +651,34 @@ async fn send_is_rate_limited() {
 }
 
 #[tokio::test]
+async fn a_failed_send_does_not_use_up_the_allowance() {
+    let limits = Limits {
+        sends_per_minute: 1,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(1))).await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    let sql = |sql: &'static str| w.rules.db().execute_for_tests(sql);
+    sql("CREATE TRIGGER fail BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'boom'); END")
+        .await
+        .unwrap();
+    assert_eq!(
+        code(w.rules.send(&a, ch.clone(), "lost".into()).await),
+        Code::Internal
+    );
+    sql("DROP TRIGGER fail").await.unwrap();
+    w.rules.send(&a, ch.clone(), "kept".into()).await.unwrap();
+    // The allowance is one a minute, so the refunded send was the only one.
+    assert_eq!(
+        code(w.rules.send(&a, ch, "too many".into()).await),
+        Code::RateLimited
+    );
+}
+
+#[tokio::test]
 async fn read_pages_both_ways() {
-    let w = world();
+    let w = world().await;
     let a = w.agent().await;
     let ch = w.channel(&a, "general", true, &[]).await;
     let other = w.channel(&a, "other", true, &[]).await;
@@ -680,7 +730,7 @@ async fn read_pages_both_ways() {
 
 #[tokio::test]
 async fn read_filters_by_agent() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[&b]).await;
     w.rules.send(&a, ch.clone(), "from a".into()).await.unwrap();
@@ -704,7 +754,7 @@ async fn read_filters_by_agent() {
 
 #[tokio::test]
 async fn get_message_needs_membership() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[]).await;
     let msg = w.rules.send(&a, ch, "hello".into()).await.unwrap();
@@ -714,7 +764,7 @@ async fn get_message_needs_membership() {
 
 #[tokio::test]
 async fn search_covers_only_my_channels() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let mine = w.channel(&a, "mine", true, &[]).await;
     let theirs = w.channel(&b, "theirs", true, &[]).await;
@@ -746,7 +796,7 @@ async fn search_covers_only_my_channels() {
 
 #[tokio::test]
 async fn activity_reports_channels_with_newer_messages() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let one = w.channel(&a, "one", true, &[&b]).await;
     let two = w.channel(&a, "two", true, &[&b]).await;
@@ -763,7 +813,7 @@ async fn activity_reports_channels_with_newer_messages() {
 
 #[tokio::test]
 async fn wait_returns_at_once_when_messages_exist() {
-    let w = world();
+    let w = world().await;
     let a = w.agent().await;
     let ch = w.channel(&a, "general", true, &[]).await;
     for i in 0..3 {
@@ -788,7 +838,7 @@ async fn wait_returns_at_once_when_messages_exist() {
 
 #[tokio::test]
 async fn wait_wakes_when_a_message_arrives() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[&b]).await;
     let waiter = {
@@ -818,9 +868,20 @@ async fn wait_wakes_when_a_message_arrives() {
     assert_eq!(got.messages[0].body, "ping");
 }
 
+/// Waits (in real time, briefly) until a wait has started sleeping on the test clock.
+async fn until_sleeping(clock: &FixedClock) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while clock.sleepers() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the wait should start sleeping");
+}
+
 #[tokio::test]
 async fn wait_ignores_channels_i_am_not_in_and_times_out() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let ch = w.channel(&a, "general", true, &[]).await;
     let waiter = {
@@ -833,22 +894,60 @@ async fn wait_ignores_channels_i_am_not_in_and_times_out() {
                     WaitQuery {
                         after_id: 0,
                         channel_ids: None,
-                        timeout: Duration::from_millis(300),
+                        timeout: Duration::from_secs(30),
                         limit: 10,
                     },
                 )
                 .await
         })
     };
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    until_sleeping(&w.clock).await;
     w.rules.send(&a, ch, "not for b".into()).await.unwrap();
-    let got = waiter.await.expect("join").expect("wait");
+    w.clock.advance(chrono::Duration::seconds(30));
+    let got = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the wait should time out")
+        .expect("join")
+        .expect("wait");
+    assert!(got.messages.is_empty());
+}
+
+#[tokio::test]
+async fn wait_times_out_by_the_injected_clock() {
+    let w = world().await;
+    let b = w.agent().await;
+    let waiter = {
+        let rules = w.rules.clone();
+        tokio::spawn(async move {
+            rules
+                .wait_for_messages(
+                    &b,
+                    WaitQuery {
+                        after_id: 0,
+                        channel_ids: None,
+                        timeout: Duration::from_secs(30),
+                        limit: 10,
+                    },
+                )
+                .await
+        })
+    };
+    until_sleeping(&w.clock).await;
+    w.clock.advance(chrono::Duration::seconds(29));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!waiter.is_finished(), "the wait ended before its deadline");
+    w.clock.advance(chrono::Duration::seconds(1));
+    let got = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the wait should time out")
+        .expect("join")
+        .expect("wait");
     assert!(got.messages.is_empty());
 }
 
 #[tokio::test]
 async fn create_channel_with_members_and_unknown_member() {
-    let w = world();
+    let w = world().await;
     let (a, b) = (w.agent().await, w.agent().await);
     let info = w
         .rules
@@ -879,4 +978,25 @@ async fn create_channel_with_members_and_unknown_member() {
         )
         .await;
     assert_eq!(code(bad), Code::NotFound);
+}
+
+// ---- Provenance ----
+
+#[tokio::test]
+async fn new_agents_and_messages_record_the_server_run() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    let sent = w.rules.send(&a, ch, "hello".into()).await.unwrap();
+    assert_eq!(sent.run_id, Some(w.run_id));
+
+    let overview = w.rules.overview().await.unwrap();
+    assert_eq!(overview.agents[0].run_id, Some(w.run_id));
+    assert_eq!(overview.recent[0].run_id, Some(w.run_id));
+    let runs: Vec<(i64, &str)> = overview
+        .runs
+        .iter()
+        .map(|r| (r.id, r.version.as_str()))
+        .collect();
+    assert_eq!(runs, [(w.run_id, TEST_RUN)]);
 }

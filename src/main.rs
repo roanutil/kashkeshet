@@ -1,14 +1,14 @@
 use clap::Parser;
-use kashkeshet::app::{self, AppConfig};
-use kashkeshet::clock::SystemClock;
-use kashkeshet::config::Limits;
-use kashkeshet::db::Db;
-use kashkeshet::mcp;
+use kashkeshet::app::{self, AppConfig, Parts};
+use kashkeshet::clock::{Clock, SystemClock};
+use kashkeshet::config::{self, Limits};
 use kashkeshet::names::OsEntropy;
+use kashkeshet::provenance::{self, Build, ServerRun};
+use kashkeshet::shutdown::Shutdown;
+use kashkeshet::store::Db;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 /// A local server that lets AI agents talk to each other over MCP.
 #[derive(Parser, Debug)]
@@ -58,48 +58,45 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    if !args.bind.ip().is_loopback() {
-        return Err(format!(
-            "refusing to listen on {}: only loopback addresses (such as 127.0.0.1) are allowed",
-            args.bind
-        ));
-    }
-    if args.default_limit == 0 || args.max_limit < args.default_limit {
-        return Err("--default-limit must be at least 1 and no more than --max-limit".into());
-    }
     let limits = Limits {
         max_response_bytes: args.max_response_bytes,
         default_limit: args.default_limit,
         max_limit: args.max_limit,
-        max_body_chars: args.max_body_chars.max(1),
+        max_body_chars: args.max_body_chars,
         sends_per_minute: args.sends_per_minute,
         ..Limits::DEFAULT
     };
+    config::check_bind(args.bind).map_err(|e| format!("invalid setting: {e}"))?;
+    limits
+        .check()
+        .map_err(|e| format!("invalid setting: {e}"))?;
     let instructions = match &args.instructions {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|e| format!("could not read {}: {e}", path.display()))?,
-        None => mcp::DEFAULT_INSTRUCTIONS.to_string(),
+        None => kashkeshet::DEFAULT_INSTRUCTIONS.to_string(),
     };
     let db =
         Db::open(&args.db).map_err(|e| format!("could not open {}: {e}", args.db.display()))?;
-    let shutdown = CancellationToken::new();
-    let router = app::build(
-        db,
-        Arc::new(SystemClock),
-        Arc::new(OsEntropy),
-        AppConfig {
-            limits,
-            allowed_origins: args.allow_origins,
-            instructions,
-        },
-        shutdown.clone(),
-    );
+    let config = AppConfig {
+        limits,
+        allowed_origins: args.allow_origins,
+        instructions,
+    };
+    let clock = Arc::new(SystemClock);
+    let run = ServerRun::new(Build::CURRENT, &config);
+    let run_id = provenance::record(&db, &run, clock.now())
+        .await
+        .map_err(|e| format!("could not record this server run: {e}"))?;
+    let shutdown = Shutdown::new();
+    let parts = Parts::new(db, clock, Arc::new(OsEntropy), &config.limits, run_id);
+    let router = app::build(parts, config, shutdown.clone());
     let listener = tokio::net::TcpListener::bind(args.bind)
         .await
         .map_err(|e| format!("could not listen on {}: {e}", args.bind))?;
     tracing::info!(
-        "kashkeshet {} listening: web page http://{}/ , MCP http://{}/mcp , database {}",
-        env!("CARGO_PKG_VERSION"),
+        "kashkeshet {} (commit {}, run {run_id}) listening: web page http://{}/ , MCP http://{}/mcp , database {}",
+        run.version,
+        run.commit,
         args.bind,
         args.bind,
         args.db.display()
@@ -109,7 +106,7 @@ async fn run(args: Args) -> Result<(), String> {
             if let Err(e) = tokio::signal::ctrl_c().await {
                 tracing::error!("could not listen for Ctrl-C: {e}");
             }
-            shutdown.cancel();
+            shutdown.stop();
         })
         .await
         .map_err(|e| format!("server error: {e}"))

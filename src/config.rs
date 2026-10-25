@@ -1,6 +1,43 @@
-//! Server limits. Every default is written out here, in one place.
+//! Server limits and fixed settings. Every default is written out here, in
+//! one place, along with the checks a server's settings must pass at startup.
 
+use std::net::SocketAddr;
 use std::time::Duration;
+
+// ---- Fixed settings ----
+//
+// Values agents never see and the command line does not change.
+
+/// Read-only database connections kept open beside the one writer.
+pub const DB_READERS: usize = 4;
+/// How long a database connection waits for a lock before failing.
+pub const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// New-message notices kept for a slow subscriber before it starts missing them.
+pub const EVENT_BUFFER: usize = 1024;
+/// Messages shown on the web page's front page.
+pub const WEB_RECENT_MESSAGES: usize = 50;
+/// Messages shown on the web page for one channel.
+pub const WEB_CHANNEL_PAGE_MESSAGES: usize = 200;
+/// How often the web page's event stream sends a keep-alive comment.
+pub const WEB_KEEP_ALIVE: Duration = Duration::from_secs(15);
+/// How many numbered names to try before giving up on a base agent name.
+pub const MAX_NAME_ATTEMPTS: u32 = 10_000;
+/// How many random channel IDs to try before giving up.
+pub const MAX_CHANNEL_ID_ATTEMPTS: u32 = 100;
+/// How often an MCP event stream sends a keep-alive ping.
+pub const MCP_SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
+/// The reconnect delay an MCP event stream suggests to its client.
+pub const MCP_SSE_RETRY: Duration = Duration::from_secs(3);
+/// Largest MCP request, in bytes. Requests over it get `413 Payload Too Large`.
+pub const MCP_MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+/// `Host` header values the MCP endpoint accepts. Only loopback names, which
+/// blocks DNS rebinding from a web page.
+pub const MCP_ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "::1"];
+/// Smallest allowed `max_response_bytes`. A smaller cap could cut a
+/// registration answer, and with it the agent's token.
+pub const MIN_RESPONSE_BYTES: usize = 1024;
+
+// ---- Limits ----
 
 #[derive(Clone, Debug)]
 pub struct Limits {
@@ -50,11 +87,153 @@ impl Limits {
         purpose_preview_chars: 120,
     };
 
+    /// Checks that these limits make sense together. The server refuses to
+    /// start with limits that fail.
+    pub fn check(&self) -> Result<(), InvalidSetting> {
+        let at_least_one = [
+            ("default_limit", self.default_limit),
+            ("max_body_chars", self.max_body_chars),
+            ("max_body_bytes", self.max_body_bytes),
+            ("max_channel_name_chars", self.max_channel_name_chars),
+            ("max_purpose_chars", self.max_purpose_chars),
+            ("sends_per_minute", self.sends_per_minute as usize),
+        ];
+        if let Some((name, _)) = at_least_one.iter().find(|(_, value)| *value == 0) {
+            return Err(InvalidSetting::new(name, "must be at least 1"));
+        }
+        if self.max_response_bytes < MIN_RESPONSE_BYTES {
+            return Err(InvalidSetting::new(
+                "max_response_bytes",
+                format!("must be at least {MIN_RESPONSE_BYTES}"),
+            ));
+        }
+        if self.max_limit < self.default_limit {
+            return Err(InvalidSetting::new(
+                "max_limit",
+                "must be at least default_limit",
+            ));
+        }
+        if self.max_wait < self.default_wait {
+            return Err(InvalidSetting::new(
+                "max_wait",
+                "must be at least default_wait",
+            ));
+        }
+        Ok(())
+    }
+
     /// Clamps an agent's requested `limit` to `1..=max_limit`, using the default when absent.
     pub fn limit(&self, requested: Option<u32>) -> usize {
         match requested {
             Some(n) => (n as usize).clamp(1, self.max_limit),
             None => self.default_limit,
         }
+    }
+}
+
+/// A setting the server refuses to start with.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{name} {rule}")]
+pub struct InvalidSetting {
+    pub name: &'static str,
+    pub rule: String,
+}
+
+impl InvalidSetting {
+    fn new(name: &'static str, rule: impl Into<String>) -> InvalidSetting {
+        InvalidSetting {
+            name,
+            rule: rule.into(),
+        }
+    }
+}
+
+/// Checks the listen address. Only loopback addresses are allowed: the server
+/// has no authentication beyond agent tokens and is meant for one machine.
+pub fn check_bind(addr: SocketAddr) -> Result<(), InvalidSetting> {
+    if addr.ip().is_loopback() {
+        Ok(())
+    } else {
+        Err(InvalidSetting::new(
+            "bind",
+            format!("must be a loopback address (such as 127.0.0.1), not {addr}"),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_limits_pass() {
+        assert_eq!(Limits::DEFAULT.check(), Ok(()));
+    }
+
+    #[test]
+    fn zero_is_refused_for_every_count() {
+        type SetZero = fn(&mut Limits);
+        let cases: [(&str, SetZero); 6] = [
+            ("default_limit", |l| l.default_limit = 0),
+            ("max_body_chars", |l| l.max_body_chars = 0),
+            ("max_body_bytes", |l| l.max_body_bytes = 0),
+            ("max_channel_name_chars", |l| l.max_channel_name_chars = 0),
+            ("max_purpose_chars", |l| l.max_purpose_chars = 0),
+            ("sends_per_minute", |l| l.sends_per_minute = 0),
+        ];
+        for (name, set_zero) in cases {
+            let mut limits = Limits::DEFAULT;
+            set_zero(&mut limits);
+            let err = limits.check().expect_err(name);
+            assert_eq!(err.name, name);
+        }
+    }
+
+    #[test]
+    fn response_cap_has_a_floor() {
+        let limits = Limits {
+            max_response_bytes: MIN_RESPONSE_BYTES - 1,
+            ..Limits::DEFAULT
+        };
+        assert_eq!(
+            limits.check().map_err(|e| e.name),
+            Err("max_response_bytes")
+        );
+        let limits = Limits {
+            max_response_bytes: MIN_RESPONSE_BYTES,
+            ..Limits::DEFAULT
+        };
+        assert_eq!(limits.check(), Ok(()));
+    }
+
+    #[test]
+    fn maximums_may_not_be_below_defaults() {
+        let limits = Limits {
+            default_limit: 10,
+            max_limit: 9,
+            ..Limits::DEFAULT
+        };
+        assert_eq!(limits.check().map_err(|e| e.name), Err("max_limit"));
+        let limits = Limits {
+            default_limit: 10,
+            max_limit: 10,
+            ..Limits::DEFAULT
+        };
+        assert_eq!(limits.check(), Ok(()));
+
+        let limits = Limits {
+            default_wait: Duration::from_secs(10),
+            max_wait: Duration::from_secs(9),
+            ..Limits::DEFAULT
+        };
+        assert_eq!(limits.check().map_err(|e| e.name), Err("max_wait"));
+    }
+
+    #[test]
+    fn only_loopback_addresses_may_be_bound() {
+        assert_eq!(check_bind("127.0.0.1:7420".parse().expect("addr")), Ok(()));
+        assert_eq!(check_bind("[::1]:7420".parse().expect("addr")), Ok(()));
+        let err = check_bind("0.0.0.0:7420".parse().expect("addr")).expect_err("refused");
+        assert_eq!(err.name, "bind");
     }
 }

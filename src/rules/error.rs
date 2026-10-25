@@ -1,4 +1,4 @@
-use crate::db::DbError;
+use crate::store::StoreError;
 use serde::Serialize;
 
 /// The fixed error codes agents see.
@@ -77,14 +77,8 @@ impl RuleError {
     }
 }
 
-impl From<DbError> for RuleError {
-    fn from(e: DbError) -> RuleError {
+impl From<StoreError> for RuleError {
+    fn from(e: StoreError) -> RuleError {
         RuleError::new(Code::Internal, e.to_string())
-    }
-}
-
-impl From<rusqlite::Error> for RuleError {
-    fn from(e: rusqlite::Error) -> RuleError {
-        RuleError::from(DbError::from(e))
     }
 }

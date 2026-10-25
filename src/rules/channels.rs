@@ -1,7 +1,5 @@
 use super::*;
-
-/// How many random channel IDs to try before giving up.
-const MAX_ID_ATTEMPTS: u32 = 100;
+use crate::config::MAX_CHANNEL_ID_ATTEMPTS;
 
 impl Rules {
     /// Channels `me` can see, in name order. Open channels are visible to
@@ -9,55 +7,27 @@ impl Rules {
     pub async fn list_channels(&self, me: &Agent, q: ChannelQuery) -> Result<Page<ChannelInfo>> {
         let me = me.name.clone();
         let preview = self.limits().member_preview;
-        let (cursor_name, cursor_id) = match q.cursor.as_deref() {
-            Some(c) => {
-                let (name, id) = decode_channel_cursor(c)?;
-                (Some(name), Some(id))
-            }
-            None => (None, None),
-        };
+        let after = q.cursor.as_deref().map(decode_channel_cursor).transpose()?;
         self.db()
-            .read(move |conn| {
+            .read(move |store| {
                 if let Some(other) = &q.with_agent
-                    && !agent_exists(conn, other)?
+                    && !agent_exists(store, other)?
                 {
                     return Err(RuleError::agent_not_found(other));
                 }
-                let mut stmt = conn.prepare_cached(
-                    "SELECT c.id FROM channels c
-                     WHERE (c.is_open = 1 OR EXISTS (SELECT 1 FROM memberships m
-                                                     WHERE m.channel_id = c.id AND m.agent = :me))
-                       AND (:member_only = 0 OR EXISTS (SELECT 1 FROM memberships m
-                                                        WHERE m.channel_id = c.id AND m.agent = :me))
-                       AND (:with IS NULL OR (
-                             EXISTS (SELECT 1 FROM memberships m WHERE m.channel_id = c.id AND m.agent = :me)
-                         AND EXISTS (SELECT 1 FROM memberships w WHERE w.channel_id = c.id AND w.agent = :with)))
-                       AND (:pattern IS NULL
-                            OR c.name LIKE :pattern ESCAPE '\\'
-                            OR coalesce(c.purpose, '') LIKE :pattern ESCAPE '\\')
-                       AND (:cname IS NULL OR (c.name, c.id) > (:cname, :cid))
-                     ORDER BY c.name, c.id
-                     LIMIT :limit",
-                )?;
-                let mut ids = stmt
-                    .query_map(
-                        named_params! {
-                            ":me": me,
-                            ":member_only": q.member_only,
-                            ":with": q.with_agent,
-                            ":pattern": q.query.as_deref().map(like_pattern),
-                            ":cname": cursor_name,
-                            ":cid": cursor_id,
-                            ":limit": (q.limit + 1) as i64,
-                        },
-                        |r| r.get::<_, String>(0),
-                    )?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut ids = store.channel_ids(&ChannelFilter {
+                    visible_to: me.clone(),
+                    member_only: q.member_only,
+                    shared_with: q.with_agent.clone(),
+                    text: q.query.clone(),
+                    after,
+                    limit: q.limit + 1,
+                })?;
                 let more = ids.len() > q.limit;
                 ids.truncate(q.limit);
                 let items = ids
                     .iter()
-                    .map(|id| channel_info(conn, id, Some(&me), q.after_id, preview))
+                    .map(|id| channel_info(store, id, Some(&me), q.after_id, preview))
                     .collect::<Result<Vec<_>>>()?;
                 let next_cursor = match (more, items.last()) {
                     (true, Some(last)) => Some(encode_channel_cursor(&last.name, &last.id)),
@@ -79,9 +49,9 @@ impl Rules {
     ) -> Result<Members> {
         let me = me.name.clone();
         self.db()
-            .read(move |conn| {
-                visible_channel(conn, &me, &channel_id)?;
-                members_page(conn, &channel_id, limit, cursor.as_deref())
+            .read(move |store| {
+                visible_channel(store, &me, &channel_id)?;
+                members_page(store, &channel_id, limit, cursor.as_deref())
             })
             .await
     }
@@ -95,27 +65,30 @@ impl Rules {
         let now = self.now_text();
         let entropy = self.inner.deps.entropy.clone();
         self.db()
-            .write(move |tx| {
+            .write(move |store| {
                 let mut members = vec![me.clone()];
                 for m in &new.members {
                     let m = m.trim();
-                    if !agent_exists(tx, m)? {
+                    if !agent_exists(store, m)? {
                         return Err(RuleError::agent_not_found(m));
                     }
                     if !members.iter().any(|x| x == m) {
                         members.push(m.to_string());
                     }
                 }
-                let id = free_channel_id(tx, entropy.as_ref())?;
-                tx.execute(
-                    "INSERT INTO channels (id, name, purpose, is_open, created_by, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![id, name, purpose, new.open, me, now],
-                )?;
+                let id = free_channel_id(store, entropy.as_ref())?;
+                store.insert_channel(&NewChannelRecord {
+                    id: id.clone(),
+                    name,
+                    purpose,
+                    open: new.open,
+                    created_by: me.clone(),
+                    created_at: now.clone(),
+                })?;
                 for m in &members {
-                    add_member(tx, &id, m, &now)?;
+                    store.add_member(&id, m, &now)?;
                 }
-                channel_info(tx, &id, Some(&me), None, limits.member_preview)
+                channel_info(store, &id, Some(&me), None, limits.member_preview)
             })
             .await
     }
@@ -126,13 +99,13 @@ impl Rules {
         let now = self.now_text();
         let preview = self.limits().member_preview;
         self.db()
-            .write(move |tx| {
-                let (row, member) = visible_channel(tx, &me, &channel_id)?;
+            .write(move |store| {
+                let (channel, member) = visible_channel(store, &me, &channel_id)?;
                 if !member {
                     // `visible_channel` only lets a non-member through for an open channel.
-                    add_member(tx, &row.id, &me, &now)?;
+                    store.add_member(&channel.id, &me, &now)?;
                 }
-                channel_info(tx, &row.id, Some(&me), None, preview)
+                channel_info(store, &channel.id, Some(&me), None, preview)
             })
             .await
     }
@@ -140,12 +113,9 @@ impl Rules {
     pub async fn leave_channel(&self, me: &Agent, channel_id: String) -> Result<()> {
         let me = me.name.clone();
         self.db()
-            .write(move |tx| {
-                let row = member_channel(tx, &me, &channel_id)?;
-                tx.execute(
-                    "DELETE FROM memberships WHERE channel_id = ? AND agent = ?",
-                    [&row.id, &me],
-                )?;
+            .write(move |store| {
+                let channel = member_channel(store, &me, &channel_id)?;
+                store.remove_member(&channel.id, &me)?;
                 Ok(())
             })
             .await
@@ -163,19 +133,19 @@ impl Rules {
         let now = self.now_text();
         let limit = self.limits().default_limit;
         self.db()
-            .write(move |tx| {
-                let row = member_channel(tx, &me, &channel_id)?;
+            .write(move |store| {
+                let channel = member_channel(store, &me, &channel_id)?;
                 if agents.is_empty() {
                     return Err(RuleError::invalid("`agents` must name at least one agent"));
                 }
                 for a in &agents {
                     let a = a.trim();
-                    if !agent_exists(tx, a)? {
+                    if !agent_exists(store, a)? {
                         return Err(RuleError::agent_not_found(a));
                     }
-                    add_member(tx, &row.id, a, &now)?;
+                    store.add_member(&channel.id, a, &now)?;
                 }
-                members_page(tx, &row.id, limit, None)
+                members_page(store, &channel.id, limit, None)
             })
             .await
     }
@@ -190,48 +160,23 @@ impl Rules {
         let purpose = clean_purpose(Some(&purpose), limits.max_purpose_chars)?;
         let me = me.name.clone();
         self.db()
-            .write(move |tx| {
-                let row = member_channel(tx, &me, &channel_id)?;
-                tx.execute(
-                    "UPDATE channels SET purpose = ? WHERE id = ?",
-                    rusqlite::params![purpose, row.id],
-                )?;
-                channel_info(tx, &row.id, Some(&me), None, limits.member_preview)
+            .write(move |store| {
+                let channel = member_channel(store, &me, &channel_id)?;
+                store.set_purpose(&channel.id, purpose.as_deref())?;
+                channel_info(store, &channel.id, Some(&me), None, limits.member_preview)
             })
             .await
     }
 }
 
-fn add_member(conn: &Connection, channel_id: &str, agent: &str, now: &str) -> Result<()> {
-    conn.execute(
-        "INSERT OR IGNORE INTO memberships (channel_id, agent, joined_at) VALUES (?, ?, ?)",
-        [channel_id, agent, now],
-    )?;
-    Ok(())
-}
-
 fn members_page(
-    conn: &Connection,
+    store: &dyn Reads,
     channel_id: &str,
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<Members> {
-    let total: i64 = conn.query_row(
-        "SELECT count(*) FROM memberships WHERE channel_id = ?",
-        [channel_id],
-        |r| r.get(0),
-    )?;
-    let mut stmt = conn.prepare_cached(
-        "SELECT agent FROM memberships
-         WHERE channel_id = :id AND (:cursor IS NULL OR agent > :cursor)
-         ORDER BY agent LIMIT :limit",
-    )?;
-    let mut items = stmt
-        .query_map(
-            named_params! { ":id": channel_id, ":cursor": cursor, ":limit": (limit + 1) as i64 },
-            |r| r.get::<_, String>(0),
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let total = store.member_count(channel_id)?;
+    let mut items = store.members_by_name(channel_id, cursor, limit + 1)?;
     let next_cursor = if items.len() > limit {
         items.truncate(limit);
         items.last().cloned()
@@ -245,10 +190,10 @@ fn members_page(
     })
 }
 
-fn free_channel_id(conn: &Connection, entropy: &dyn Entropy) -> Result<String> {
-    for _ in 0..MAX_ID_ATTEMPTS {
+fn free_channel_id(store: &dyn Reads, entropy: &dyn Entropy) -> Result<String> {
+    for _ in 0..MAX_CHANNEL_ID_ATTEMPTS {
         let id = names::channel_id(entropy);
-        if channel_row(conn, &id)?.is_none() {
+        if store.channel(&id)?.is_none() {
             return Ok(id);
         }
     }
@@ -341,4 +286,45 @@ mod tests {
         assert_eq!(clean_purpose(Some("  "), 500).unwrap(), None);
         assert!(clean_purpose(Some(&"x".repeat(501)), 500).is_err());
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ChannelInfo {
+    pub id: String,
+    pub name: String,
+    pub purpose: Option<String>,
+    pub open: bool,
+    pub created_by: String,
+    pub created_at: String,
+    pub member_count: i64,
+    /// The first few members, in the order they joined.
+    pub members_preview: Vec<String>,
+    pub is_member: bool,
+    /// Messages newer than the `after_id` the agent gave, if it gave one.
+    pub new_messages: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChannelQuery {
+    pub query: Option<String>,
+    pub member_only: bool,
+    pub with_agent: Option<String>,
+    pub after_id: Option<i64>,
+    pub limit: usize,
+    pub cursor: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewChannel {
+    pub name: String,
+    pub open: bool,
+    pub purpose: Option<String>,
+    pub members: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Members {
+    pub channel_id: String,
+    pub total: i64,
+    pub page: Page<String>,
 }
