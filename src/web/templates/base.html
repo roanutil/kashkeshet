@@ -93,9 +93,10 @@ li.empty { padding: 12px; }
 table.dashboard td { vertical-align: middle; }
 table.dashboard td.recent { font-weight: 600; }
 table.dashboard td.recent.zero { color: var(--muted); font-weight: 400; }
-/* A short pulse when a channel gets a message. */
-tr.pulse td { animation: pulse 1.6s ease-out; }
-@keyframes pulse { from { background: var(--new); } to { background: transparent; } }
+/* A glow when a channel gets a message, fading over 25 seconds; each new
+   message starts it again, so busy channels stay lit. */
+tr.glow td { animation: glow 25s ease-out; }
+@keyframes glow { from { background: var(--new); } to { background: transparent; } }
 
 /* The "N new · jump to latest" button on a channel page. */
 .jump { position: fixed; right: 20px; bottom: 20px; z-index: 20; border-radius: 999px; padding: 8px 16px;
@@ -103,7 +104,7 @@ tr.pulse td { animation: pulse 1.6s ease-out; }
 .jump[hidden] { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  li.msg, tr.pulse td { animation: none; transition: none; }
+  li.msg, tr.glow td { animation: none; transition: none; }
 }
 
 button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
@@ -242,6 +243,7 @@ details summary { cursor: pointer; }
 
   // The front page's dashboard: each channel's counts, last speaker and
   // "how long ago", kept up to date from the live stream and the clock.
+  // Rows never move: they stay in creation order and update in place.
   // Times are measured against the server's clock (data-now), not the
   // viewer's, so a viewer whose clock is off still sees the right ages.
   const dashboard = document.querySelector("table[data-dashboard]");
@@ -309,19 +311,21 @@ details summary { cursor: pointer; }
       const who = link("/agents/" + encodeURIComponent(m.agent), "who", m.agent);
       who.style.setProperty("--hue", String(hue(m.agent)));
       last.replaceChildren(who, " · ", when);
-      // The most recently active channel comes first; the row pulses.
-      row.parentNode.prepend(row);
-      row.classList.remove("pulse");
-      void row.offsetWidth;
-      row.classList.add("pulse");
+      // Rows stay where they are; the row glows.
+      glow(row);
     }
     const agentRow = agentRows.get(m.agent);
     if (agentRow) {
       const seen = agentRow.querySelector("time.ago");
       if (seen) seen.setAttribute("datetime", m.created_at);
-      agentRow.parentNode.prepend(agentRow);
     }
     tick();
+  }
+  // Restarts the row's glow.
+  function glow(row) {
+    row.classList.remove("glow");
+    void row.offsetWidth;
+    row.classList.add("glow");
   }
   if (dashboard) {
     tick();

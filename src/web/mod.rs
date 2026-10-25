@@ -100,8 +100,9 @@ async fn check_host(State(hosts): State<AllowedHosts>, request: Request, next: N
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexPage {
-    /// Most recently active first.
+    /// In the order they were created; activity never moves them.
     channels: Vec<ChannelSummary>,
+    /// In the order they registered.
     agents: Vec<AgentSummary>,
     runs: Vec<ServerRun>,
     /// The source's time, for "how long ago".
@@ -152,8 +153,8 @@ struct ChannelParams {
 async fn index(State(pages): State<Pages>) -> Response {
     match pages.source.overview().await {
         Ok(o) => page(IndexPage {
-            channels: most_recently_active_first(o.channels),
-            agents: o.agents,
+            channels: in_creation_order(o.channels, |c| (&c.channel.created_at, &c.channel.id)),
+            agents: in_creation_order(o.agents, |a| (&a.agent.created_at, &a.agent.name)),
             runs: o.runs,
             now: o.now,
             window_secs: WEB_ACTIVITY_WINDOW.as_secs(),
@@ -164,15 +165,12 @@ async fn index(State(pages): State<Pages>) -> Response {
     }
 }
 
-/// Channels with the newest last message first; those with no messages
-/// last, by name.
-fn most_recently_active_first(mut channels: Vec<ChannelSummary>) -> Vec<ChannelSummary> {
-    channels.sort_by(|a, b| {
-        b.last_message_at
-            .cmp(&a.last_message_at)
-            .then_with(|| a.channel.name.cmp(&b.channel.name))
-    });
-    channels
+/// `items` oldest first, by when they were created and then by a name that
+/// tells ties apart. The front page keeps this order: rows never move, and
+/// new ones are added at the end.
+fn in_creation_order<T>(mut items: Vec<T>, key: impl Fn(&T) -> (&String, &String)) -> Vec<T> {
+    items.sort_by(|a, b| key(a).cmp(&key(b)));
+    items
 }
 
 async fn channel(

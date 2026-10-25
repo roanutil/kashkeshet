@@ -280,21 +280,30 @@ async fn summaries_agree_with_the_pages(source: Arc<dyn Source>) {
         listed.sort();
         assert_eq!(listed, theirs, "{}", a.agent.name);
     }
-    // The front page lists the most recently active channel first.
+    // The front page keeps channels and agents in creation order.
     let (_, page) = get(&site(source), "/").await;
     let rows: Vec<&str> = page
         .split("<tr data-channel-id=\"")
         .skip(1)
         .filter_map(|rest| rest.split('"').next())
         .collect();
-    let mut expected = overview.channels.clone();
-    expected.sort_by(|a, b| {
-        b.last_message_at
-            .cmp(&a.last_message_at)
-            .then_with(|| a.channel.name.cmp(&b.channel.name))
+    let mut channels = overview.channels.clone();
+    channels.sort_by(|a, b| {
+        (&a.channel.created_at, &a.channel.id).cmp(&(&b.channel.created_at, &b.channel.id))
     });
-    let expected: Vec<&str> = expected.iter().map(|c| c.channel.id.as_str()).collect();
+    let expected: Vec<&str> = channels.iter().map(|c| c.channel.id.as_str()).collect();
     assert_eq!(rows, expected);
+    let agent_rows: Vec<&str> = page
+        .split("<tr data-agent=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect();
+    let mut agents = overview.agents.clone();
+    agents.sort_by(|a, b| {
+        (&a.agent.created_at, &a.agent.name).cmp(&(&b.agent.created_at, &b.agent.name))
+    });
+    let expected: Vec<&str> = agents.iter().map(|a| a.agent.name.as_str()).collect();
+    assert_eq!(agent_rows, expected);
 }
 
 #[tokio::test]
