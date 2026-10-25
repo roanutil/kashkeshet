@@ -15,11 +15,11 @@ impl Rules {
                 format!("message body is {} bytes; the limit is {max}", body.len()),
             ));
         }
-        if auth::contains_token(&body) {
+        if auth::contains_secret(&body) {
             return Err(RuleError::new(
                 Code::ContainsSecret,
-                "message contains something shaped like a token (`act_` plus 26 characters). \
-                 Tokens must never be shared; remove it and send again.",
+                "message contains something shaped like a token or recovery code. \
+                 Tokens and recovery codes must never be shared; remove it and send again.",
             ));
         }
         let me = me.name.clone();
@@ -203,6 +203,11 @@ impl Rules {
                         Some(Notice::Message(_older)) => continue,
                         // Missed some notices; look in the database instead.
                         Some(Notice::Missed(_)) => break,
+                        // New agents, channels and members are for the web
+                        // page; a waiting agent wants messages.
+                        Some(
+                            Notice::Agent(_) | Notice::Channel(_) | Notice::Joined(_) | Notice::Left(_),
+                        ) => continue,
                         // The server is shutting down.
                         None => return Ok(found),
                     },

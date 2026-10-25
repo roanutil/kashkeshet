@@ -3,93 +3,511 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Kashkeshet{% endblock %}</title>
+<title>{% block title %}Kashkeshet (kkt){% endblock %}</title>
 <style>
 :root {
-  --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6b6b70; --line: #e4e4e0;
-  --accent: #2f5fd0; --chip: #efefeb; --new: #fff6d6;
+  color-scheme: light dark;
+  --bg: #f6f6f3; --panel: #ffffff; --fg: #1c1c1f; --muted: #66666e; --line: #e2e2dc;
+  --accent: #2d5bd0; --chip: #ecece6; --new: #fff1bf; --new-bar: #e0a800;
+  --open-bg: #e1f3e6; --open-fg: #1b6a34; --closed-bg: #f5e4ef; --closed-fg: #8c2768;
+  --live: #1f9d55; --warn: #c58600; --bad: #c0392b;
+  --who-s: 55%; --who-l: 36%; --tint-s: 70%; --tint-l: 92%;
+  --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.06);
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #17171a; --fg: #e8e8ea; --muted: #9a9aa2; --line: #2c2c31;
-          --accent: #8fb0ff; --chip: #24242a; --new: #3a3420; }
+  :root {
+    --bg: #141417; --panel: #1c1c21; --fg: #e9e9ec; --muted: #9c9ca6; --line: #2c2c33;
+    --accent: #93b2ff; --chip: #26262d; --new: #3b3418; --new-bar: #f0c040;
+    --open-bg: #183323; --open-fg: #7fdc9e; --closed-bg: #3a1a30; --closed-fg: #f0a3d6;
+    --live: #4cd787; --warn: #f0b640; --bad: #ff7b6b;
+    --who-s: 70%; --who-l: 72%; --tint-s: 35%; --tint-l: 24%;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.3);
+  }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-header { border-bottom: 1px solid var(--line); padding: 12px 16px; display: flex; gap: 16px; align-items: baseline; }
-header a.home { font-weight: 600; color: var(--fg); text-decoration: none; }
-header .live { color: var(--muted); font-size: 13px; }
-main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-h1 { font-size: 22px; margin: 4px 0 8px; }
-h2 { font-size: 16px; margin: 24px 0 8px; color: var(--muted); font-weight: 600; }
+header { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent);
+         backdrop-filter: blur(6px); border-bottom: 1px solid var(--line);
+         padding: 10px 16px; display: flex; gap: 16px; align-items: center; }
+header a.home { font-weight: 700; color: var(--fg); letter-spacing: .2px; }
+header a.home span { color: var(--muted); font-weight: 500; }
+.live { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.live[data-state="live"]::before { background: var(--live); box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); }
+.live[data-state="down"]::before { background: var(--bad); }
+header form.signout { margin-left: auto; }
+main { max-width: 1120px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 22px; margin: 6px 0 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+h2 { font-size: 13px; margin: 24px 0 8px; color: var(--muted); font-weight: 600;
+     text-transform: uppercase; letter-spacing: .6px; }
 .muted { color: var(--muted); }
-.mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-.chip { background: var(--chip); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { font-weight: 600; color: var(--muted); font-size: 13px; }
-.grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
-@media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+.mono, code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+.grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
 .scroll { overflow-x: auto; }
-ol.messages { list-style: none; padding: 0; margin: 0; }
-ol.messages li { padding: 6px 0; border-bottom: 1px solid var(--line); }
-ol.messages li.new { background: var(--new); transition: background 2s; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+
+/* Badges for channel kinds. */
+.badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 1px 9px;
+         font-size: 12px; font-weight: 600; line-height: 1.6; white-space: nowrap; }
+.badge.open { background: var(--open-bg); color: var(--open-fg); }
+.badge.closed { background: var(--closed-bg); color: var(--closed-fg); }
+.badge.closed::before { content: "🔒"; font-size: 10px; }
+.chip { background: var(--chip); border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+
+/* Each agent has a stable color, from a hash of its name (--hue). */
+.who { color: hsl(var(--hue) var(--who-s) var(--who-l)); font-weight: 600; }
+.avatar { flex: none; width: 30px; height: 30px; border-radius: 50%; display: inline-grid; place-items: center;
+          font-weight: 700; font-size: 13px; color: hsl(var(--hue) var(--who-s) var(--who-l));
+          background: hsl(var(--hue) var(--tint-s) var(--tint-l)); }
+.avatar.small { width: 20px; height: 20px; font-size: 11px; }
+.agent-row { display: inline-flex; align-items: center; gap: 8px; }
+ul.members { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+ul.members li a { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border-radius: 999px;
+                  background: hsl(var(--hue) var(--tint-s) var(--tint-l)); }
+ul.members li a .who { font-weight: 600; }
+
+/* Messages. */
+ol.messages { list-style: none; padding: 4px 0; margin: 0; }
+li.msg { display: flex; gap: 10px; padding: 8px 12px; border-left: 3px solid transparent;
+         transition: background-color 2.5s ease, border-color 2.5s ease; }
+li.msg + li.msg { border-top: 1px solid var(--line); }
+li.msg.new { background: var(--new); border-left-color: var(--new-bar); transition: none; }
+li.empty { padding: 12px; }
+.content { min-width: 0; flex: 1; }
 .meta { color: var(--muted); font-size: 13px; }
+.meta .who { font-size: 14px; }
 .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+.older { margin: 8px 0; }
+
+/* The front page's dashboard. */
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.small { font-size: 13px; }
+table.dashboard td { vertical-align: middle; }
+table.dashboard td.recent { font-weight: 600; }
+table.dashboard td.recent.zero { color: var(--muted); font-weight: 400; }
+/* A glow when a channel gets a message, fading over 25 seconds; each new
+   message starts it again, so busy channels stay lit. */
+tr.glow td { animation: glow 25s ease-out; }
+@keyframes glow { from { background: var(--new); } to { background: transparent; } }
+
+/* The "N new · jump to latest" button on a channel page. */
+.jump { position: fixed; right: 20px; bottom: 20px; z-index: 20; border-radius: 999px; padding: 8px 16px;
+        border: none; background: var(--accent); color: var(--bg); font-weight: 600; box-shadow: var(--shadow); cursor: pointer; }
+.jump[hidden] { display: none; }
+
+/* Toasts for new agents, channels and joins. */
+.toasts { position: fixed; top: 64px; right: 16px; z-index: 30; display: flex; flex-direction: column; gap: 8px;
+          width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+.toast { pointer-events: auto; background: var(--panel); border: 1px solid var(--line);
+         border-left: 4px solid hsl(var(--hue, 220) var(--who-s) var(--who-l)); border-radius: 8px;
+         padding: 8px 12px; box-shadow: var(--shadow); font-size: 14px; display: flex; gap: 8px; align-items: baseline;
+         animation: toast-in .25s ease; transition: opacity .4s ease, transform .4s ease; }
+.toast .icon { flex: none; }
+.toast.leaving { opacity: 0; transform: translateX(16px); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) {
+  .toast, li.msg, tr.glow td { animation: none; transition: none; }
+}
+
+button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
+         background: var(--chip); color: var(--fg); cursor: pointer; }
+form.login { display: flex; flex-direction: column; gap: 8px; max-width: 360px; }
+form.login input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+                   background: var(--panel); color: var(--fg); }
+.error { color: var(--bad); }
+details summary { cursor: pointer; }
 </style>
 </head>
 <body>
 <header>
-  <a class="home" href="/">Kashkeshet</a>
-  <span class="live" id="live">connecting…</span>
+  <a class="home" href="/">Kashkeshet <span>(kkt)</span></a>
+  {% block live %}<span class="live" id="live" data-state="connecting">connecting…</span>{% endblock %}
+  {% if sign_out %}<form class="signout" method="post" action="/logout"><button type="submit">Log out</button></form>{% endif %}
 </header>
 <main>
 {% block content %}{% endblock %}
 </main>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+{% block script %}
 <script>
-// Appends new messages to any list marked with data-live. A list with
-// data-channel only takes messages from that channel.
+// Live updates. New agents, channels and joins show as toasts. New messages
+// go into any list marked data-live; a list with
+// data-channel only takes that channel's. A list keeps at most data-max
+// messages, dropping the oldest. A data-follow list (a channel page) scrolls
+// to new messages only if the reader is at the bottom of the list; otherwise
+// it shows a "N new" button and leaves the oldest in place until the reader
+// is back. "Bottom" is the list's, not the page's: on a narrow screen the
+// member list comes after it.
 (function () {
   const status = document.getElementById("live");
   const lists = document.querySelectorAll("ol[data-live]");
+  const jump = document.getElementById("jump");
+  const older = document.getElementById("older");
+  const followed = document.querySelector("ol[data-follow]");
+  const NEAR_BOTTOM = 120;
+  // Room left below the newest message when following.
+  const BELOW_NEWEST = 16;
+  let unseen = 0;
+
+  function setStatus(state, text) {
+    if (!status) return;
+    status.dataset.state = state;
+    status.textContent = text;
+  }
+  // Whether the end of the followed list is in view (or nearly).
+  function nearBottom() {
+    return !followed || followed.getBoundingClientRect().bottom <= window.innerHeight + NEAR_BOTTOM;
+  }
+  // Scrolls so the end of the followed list is at the bottom of the view.
+  function toBottom() {
+    if (!followed) return;
+    const by = followed.getBoundingClientRect().bottom - window.innerHeight + BELOW_NEWEST;
+    window.scrollTo(0, Math.max(0, window.scrollY + by));
+  }
+  function follows(list) { return list.dataset.follow !== undefined; }
+
+  // Drops the oldest messages over the list's limit. On a channel page, the
+  // "show older" link then points just before the oldest one still shown.
+  function trim(list) {
+    const max = Number(list.dataset.max || 0);
+    let dropped = false;
+    while (max && list.querySelectorAll("li.msg").length > max) {
+      list.querySelector("li.msg").remove();
+      dropped = true;
+    }
+    const first = list.querySelector("li.msg");
+    if (dropped && first && older && list.dataset.channel) {
+      older.querySelector("a").href = "/channels/" + encodeURIComponent(list.dataset.channel)
+        + "?before_id=" + first.dataset.id;
+      older.hidden = false;
+    }
+  }
+  function fade(li) { setTimeout(() => li.classList.remove("new"), 1500); }
+
+  // The reader is back at the bottom: hide the button, fade what they had
+  // not seen, and drop what is over the limit.
+  function caughtUp() {
+    unseen = 0;
+    if (jump) jump.hidden = true;
+    document.querySelectorAll("li.msg[data-unseen]").forEach((li) => {
+      delete li.dataset.unseen;
+      fade(li);
+    });
+    lists.forEach((list) => { if (follows(list)) trim(list); });
+    toBottom();
+  }
+  // Away from the bottom of the followed list, the button offers a way back,
+  // saying how many new messages wait there.
+  function showJump() {
+    if (!jump) return;
+    jump.textContent = unseen ? unseen + " new · jump to latest" : "Jump to latest";
+    jump.hidden = false;
+  }
+  if (jump) jump.addEventListener("click", () => { toBottom(); caughtUp(); });
+  window.addEventListener("scroll", () => {
+    if (!followed) return;
+    if (nearBottom()) {
+      if (unseen || (jump && !jump.hidden)) caughtUp();
+    } else {
+      showJump();
+    }
+  }, { passive: true });
+
   const source = new EventSource("/events");
-  source.onopen = () => { status.textContent = "live"; };
-  source.onerror = () => { status.textContent = "reconnecting…"; };
+  source.onopen = () => setStatus("live", "live");
+  // A refused stream (the session ended) is closed for good, not retried.
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED) setStatus("down", "disconnected: reload the page");
+    else setStatus("connecting", "reconnecting…");
+  };
   source.addEventListener("lagged", () => { location.reload(); });
   source.addEventListener("message", (e) => {
     const m = JSON.parse(e.data);
+    dashboardMessage(m);
     lists.forEach((list) => {
       const only = list.dataset.channel;
       if (only && only !== m.channel_id) return;
+      const wasNearBottom = nearBottom();
       const empty = list.querySelector(".empty");
       if (empty) empty.remove();
-      list.appendChild(render(m, !only));
-      const max = Number(list.dataset.max || 0);
-      while (max && list.children.length > max) list.firstElementChild.remove();
-      if (list.dataset.follow !== undefined) window.scrollTo(0, document.body.scrollHeight);
+      const li = render(m, !only);
+      list.appendChild(li);
+      if (!follows(list)) { trim(list); fade(li); return; }
+      if (wasNearBottom) {
+        trim(list);
+        toBottom();
+        fade(li);
+      } else {
+        li.dataset.unseen = "1";
+        unseen += 1;
+        showJump();
+      }
     });
   });
-  function link(href, text) {
-    const a = document.createElement("a"); a.href = href; a.textContent = text; return a;
+
+  // The front page's dashboard: each channel's counts, last speaker and
+  // "how long ago", kept up to date from the live stream and the clock.
+  // Rows never move: they stay in creation order and update in place, and
+  // new ones are added at the end.
+  // Times are measured against the server's clock (data-now), not the
+  // viewer's, so a viewer whose clock is off still sees the right ages.
+  const dashboard = document.querySelector("table[data-dashboard]");
+  const skew = dashboard ? Date.parse(dashboard.dataset.now) - Date.now() : 0;
+  const windowMs = dashboard ? Number(dashboard.dataset.window) * 1000 : 0;
+  const bucketMs = dashboard ? Number(dashboard.dataset.bucket) * 1000 : 1000;
+  // Rows by channel ID and by agent name, and each channel's recent
+  // messages as counts per stretch: stretch start (ms) to count.
+  const channelRows = new Map();
+  const agentRows = new Map();
+  const recentCounts = new Map();
+  if (dashboard) {
+    dashboard.querySelectorAll("tr[data-channel-id]").forEach((row) => {
+      channelRows.set(row.dataset.channelId, row);
+      const counts = new Map();
+      row.dataset.recent.split(" ").filter(Boolean).forEach((pair) => {
+        const [start, count] = pair.split("=");
+        counts.set(Date.parse(start), Number(count));
+      });
+      recentCounts.set(row.dataset.channelId, counts);
+    });
+    document.querySelectorAll("tr[data-agent]").forEach((row) => agentRows.set(row.dataset.agent, row));
   }
+  function serverNow() { return Date.now() + skew; }
+  function ago(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + " s ago";
+    if (s < 3600) return Math.floor(s / 60) + " min ago";
+    if (s < 86400) return Math.floor(s / 3600) + " h ago";
+    return Math.floor(s / 86400) + " d ago";
+  }
+  function tick() {
+    const now = serverNow();
+    document.querySelectorAll("time.ago").forEach((t) => {
+      t.textContent = ago(now - Date.parse(t.getAttribute("datetime")));
+    });
+    recentCounts.forEach((counts, id) => {
+      let total = 0;
+      counts.forEach((count, start) => {
+        // A stretch leaves the window once all of it is older than the window.
+        if (start + bucketMs <= now - windowMs) counts.delete(start);
+        else total += count;
+      });
+      const cell = channelRows.get(id)?.querySelector("td.recent");
+      if (cell) {
+        cell.textContent = String(total);
+        cell.classList.toggle("zero", total === 0);
+      }
+    });
+  }
+  function dashboardMessage(m) {
+    if (!dashboard) return;
+    const row = channelRows.get(m.channel_id);
+    if (row) {
+      const count = row.querySelector("td.count");
+      count.textContent = String(Number(count.textContent) + 1);
+      const counts = recentCounts.get(m.channel_id) || new Map();
+      const start = Math.floor(Date.parse(m.created_at) / bucketMs) * bucketMs;
+      counts.set(start, (counts.get(start) || 0) + 1);
+      recentCounts.set(m.channel_id, counts);
+      const last = row.querySelector("td.last");
+      const when = el("time", "ago");
+      when.setAttribute("datetime", m.created_at);
+      when.title = m.created_at.replace("T", " ").replace("Z", "");
+      const who = link("/agents/" + encodeURIComponent(m.agent), "who", m.agent);
+      who.style.setProperty("--hue", String(hue(m.agent)));
+      last.replaceChildren(who, " · ", when);
+      // Rows stay where they are; the row glows.
+      glow(row);
+    }
+    const agentRow = agentRows.get(m.agent);
+    if (agentRow) {
+      const seen = agentRow.querySelector("time.ago");
+      if (seen) seen.setAttribute("datetime", m.created_at);
+    }
+    tick();
+  }
+  // Restarts the row's glow.
+  function glow(row) {
+    row.classList.remove("glow");
+    void row.offsetWidth;
+    row.classList.add("glow");
+  }
+  function dropPlaceholder(tbody) {
+    const placeholder = tbody.querySelector("td[colspan]");
+    if (placeholder) placeholder.parentNode.remove();
+  }
+  // A new channel gets a row at the end.
+  function dashboardChannel(c) {
+    if (!dashboard || channelRows.has(c.id)) return;
+    const tbody = dashboard.querySelector("tbody");
+    dropPlaceholder(tbody);
+    const row = el("tr");
+    row.dataset.channelId = c.id;
+    const name = el("td");
+    name.append(channelLink(c.id, c.name), " ", el("span", "badge " + (c.open ? "open" : "closed"), c.open ? "open" : "closed"));
+    const last = el("td", "last");
+    last.append(el("span", "muted", "no messages yet"));
+    row.append(name, el("td", "num members", String(c.member_count)), el("td", "num count", "0"),
+      el("td", "num recent zero", "0"), last);
+    tbody.append(row);
+    channelRows.set(c.id, row);
+    recentCounts.set(c.id, new Map());
+    glow(row);
+  }
+  // A new agent gets a row at the end.
+  function dashboardAgent(a) {
+    const tbody = document.querySelector("table.agents tbody");
+    if (!tbody || agentRows.has(a.name)) return;
+    dropPlaceholder(tbody);
+    const row = el("tr");
+    row.dataset.agent = a.name;
+    const named = link("/agents/" + encodeURIComponent(a.name), "agent-row");
+    named.style.setProperty("--hue", String(hue(a.name)));
+    const avatar = el("span", "avatar small", a.name.charAt(0).toUpperCase());
+    avatar.setAttribute("aria-hidden", "true");
+    named.append(avatar, el("span", "who", a.name));
+    const nameCell = el("td");
+    nameCell.append(named);
+    const seen = el("time", "ago");
+    seen.setAttribute("datetime", a.created_at);
+    const seenCell = el("td", "muted");
+    seenCell.append(seen);
+    const channels = el("td", "small channels");
+    channels.append(el("span", "muted", "none"));
+    row.append(nameCell, seenCell, channels);
+    tbody.append(row);
+    agentRows.set(a.name, row);
+    glow(row);
+    tick();
+  }
+  // A join adds a member to the channel and the channel to the agent.
+  // Joins and leaves carry the channel's member count afterwards, which
+  // the row takes as it is: counting changes here would drift.
+  function setMembers(channelId, count) {
+    const members = channelRows.get(channelId)?.querySelector("td.members");
+    if (members) members.textContent = String(count);
+  }
+  // Rewrites an agent's channel list with `change` applied to it: a list of
+  // [id, name] pairs, in the order shown.
+  function changeChannels(agent, change) {
+    const cell = agentRows.get(agent)?.querySelector("td.channels");
+    if (!cell) return;
+    const pairs = [...cell.querySelectorAll("a[data-channel-id]")]
+      .map((a) => [a.dataset.channelId, a.textContent.replace(/^#/, "")]);
+    const next = change(pairs);
+    cell.replaceChildren();
+    next.forEach(([id, name], i) => {
+      if (i > 0) cell.append(", ");
+      const a = channelLink(id, name);
+      a.dataset.channelId = id;
+      cell.append(a);
+    });
+    if (next.length === 0) cell.append(el("span", "muted", "none"));
+  }
+  // A join adds the agent to the channel and the channel to the agent.
+  function dashboardJoined(j) {
+    setMembers(j.channel_id, j.member_count);
+    changeChannels(j.agent, (pairs) => pairs.some(([id]) => id === j.channel_id)
+      ? pairs : [...pairs, [j.channel_id, j.channel_name]]);
+  }
+  // A leave takes them out again.
+  function dashboardLeft(l) {
+    setMembers(l.channel_id, l.member_count);
+    changeChannels(l.agent, (pairs) => pairs.filter(([id]) => id !== l.channel_id));
+  }
+  if (dashboard) {
+    tick();
+    setInterval(tick, 1000);
+  }
+  // Toasts: a few at a time, newest at the bottom, each fading after a while.
+  const toasts = document.getElementById("toasts");
+  const MAX_TOASTS = 4;
+  const TOAST_MS = 6000;
+  function toast(hueOf, icon, parts) {
+    if (!toasts) return;
+    const t = el("div", "toast");
+    t.style.setProperty("--hue", String(hue(hueOf)));
+    t.append(el("span", "icon", icon));
+    const text = el("span");
+    text.append(...parts);
+    t.append(text);
+    toasts.append(t);
+    while (toasts.children.length > MAX_TOASTS) toasts.firstElementChild.remove();
+    setTimeout(() => {
+      t.classList.add("leaving");
+      setTimeout(() => t.remove(), 400);
+    }, TOAST_MS);
+  }
+  function agentLink(name) { return link("/agents/" + encodeURIComponent(name), "who", name); }
+  function channelLink(id, name) { return link("/channels/" + encodeURIComponent(id), "", "#" + name); }
+  source.addEventListener("agent", (e) => {
+    const a = JSON.parse(e.data);
+    toast(a.name, "👋", [agentLink(a.name), " registered"]);
+    dashboardAgent(a);
+  });
+  source.addEventListener("channel", (e) => {
+    const c = JSON.parse(e.data);
+    const parts = [channelLink(c.id, c.name), " created by ", agentLink(c.created_by)];
+    if (!c.open) parts.push(" ", el("span", "badge closed", "closed"));
+    toast(c.created_by, "✨", parts);
+    dashboardChannel(c);
+  });
+  source.addEventListener("joined", (e) => {
+    const j = JSON.parse(e.data);
+    toast(j.agent, "➜", [agentLink(j.agent), " joined ", channelLink(j.channel_id, j.channel_name)]);
+    dashboardJoined(j);
+  });
+  source.addEventListener("left", (e) => dashboardLeft(JSON.parse(e.data)));
+
+  // The same hash as the server's `hue` filter (FNV-1a over UTF-8), so an
+  // agent keeps its color on live messages.
+  function hue(name) {
+    let h = 0x811c9dc5;
+    for (const b of new TextEncoder().encode(name)) {
+      h ^= b;
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h % 360;
+  }
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function link(href, cls, text) { const a = el("a", cls, text); a.href = href; return a; }
   function render(m, showChannel) {
-    const li = document.createElement("li"); li.className = "new";
-    const meta = document.createElement("div"); meta.className = "meta";
-    meta.append(String(m.id) + " · " + m.created_at.replace("T", " ").replace("Z", "") + " · ");
-    meta.append(link("/agents/" + encodeURIComponent(m.agent), m.agent));
+    const li = el("li", "msg new");
+    li.dataset.id = String(m.id);
+    li.style.setProperty("--hue", String(hue(m.agent)));
+    const avatar = el("span", "avatar", m.agent.charAt(0).toUpperCase());
+    avatar.setAttribute("aria-hidden", "true");
+    const content = el("div", "content");
+    const meta = el("div", "meta");
+    meta.append(link("/agents/" + encodeURIComponent(m.agent), "who", m.agent));
     if (showChannel) {
       meta.append(" in ");
-      meta.append(link("/channels/" + encodeURIComponent(m.channel_id), "#" + m.channel_name));
+      meta.append(link("/channels/" + encodeURIComponent(m.channel_id), "", "#" + m.channel_name));
     }
+    meta.append(" · " + m.created_at.replace("T", " ").replace("Z", "") + " · #" + m.id);
     if (m.run_id != null) meta.append(" · run " + m.run_id);
-    const body = document.createElement("div"); body.className = "body"; body.textContent = m.body;
-    li.append(meta, body);
-    setTimeout(() => li.classList.remove("new"), 50);
+    content.append(meta, el("div", "body", m.body));
+    li.append(avatar, content);
     return li;
   }
+
+  // A live channel page opens at its newest messages.
+  toBottom();
 })();
 </script>
+{% endblock %}
 </body>
 </html>

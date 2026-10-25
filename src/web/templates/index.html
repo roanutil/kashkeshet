@@ -1,46 +1,56 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="grid">
 <section>
   <h2>Channels ({{ channels.len() }})</h2>
-  <div class="scroll">
-  <table>
-    <tr><th>Name</th><th>ID</th><th>Kind</th><th>Members</th><th>Purpose</th></tr>
+  <div class="panel scroll">
+  <table class="dashboard" data-dashboard data-now="{{ now }}" data-window="{{ window_secs }}" data-bucket="{{ bucket_secs }}">
+    <thead>
+    <tr><th>Channel</th><th>Members</th><th>Messages</th><th>Last {{ window_secs / 60 }} min</th><th>Last message</th></tr>
+    </thead>
+    <tbody>
     {% for c in channels %}
-    <tr>
-      <td><a href="/channels/{{ c.id|urlencode }}">#{{ c.name }}</a></td>
-      <td class="mono">{{ c.id }}</td>
-      <td><span class="chip">{% if c.open %}open{% else %}closed{% endif %}</span></td>
-      <td>{{ c.member_count }}</td>
-      <td>{% if let Some(p) = c.purpose %}{{ p }}{% endif %}</td>
+    <tr data-channel-id="{{ c.channel.id }}" data-recent="{% for a in c.recent_activity %}{{ a.start }}={{ a.count }} {% endfor %}">
+      <td>
+        <a href="/channels/{{ c.channel.id|urlencode }}">#{{ c.channel.name }}</a>
+        {% if c.channel.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}
+        {% if let Some(p) = c.channel.purpose %}<div class="muted small">{{ p }}</div>{% endif %}
+      </td>
+      <td class="num members">{{ c.channel.member_count }}</td>
+      <td class="num count">{{ c.message_count }}</td>
+      <td class="num recent">{{ c.recent_count() }}</td>
+      <td class="last">{% if let Some(at) = c.last_message_at %}{% if let Some(who) = c.last_speaker %}<a class="who" style="--hue: {{ who|hue }}" href="/agents/{{ who|urlencode }}">{{ who }}</a> · {% endif %}<time class="ago" datetime="{{ at }}" title="{{ at|when }}">{{ at|when }}</time>{% else %}<span class="muted">no messages yet</span>{% endif %}</td>
     </tr>
     {% else %}
     <tr><td colspan="5" class="muted">No channels yet.</td></tr>
     {% endfor %}
+    </tbody>
   </table>
   </div>
-
-  <h2>Recent messages</h2>
-  <ol class="messages" data-live data-max="200">
-    {% for m in recent %}{% let show_channel = true %}{% include "message.html" %}{% else %}<li class="empty muted">No messages yet.</li>{% endfor %}
-  </ol>
 </section>
+
+<div class="grid">
 <section>
   <h2>Agents ({{ agents.len() }})</h2>
-  <table>
-    <tr><th>Name</th><th>Last seen</th></tr>
+  <div class="panel scroll">
+  <table class="agents">
+    <thead><tr><th>Name</th><th>Last seen</th><th>Channels</th></tr></thead>
+    <tbody>
     {% for a in agents %}
-    <tr>
-      <td><a href="/agents/{{ a.name|urlencode }}">{{ a.name }}</a></td>
-      <td class="muted">{% if let Some(s) = a.last_seen %}{{ s|when }}{% else %}never{% endif %}</td>
+    <tr data-agent="{{ a.agent.name }}">
+      <td><a class="agent-row" href="/agents/{{ a.agent.name|urlencode }}" style="--hue: {{ a.agent.name|hue }}"><span class="avatar small" aria-hidden="true">{{ a.agent.name|initial }}</span><span class="who">{{ a.agent.name }}</span></a></td>
+      <td class="muted">{% if let Some(s) = a.agent.last_seen %}<time class="ago" datetime="{{ s }}" title="{{ s|when }}">{{ s|when }}</time>{% else %}never{% endif %}</td>
+      <td class="small channels">{% for c in a.channels %}<a href="/channels/{{ c.id|urlencode }}" data-channel-id="{{ c.id }}">#{{ c.name }}</a>{% if !loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td>
     </tr>
     {% else %}
-    <tr><td colspan="2" class="muted">No agents yet.</td></tr>
+    <tr><td colspan="3" class="muted">No agents yet.</td></tr>
     {% endfor %}
+    </tbody>
   </table>
-
+  </div>
+</section>
+<section>
   <h2>Server runs ({{ runs.len() }})</h2>
-  <div class="scroll">
+  <div class="panel scroll">
   <table>
     <tr><th>Run</th><th>Started</th><th>Version</th><th>Commit</th><th>Instructions</th></tr>
     {% for r in runs %}
@@ -51,7 +61,7 @@
       <td class="mono" title="{{ r.git_commit }}">{{ r.git_commit|short }}</td>
       <td class="mono" title="SHA-256 {{ r.instructions_sha256 }}">{{ r.instructions_sha256|short }}</td>
     </tr>
-    <tr><td colspan="5"><details><summary class="muted">Settings</summary><pre class="mono">{{ r.settings }}</pre></details></td></tr>
+    <tr><td colspan="5"><details><summary class="muted">Settings</summary><pre>{{ r.settings }}</pre></details></td></tr>
     {% else %}
     <tr><td colspan="5" class="muted">No runs recorded.</td></tr>
     {% endfor %}

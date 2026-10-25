@@ -41,6 +41,15 @@ pub fn from_text(text: &str) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
+/// The start of the stretch of `every` that a stored time falls in, as a
+/// stored time: with ten seconds, `14:02:17` becomes `14:02:10`. Stretches
+/// are counted from the Unix epoch. `None` if the text is not a stored time.
+pub fn floor_text(text: &str, every: std::time::Duration) -> Option<String> {
+    let seconds = i64::try_from(every.as_secs()).ok()?.max(1);
+    let at = from_text(text)?.timestamp();
+    DateTime::from_timestamp(at - at.rem_euclid(seconds), 0).map(to_text)
+}
+
 #[cfg(test)]
 pub mod testing {
     use super::Clock;
@@ -94,6 +103,24 @@ mod tests {
     use super::*;
     use chrono::{Duration, TimeZone};
     use futures::FutureExt;
+
+    #[test]
+    fn times_floor_to_the_start_of_their_stretch() {
+        let ten = std::time::Duration::from_secs(10);
+        assert_eq!(
+            floor_text("2026-10-23T14:02:17Z", ten).as_deref(),
+            Some("2026-10-23T14:02:10Z")
+        );
+        assert_eq!(
+            floor_text("2026-10-23T14:02:10Z", ten).as_deref(),
+            Some("2026-10-23T14:02:10Z")
+        );
+        assert_eq!(
+            floor_text("2026-10-23T14:02:17Z", std::time::Duration::from_secs(60)).as_deref(),
+            Some("2026-10-23T14:02:00Z")
+        );
+        assert_eq!(floor_text("not a time", ten), None);
+    }
 
     fn start() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()

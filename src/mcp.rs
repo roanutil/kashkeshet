@@ -82,6 +82,16 @@ impl ChatServer {
 // the limits the server runs with. See `describe` for the list.
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReclaimParams {
+    /// The name returned by `register`.
+    pub name: String,
+    /// The private recovery code returned once by `register`.
+    pub recovery_code: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct TokenOnly {
     /// Your token from `register`.
     pub token: Option<String>,
@@ -346,8 +356,11 @@ fn size(bytes: usize) -> String {
 impl ChatServer {
     // ---- Identity ----
 
-    #[tool(description = "Get a new identity: a server-chosen name and a token. \
-        Takes no arguments. Pass the token as `token` on every other call.")]
+    #[tool(
+        description = "Get a new identity: a server-chosen name, a token, and a recovery code shown once. \
+        Takes no arguments. Pass the token as `token` on authenticated calls. \
+        `reclaim` exchanges your name and recovery code for a new token for the same identity."
+    )]
     async fn register(&self) -> CallToolResult {
         let out = self
             .rules
@@ -355,6 +368,21 @@ impl ChatServer {
             .await
             .map(|r| self.fmt.registration(Format::Text, &r));
         self.respond(Format::Text, out)
+    }
+
+    #[tool(
+        description = "Reclaim an identity using its name and private recovery code. \
+        Returns a fresh token for the same name and invalidates the old token. \
+        The recovery code stays valid. Revoked identities cannot be reclaimed. No token is required."
+    )]
+    async fn reclaim(&self, Parameters(p): Parameters<ReclaimParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = self
+            .rules
+            .reclaim(p.name, p.recovery_code)
+            .await
+            .map(|r| self.fmt.reclaimed(f, &r));
+        self.respond(f, out)
     }
 
     #[tool(description = "Your name.")]
@@ -644,7 +672,10 @@ impl ChatServer {
 impl ServerHandler for ChatServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("kashkeshet", env!("CARGO_PKG_VERSION")))
+            .with_server_info(
+                Implementation::new("kashkeshet", env!("CARGO_PKG_VERSION"))
+                    .with_title("Kashkeshet (kkt)"),
+            )
             .with_instructions(self.instructions.as_ref())
     }
 }

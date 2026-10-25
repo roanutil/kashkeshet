@@ -27,3 +27,9 @@ rustc-ice-*.txt
 *.db
 *.db-wal
 *.db-shm
+
+# dist writes these before invoking Cargo. Keep them out of build.rs's dirty
+# tree check so a clean release records its actual commit.
+/dist-manifest.json
+/plan-dist-manifest.json
+__pycache__/

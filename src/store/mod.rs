@@ -36,12 +36,15 @@ pub struct AgentRecord {
     /// The server run that created the agent. `None` for agents from before
     /// runs were recorded.
     pub run_id: Option<i64>,
+    /// When the operator revoked the agent's token, if it has.
+    pub revoked_at: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct NewAgentRecord {
     pub name: String,
     pub token_hash: Vec<u8>,
+    pub recovery_hash: Option<Vec<u8>>,
     pub created_at: String,
     pub last_seen: Option<String>,
     pub run_id: i64,
@@ -192,6 +195,31 @@ pub struct ActivityRecord {
     pub latest_id: i64,
 }
 
+/// How much a channel has been used: for the human's dashboard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelUseRecord {
+    pub channel_id: String,
+    pub message_count: i64,
+    /// When the newest message was sent, and by whom; `None` with no messages.
+    pub last_message_at: Option<String>,
+    pub last_speaker: Option<String>,
+}
+
+/// When a message was sent, and where.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageTimeRecord {
+    pub channel_id: String,
+    pub created_at: String,
+}
+
+/// One agent's membership of one channel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MembershipRecord {
+    pub channel_id: String,
+    pub channel_name: String,
+    pub agent: String,
+}
+
 /// Questions the rules can ask.
 pub trait Reads {
     // ---- agents ----
@@ -199,6 +227,9 @@ pub trait Reads {
     fn agent(&self, name: &str) -> StoreResult<Option<AgentRecord>>;
 
     fn agent_by_token_hash(&self, hash: &[u8]) -> StoreResult<Option<AgentRecord>>;
+
+    /// Looks up an agent by both its name and hashed recovery code.
+    fn agent_by_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<Option<AgentRecord>>;
 
     /// Up to `limit` agents in name order, after `after_name` if given, whose
     /// names contain `text` if given.
@@ -208,6 +239,9 @@ pub trait Reads {
         after_name: Option<&str>,
         limit: usize,
     ) -> StoreResult<Vec<AgentRecord>>;
+
+    /// How many agents have not been revoked.
+    fn active_agent_count(&self) -> StoreResult<i64>;
 
     /// Every agent, most recently seen first.
     fn agents_by_last_seen(&self) -> StoreResult<Vec<AgentRecord>>;
@@ -277,6 +311,18 @@ pub trait Reads {
     /// many, and the newest ID. The channel with the newest message comes first.
     fn activity(&self, member: &str, after_id: i64) -> StoreResult<Vec<ActivityRecord>>;
 
+    /// For every channel: how many messages it has, and its newest one's
+    /// time and sender. In no particular order.
+    fn channel_use(&self) -> StoreResult<Vec<ChannelUseRecord>>;
+
+    /// Every membership, in the order agents joined.
+    fn memberships(&self) -> StoreResult<Vec<MembershipRecord>>;
+
+    /// The channel and time of every message sent at or after `since` (a
+    /// stored time), oldest first. It reads only those messages, through an
+    /// index on the time, however large the table.
+    fn message_times_since(&self, since: &str) -> StoreResult<Vec<MessageTimeRecord>>;
+
     // ---- server runs ----
 
     /// Every server run, newest first.
@@ -287,7 +333,13 @@ pub trait Reads {
 pub trait Writes: Reads {
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()>;
 
+    /// Replaces the authentication token, preserving the agent's identity.
+    fn set_token_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()>;
+
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()>;
+
+    /// Marks the agent's token as revoked at `at`.
+    fn set_revoked(&self, name: &str, at: &str) -> StoreResult<()>;
 
     fn insert_channel(&self, channel: &NewChannelRecord) -> StoreResult<()>;
 

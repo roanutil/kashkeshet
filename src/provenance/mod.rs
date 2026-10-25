@@ -8,7 +8,7 @@ mod commit;
 
 use crate::app::AppConfig;
 use crate::clock;
-use crate::config::Limits;
+use crate::config::{Limits, LogLevel, LogPolicy};
 use crate::store::{Db, NewServerRunRecord, StoreResult};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
@@ -45,7 +45,22 @@ impl ServerRun {
         ServerRun {
             version: build.version.to_string(),
             commit: build.commit.to_string(),
-            settings: settings_text(&config.limits, &config.allowed_origins),
+            settings: {
+                let mut settings = settings_text(
+                    &config.limits,
+                    config.log_level,
+                    config.dependency_log_level,
+                    &config.allowed_origins,
+                    config.allowed_hosts.extra(),
+                    config.config_file.as_deref(),
+                    config.admission.key_source(),
+                );
+                if let Some(file) = &config.log_file {
+                    settings.push('\n');
+                    settings.push_str(&log_text(file, &LogPolicy::DEFAULT));
+                }
+                settings
+            },
             instructions_sha256: sha256_hex(&config.instructions),
         }
     }
@@ -66,8 +81,18 @@ pub async fn record(db: &Db, run: &ServerRun, started_at: DateTime<Utc>) -> Stor
 
 /// The settings as text that stays the same for the same settings: one
 /// `name=value` line each, in a fixed order, with times in milliseconds and
-/// origins sorted.
-pub fn settings_text(limits: &Limits, allowed_origins: &[String]) -> String {
+/// origins and added host names sorted. Then come the config file the
+/// settings were read from, if any, and, when an access key is set, the file
+/// it came from as the last line; the key itself is never recorded.
+pub fn settings_text(
+    limits: &Limits,
+    log_level: LogLevel,
+    dependency_log_level: LogLevel,
+    allowed_origins: &[String],
+    allowed_hosts: &[String],
+    config_file: Option<&str>,
+    access_key_file: Option<&str>,
+) -> String {
     // Listing every field, with no `..`, makes a new limit fail to compile
     // here until it is added to the text.
     let Limits {
@@ -79,11 +104,15 @@ pub fn settings_text(limits: &Limits, allowed_origins: &[String]) -> String {
         max_channel_name_chars,
         max_purpose_chars,
         sends_per_minute,
+        registrations_per_minute,
+        max_agents,
         default_wait,
         max_wait,
         last_seen_interval,
         member_preview,
         purpose_preview_chars,
+        web_session_lifetime,
+        web_page_messages,
     } = limits;
     let mut lines = vec![
         format!("max_response_bytes={max_response_bytes}"),
@@ -94,16 +123,51 @@ pub fn settings_text(limits: &Limits, allowed_origins: &[String]) -> String {
         format!("max_channel_name_chars={max_channel_name_chars}"),
         format!("max_purpose_chars={max_purpose_chars}"),
         format!("sends_per_minute={sends_per_minute}"),
+        format!("registrations_per_minute={registrations_per_minute}"),
+        format!("max_agents={max_agents}"),
         format!("default_wait_ms={}", default_wait.as_millis()),
         format!("max_wait_ms={}", max_wait.as_millis()),
         format!("last_seen_interval_ms={}", last_seen_interval.as_millis()),
         format!("member_preview={member_preview}"),
         format!("purpose_preview_chars={purpose_preview_chars}"),
+        format!(
+            "web_session_lifetime_ms={}",
+            web_session_lifetime.as_millis()
+        ),
+        format!("web_page_messages={web_page_messages}"),
     ];
+    lines.push(format!("log_level={}", log_level.name()));
+    lines.push(format!(
+        "dependency_log_level={}",
+        dependency_log_level.name()
+    ));
     let mut origins = allowed_origins.to_vec();
     origins.sort();
     lines.extend(origins.iter().map(|o| format!("allowed_origin={o}")));
+    let mut hosts = allowed_hosts.to_vec();
+    hosts.sort();
+    lines.extend(hosts.iter().map(|h| format!("allowed_host={h}")));
+    lines.extend(config_file.map(|f| format!("config_file={f}")));
+    lines.extend(access_key_file.map(|f| format!("access_key_file={f}")));
     lines.join("\n")
+}
+
+/// The log file and the policy that bounds it, as `name=value` lines.
+pub fn log_text(file: &str, policy: &LogPolicy) -> String {
+    // Listing every field, with no `..`, makes a new one fail to compile
+    // here until it is added to the text.
+    let LogPolicy {
+        max_bytes,
+        rotated_files,
+        max_age,
+    } = policy;
+    [
+        format!("log_file={file}"),
+        format!("log_max_bytes={max_bytes}"),
+        format!("log_rotated_files={rotated_files}"),
+        format!("log_max_age_ms={}", max_age.as_millis()),
+    ]
+    .join("\n")
 }
 
 fn sha256_hex(text: &str) -> String {
@@ -116,12 +180,20 @@ fn sha256_hex(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admission::{Admission, SharedKey};
+    use crate::hosts::AllowedHosts;
 
     fn config(limits: Limits, origins: &[&str], instructions: &str) -> AppConfig {
         AppConfig {
+            admission: Admission::Open,
             limits,
             allowed_origins: origins.iter().map(|o| o.to_string()).collect(),
+            allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
             instructions: instructions.into(),
+            config_file: None,
+            log_file: None,
+            log_level: crate::config::DEFAULT_LOG_LEVEL,
+            dependency_log_level: crate::config::DEFAULT_DEPENDENCY_LOG_LEVEL,
         }
     }
 
@@ -135,7 +207,18 @@ mod tests {
         let run = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
         assert_eq!(run.version, "9.9.9");
         assert_eq!(run.commit, "abc123");
-        assert_eq!(run.settings, settings_text(&Limits::DEFAULT, &[]));
+        assert_eq!(
+            run.settings,
+            settings_text(
+                &Limits::DEFAULT,
+                LogLevel::Info,
+                LogLevel::Warn,
+                &[],
+                &[],
+                None,
+                None
+            )
+        );
         // SHA-256 of the empty string.
         assert_eq!(
             run.instructions_sha256,
@@ -146,7 +229,15 @@ mod tests {
     #[test]
     fn default_settings_text_is_fixed() {
         assert_eq!(
-            settings_text(&Limits::DEFAULT, &["http://localhost:6274".into()]),
+            settings_text(
+                &Limits::DEFAULT,
+                LogLevel::Info,
+                LogLevel::Warn,
+                &["http://localhost:6274".into()],
+                &["host.docker.internal".into()],
+                None,
+                None
+            ),
             "max_response_bytes=8192\n\
              default_limit=20\n\
              max_limit=100\n\
@@ -155,20 +246,107 @@ mod tests {
              max_channel_name_chars=64\n\
              max_purpose_chars=500\n\
              sends_per_minute=30\n\
+             registrations_per_minute=20\n\
+             max_agents=1000\n\
              default_wait_ms=30000\n\
              max_wait_ms=50000\n\
              last_seen_interval_ms=60000\n\
              member_preview=3\n\
              purpose_preview_chars=120\n\
-             allowed_origin=http://localhost:6274"
+             web_session_lifetime_ms=43200000\n\
+             web_page_messages=200\n\
+             log_level=info\n\
+             dependency_log_level=warn\n\
+             allowed_origin=http://localhost:6274\n\
+             allowed_host=host.docker.internal"
         );
     }
 
     #[test]
     fn origin_order_does_not_change_the_text() {
-        let a = settings_text(&Limits::DEFAULT, &["http://b".into(), "http://a".into()]);
-        let b = settings_text(&Limits::DEFAULT, &["http://a".into(), "http://b".into()]);
+        let a = settings_text(
+            &Limits::DEFAULT,
+            LogLevel::Info,
+            LogLevel::Warn,
+            &["http://b".into(), "http://a".into()],
+            &[],
+            None,
+            None,
+        );
+        let b = settings_text(
+            &Limits::DEFAULT,
+            LogLevel::Info,
+            LogLevel::Warn,
+            &["http://a".into(), "http://b".into()],
+            &[],
+            None,
+            None,
+        );
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn a_run_records_the_config_file_before_the_key_file() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let mut from_file = config(Limits::DEFAULT, &[], "");
+        from_file.config_file = Some("/home/sam/.config/kkt/config.toml".into());
+        from_file.admission = Admission::SharedKey(SharedKey::new(key, "/keys/kkt").expect("key"));
+        let run = ServerRun::new(TEST_BUILD, &from_file);
+        assert!(run.settings.ends_with(
+            "\nconfig_file=/home/sam/.config/kkt/config.toml\naccess_key_file=/keys/kkt"
+        ));
+        let plain = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
+        assert!(!plain.settings.contains("config_file"));
+    }
+
+    #[test]
+    fn host_order_does_not_change_the_text() {
+        let a = settings_text(
+            &Limits::DEFAULT,
+            LogLevel::Info,
+            LogLevel::Warn,
+            &[],
+            &["b.example".into(), "a.example".into()],
+            None,
+            None,
+        );
+        let b = settings_text(
+            &Limits::DEFAULT,
+            LogLevel::Info,
+            LogLevel::Warn,
+            &[],
+            &["a.example".into(), "b.example".into()],
+            None,
+            None,
+        );
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn added_hosts_give_a_different_run() {
+        let base = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
+        let mut with_host = config(Limits::DEFAULT, &[], "");
+        with_host.allowed_hosts =
+            AllowedHosts::new(&["host.docker.internal".into()]).expect("valid host");
+        let changed = ServerRun::new(TEST_BUILD, &with_host);
+        assert_ne!(base.settings, changed.settings);
+        assert!(
+            changed
+                .settings
+                .ends_with("\nallowed_host=host.docker.internal")
+        );
+    }
+
+    #[test]
+    fn a_run_records_the_key_file_but_not_the_key() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let mut keyed = config(Limits::DEFAULT, &[], "");
+        keyed.admission = Admission::SharedKey(SharedKey::new(key, "/keys/kkt").expect("key"));
+        let run = ServerRun::new(TEST_BUILD, &keyed);
+        assert!(run.settings.ends_with("\naccess_key_file=/keys/kkt"));
+        assert!(!run.settings.contains(key));
+        let open = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
+        assert!(!open.settings.contains("access_key"));
     }
 
     #[test]
@@ -193,6 +371,32 @@ mod tests {
             commit == "unknown"
                 || (hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit())),
             "unexpected commit text {commit:?}"
+        );
+    }
+
+    #[test]
+    fn a_run_records_its_log_file_and_how_it_is_bounded() {
+        let mut with_log = config(Limits::DEFAULT, &[], "");
+        with_log.log_file = Some("/logs/kkt.log".into());
+        let run = ServerRun::new(TEST_BUILD, &with_log);
+        assert!(
+            run.settings.ends_with(
+                "\nlog_file=/logs/kkt.log\n\
+                 log_max_bytes=10485760\n\
+                 log_rotated_files=5\n\
+                 log_max_age_ms=2592000000"
+            ),
+            "{}",
+            run.settings
+        );
+        let without = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
+        assert!(!without.settings.contains("log_file"));
+        assert!(
+            without
+                .settings
+                .contains("\nlog_level=info\ndependency_log_level=warn"),
+            "{}",
+            without.settings
         );
     }
 }

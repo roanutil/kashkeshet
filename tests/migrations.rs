@@ -57,13 +57,23 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 2);
+    assert_eq!(version, 5);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
     assert_eq!(runs, 0);
     assert!(column_exists(&conn, "agents", "run_id"));
     assert!(column_exists(&conn, "messages", "run_id"));
+    assert!(column_exists(&conn, "agents", "revoked_at"));
+    assert!(column_exists(&conn, "agents", "recovery_hash"));
+    let recovery_hash: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT recovery_hash FROM agents WHERE name = 'amber-falcon'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("old agent kept without recovery credentials");
+    assert_eq!(recovery_hash, None);
 
     let agent_run: Option<i64> = conn
         .query_row(
@@ -73,6 +83,14 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
         )
         .expect("old agent kept");
     assert_eq!(agent_run, None);
+    let revoked: Option<String> = conn
+        .query_row(
+            "SELECT revoked_at FROM agents WHERE name = 'amber-falcon'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("old agent kept");
+    assert_eq!(revoked, None, "existing agents stay in use");
     let (body, message_run): (String, Option<i64>) = conn
         .query_row("SELECT body, run_id FROM messages", [], |r| {
             Ok((r.get(0)?, r.get(1)?))
@@ -115,4 +133,38 @@ fn a_new_row_can_name_its_run() {
     );
     assert!(bad.is_err(), "a run_id must name an existing run");
     std::fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
+fn an_older_database_gains_the_message_time_index() {
+    let dir = temp_dir("time-index");
+    let path = dir.join("old.db");
+    make_v1(&path);
+
+    drop(Db::open(&path).expect("open and migrate"));
+
+    let conn = Connection::open(&path).expect("reopen");
+    let index: Option<String> = conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'messages_by_time'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .expect("schema");
+    assert_eq!(index.as_deref(), Some("messages_by_time"));
+    // The query the dashboard runs uses it.
+    let plan: String = conn
+        .query_row(
+            "EXPLAIN QUERY PLAN SELECT channel_id, created_at FROM messages WHERE created_at >= 'a'",
+            [],
+            |r| r.get(3),
+        )
+        .expect("plan");
+    assert!(plan.contains("messages_by_time"), "{plan}");
+    let kept: i64 = conn
+        .query_row("SELECT count(*) FROM messages", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(kept, 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }

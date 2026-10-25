@@ -29,6 +29,7 @@ async fn world(messages: &[(&'static str, &'static str, &'static str)]) -> Db {
             w.insert_agent(&NewAgentRecord {
                 name: name.into(),
                 token_hash: name.as_bytes().to_vec(),
+                recovery_hash: None,
                 created_at: T.into(),
                 last_seen: None,
                 run_id,
@@ -114,6 +115,7 @@ async fn file_database_reopens_without_rerunning_migrations() {
         w.insert_agent(&NewAgentRecord {
             name: "a".into(),
             token_hash: vec![0],
+            recovery_hash: Some(vec![42]),
             created_at: T.into(),
             last_seen: None,
             run_id,
@@ -126,6 +128,12 @@ async fn file_database_reopens_without_rerunning_migrations() {
     let db = Db::open(&path).expect("reopen");
     let found = db.read(|r| r.agent("a")).await.expect("read");
     assert_eq!(found.map(|a| a.name), Some("a".to_string()));
+    assert!(
+        db.read(|r| r.agent_by_recovery_hash("a", &[42]))
+            .await
+            .expect("recovery lookup after restart")
+            .is_some()
+    );
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
 
@@ -351,4 +359,166 @@ async fn a_failed_write_changes_nothing() {
         ..filter("a")
     };
     assert_eq!(channel_ids(&db, mine).await, ["ch_closed", "ch_open"]);
+}
+
+#[tokio::test]
+async fn recovery_lookup_requires_both_name_and_hash_and_token_replacement_is_local() {
+    let db = world(&[]).await;
+    db.write(|w| {
+        let run_id = w.insert_server_run(&run("recovery"))?;
+        w.insert_agent(&NewAgentRecord {
+            name: "recoverable".into(),
+            token_hash: vec![11],
+            recovery_hash: Some(vec![42]),
+            created_at: T.into(),
+            last_seen: None,
+            run_id,
+        })
+    })
+    .await
+    .unwrap();
+    db.write(|w| {
+        assert!(w.agent_by_recovery_hash("recoverable", &[42])?.is_some());
+        assert!(w.agent_by_recovery_hash("recoverable", &[41])?.is_none());
+        assert!(w.agent_by_recovery_hash("a", &[42])?.is_none());
+        assert!(w.agent_by_recovery_hash("a", &[])?.is_none());
+        w.set_token_hash("recoverable", &[12])?;
+        Ok::<_, StoreError>(())
+    })
+    .await
+    .unwrap();
+    db.read(|r| {
+        assert!(r.agent_by_token_hash(&[11])?.is_none());
+        assert_eq!(r.agent_by_token_hash(&[12])?.unwrap().name, "recoverable");
+        assert!(r.agent_by_token_hash(b"a")?.is_some());
+        assert!(r.agent_by_recovery_hash("recoverable", &[42])?.is_some());
+        Ok::<_, StoreError>(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn channel_use_counts_messages_and_names_the_last_speaker() {
+    let db = world(&[
+        ("ch_open", "a", "one"),
+        ("ch_open", "b", "two"),
+        ("ch_open", "a", "three"),
+        ("ch_closed", "a", "solo"),
+    ])
+    .await;
+    // A channel with no messages is listed too.
+    db.write(|w| {
+        w.insert_channel(&NewChannelRecord {
+            id: "ch_quiet".into(),
+            name: "quiet".into(),
+            purpose: None,
+            open: true,
+            created_by: "c".into(),
+            created_at: T.into(),
+        })?;
+        w.insert_message(&NewMessageRecord {
+            channel_id: "ch_open".into(),
+            agent: "b".into(),
+            body: "four".into(),
+            created_at: "2026-10-23T14:05:00Z".into(),
+            run_id: 1,
+        })?;
+        Ok::<_, StoreError>(())
+    })
+    .await
+    .expect("seed");
+    let mut used = db.read(|r| r.channel_use()).await.expect("read");
+    used.sort_by(|x, y| x.channel_id.cmp(&y.channel_id));
+    let at = |s: &str| Some(s.to_string());
+    assert_eq!(
+        used,
+        [
+            ChannelUseRecord {
+                channel_id: "ch_closed".into(),
+                message_count: 1,
+                last_message_at: at(T),
+                last_speaker: at("a"),
+            },
+            ChannelUseRecord {
+                channel_id: "ch_open".into(),
+                message_count: 4,
+                last_message_at: at("2026-10-23T14:05:00Z"),
+                last_speaker: at("b"),
+            },
+            ChannelUseRecord {
+                channel_id: "ch_quiet".into(),
+                message_count: 0,
+                last_message_at: None,
+                last_speaker: None,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn memberships_list_every_agent_in_every_channel() {
+    let db = world(&[]).await;
+    let all = db.read(|r| r.memberships()).await.expect("read");
+    let pairs: Vec<(String, String, String)> = all
+        .into_iter()
+        .map(|m| (m.channel_id, m.channel_name, m.agent))
+        .collect();
+    let pair = |c: &str, n: &str, a: &str| (c.to_string(), n.to_string(), a.to_string());
+    assert_eq!(
+        pairs,
+        [
+            pair("ch_open", "beta", "a"),
+            pair("ch_open", "beta", "b"),
+            pair("ch_closed", "alpha", "a"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn message_times_since_finds_every_message_in_the_window() {
+    let db = world(&[("ch_open", "a", "old one"), ("ch_closed", "a", "old two")]).await;
+    db.write(|w| {
+        for (channel_id, at) in [
+            ("ch_open", "2026-10-23T14:10:00Z"),
+            ("ch_closed", "2026-10-23T14:11:00Z"),
+            ("ch_open", "2026-10-23T14:12:00Z"),
+            // Stored after the others but stamped earlier, as when the clock
+            // was read before the write got its turn, or the clock moved
+            // back. It must not hide the rest.
+            ("ch_closed", "2026-10-23T13:00:00Z"),
+        ] {
+            w.insert_message(&NewMessageRecord {
+                channel_id: channel_id.into(),
+                agent: "a".into(),
+                body: "new".into(),
+                created_at: at.into(),
+                run_id: 1,
+            })?;
+        }
+        Ok::<_, StoreError>(())
+    })
+    .await
+    .expect("seed");
+    let times = db
+        .read(|r| r.message_times_since("2026-10-23T14:10:00Z"))
+        .await
+        .expect("read");
+    let pairs: Vec<(&str, &str)> = times
+        .iter()
+        .map(|t| (t.channel_id.as_str(), t.created_at.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("ch_open", "2026-10-23T14:10:00Z"),
+            ("ch_closed", "2026-10-23T14:11:00Z"),
+            ("ch_open", "2026-10-23T14:12:00Z"),
+        ]
+    );
+    let none = db
+        .read(|r| r.message_times_since("2026-10-23T15:00:00Z"))
+        .await
+        .expect("read");
+    assert!(none.is_empty());
 }

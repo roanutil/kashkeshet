@@ -25,12 +25,13 @@ mod channels;
 mod error;
 mod human;
 mod messages;
+mod operator;
 mod rate;
 
 #[cfg(test)]
 mod tests;
 
-pub use agents::{Agent, AgentInfo, Registration};
+pub use agents::{Agent, AgentInfo, Reclaimed, Registration};
 pub use channels::{ChannelInfo, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
 pub use human::ServerRunInfo;
@@ -38,16 +39,17 @@ pub use messages::{
     ActivityRow, Message, MessagePage, Position, ReadQuery, SearchHit, SearchQuery, WaitQuery,
     WaitResult,
 };
-pub use rate::SendLimiter;
+pub use operator::{AgentStatus, Operator, Revoked};
+pub use rate::{RegisterLimiter, SendLimiter};
 
 use crate::clock::{self, Clock};
 use crate::config::Limits;
-use crate::events::Events;
+use crate::events::{Events, Joined, Left, NewAgent, NewChannel as NewChannelEvent};
 use crate::names::{self, Entropy};
 use crate::store::{
-    ActivityRecord, AgentRecord, ChannelFacts, ChannelFilter, Db, MessageRange, MessageRecord,
-    NewAgentRecord, NewChannelRecord, NewMessageRecord, NewerFilter, Reads, SearchFilter,
-    SearchHitRecord, ServerRunRecord,
+    ActivityRecord, AgentRecord, ChannelFacts, ChannelFilter, ChannelUseRecord, Db, MessageRange,
+    MessageRecord, NewAgentRecord, NewChannelRecord, NewMessageRecord, NewerFilter, Reads,
+    SearchFilter, SearchHitRecord, ServerRunRecord,
 };
 use access::{Decision, Need};
 use serde::Serialize;
@@ -70,6 +72,8 @@ pub struct Deps {
     pub entropy: Arc<dyn Entropy>,
     /// Counts each agent's sends against `limits.sends_per_minute`.
     pub sends: SendLimiter,
+    /// Counts registrations against `limits.registrations_per_minute`.
+    pub registrations: RegisterLimiter,
     /// This server run, from `provenance::record`. New agents and messages
     /// are stamped with it.
     pub run_id: i64,

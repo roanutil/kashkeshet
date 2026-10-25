@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0001_init.sql"),
     include_str!("../../migrations/0002_server_runs.sql"),
+    include_str!("../../migrations/0003_revoked_agents.sql"),
+    include_str!("../../migrations/0004_identity_recovery.sql"),
+    include_str!("../../migrations/0005_messages_by_time.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -158,7 +161,7 @@ fn migrate(conn: &mut Connection) -> StoreResult<()> {
 /// [`Db::write`] the connection is a transaction.
 struct Sql<'a>(&'a Connection);
 
-const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id";
+const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id, revoked_at";
 
 fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
     Ok(AgentRecord {
@@ -166,6 +169,7 @@ fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
         created_at: r.get(1)?,
         last_seen: r.get(2)?,
         run_id: r.get(3)?,
+        revoked_at: r.get(4)?,
     })
 }
 
@@ -220,6 +224,17 @@ impl Reads for Sql<'_> {
             .optional()?)
     }
 
+    fn agent_by_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<Option<AgentRecord>> {
+        Ok(self
+            .0
+            .query_row(
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE name = ? AND recovery_hash = ?"),
+                rusqlite::params![name, hash],
+                agent_from_row,
+            )
+            .optional()?)
+    }
+
     fn agents(
         &self,
         text: Option<&str>,
@@ -243,6 +258,14 @@ impl Reads for Sql<'_> {
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(agents)
+    }
+
+    fn active_agent_count(&self) -> StoreResult<i64> {
+        Ok(self.0.query_row(
+            "SELECT count(*) FROM agents WHERE revoked_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     fn agents_by_last_seen(&self) -> StoreResult<Vec<AgentRecord>> {
@@ -564,6 +587,64 @@ impl Reads for Sql<'_> {
         Ok(rows)
     }
 
+    fn channel_use(&self) -> StoreResult<Vec<ChannelUseRecord>> {
+        // The newest message is found through the (channel_id, id) index.
+        let mut stmt = self.0.prepare_cached(
+            "SELECT c.id,
+                    (SELECT count(*) FROM messages m WHERE m.channel_id = c.id),
+                    last.created_at, last.agent
+             FROM channels c
+             LEFT JOIN messages last ON last.id =
+                 (SELECT max(m.id) FROM messages m WHERE m.channel_id = c.id)",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ChannelUseRecord {
+                    channel_id: r.get(0)?,
+                    message_count: r.get(1)?,
+                    last_message_at: r.get(2)?,
+                    last_speaker: r.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    fn memberships(&self) -> StoreResult<Vec<MembershipRecord>> {
+        let mut stmt = self.0.prepare_cached(
+            "SELECT m.channel_id, c.name, m.agent
+             FROM memberships m JOIN channels c ON c.id = m.channel_id
+             ORDER BY m.joined_at, m.rowid",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(MembershipRecord {
+                    channel_id: r.get(0)?,
+                    channel_name: r.get(1)?,
+                    agent: r.get(2)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    fn message_times_since(&self, since: &str) -> StoreResult<Vec<MessageTimeRecord>> {
+        // A range on the messages_by_time index: it reads only the answer,
+        // and does not assume times follow message IDs.
+        let mut stmt = self.0.prepare_cached(
+            "SELECT channel_id, created_at FROM messages WHERE created_at >= ? ORDER BY created_at",
+        )?;
+        let times = stmt
+            .query_map([since], |r| {
+                Ok(MessageTimeRecord {
+                    channel_id: r.get(0)?,
+                    created_at: r.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(times)
+    }
+
     fn server_runs(&self) -> StoreResult<Vec<ServerRunRecord>> {
         let mut stmt = self.0.prepare_cached(
             "SELECT id, started_at, version, git_commit, settings, instructions_sha256
@@ -588,11 +669,12 @@ impl Reads for Sql<'_> {
 impl Writes for Sql<'_> {
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()> {
         self.0.execute(
-            "INSERT INTO agents (name, token_hash, created_at, last_seen, run_id)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO agents (name, token_hash, recovery_hash, created_at, last_seen, run_id)
+             VALUES (?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 agent.name,
                 agent.token_hash,
+                agent.recovery_hash,
                 agent.created_at,
                 agent.last_seen,
                 agent.run_id
@@ -601,9 +683,25 @@ impl Writes for Sql<'_> {
         Ok(())
     }
 
+    fn set_token_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET token_hash = ? WHERE name = ?",
+            rusqlite::params![hash, name],
+        )?;
+        Ok(())
+    }
+
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()> {
         self.0
             .execute("UPDATE agents SET last_seen = ? WHERE name = ?", [at, name])?;
+        Ok(())
+    }
+
+    fn set_revoked(&self, name: &str, at: &str) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET revoked_at = ? WHERE name = ?",
+            [at, name],
+        )?;
         Ok(())
     }
 

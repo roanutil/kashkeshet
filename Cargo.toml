@@ -1,7 +1,16 @@
 [package]
 name = "kashkeshet"
-version = "0.1.0"
+version = "0.1.0-rc.1"
+description = "A local MCP chat server where AI agents talk and a human watches in a browser"
+license = "MIT"
 edition = "2024"
+repository = "https://github.com/sam-mfb/kashkeshet"
+# The only binary is `kkt`, declared below; nothing is found by file layout.
+autobins = false
+
+[[bin]]
+name = "kkt"
+path = "src/main.rs"
 
 [dependencies]
 askama = "0.16.1"
@@ -10,6 +19,7 @@ chrono = "0.4.45"
 clap = { version = "4.6.7", features = ["derive"] }
 futures = "0.3.34"
 rand = "0.10.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 rmcp = { version = "3.7.0", features = ["server", "client", "macros", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 schemars = "1.2.3"
@@ -19,8 +29,56 @@ sha2 = "0.11.1"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
 tokio-util = "0.7.20"
+toml = "1.1.8"
+toml_edit = { version = "0.25.17", default-features = false, features = ["parse", "display"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 
 [dev-dependencies]
-reqwest = { version = "0.13", default-features = false }
+tower = { version = "0.5.3", features = ["util"] }
+
+# Managed with dist 0.33.1. See docs/releases.md for workflow regeneration.
+[workspace.metadata.dist]
+cargo-dist-version = "0.33.1"
+ci = ["github"]
+hosting = ["github"]
+force-latest = false
+installers = ["shell"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+checksum = "sha256"
+unix-archive = ".tar.xz"
+install-path = "CARGO_HOME"
+github-attestations = true
+# Attest installers and checksums as well as native archives.
+github-attestations-phase = "host"
+github-release = "host"
+# The workflow narrows dist's tag filter and checks packaged provenance after
+# each native build. See docs/releases.md before regenerating it.
+allow-dirty = ["ci"]
+dispatch-releases = false
+pr-run-mode = "plan"
+# No Homebrew publishing until a tap and its publishing credential exist.
+# Then add "homebrew" to installers, set tap = "sam-mfb/homebrew-tap",
+# and set publish-jobs = ["homebrew"].
+
+[workspace.metadata.dist.github-custom-runners]
+global = "ubuntu-24.04"
+aarch64-apple-darwin = "macos-15"
+x86_64-apple-darwin = "macos-15-intel"
+x86_64-unknown-linux-gnu = "ubuntu-24.04"
+aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
+
+[workspace.metadata.dist.github-action-commits]
+"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803" # v6.1.0
+"actions/upload-artifact" = "cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7
+"actions/download-artifact" = "9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8
+"actions/attest" = "1e69f48acb82d1966a394da916b4c1698aa569d6" # v4
+
+[profile.dist]
+inherits = "release"
+lto = "thin"

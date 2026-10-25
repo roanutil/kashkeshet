@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::clock::testing::FixedClock;
+use crate::events::Notice;
 use crate::names::testing::{SameNameEntropy, SeqEntropy};
 use chrono::TimeZone;
 use std::time::Duration;
@@ -10,6 +11,8 @@ struct World {
     rules: Rules,
     clock: Arc<FixedClock>,
     run_id: i64,
+    /// The operator, on the same database.
+    operator: Operator,
 }
 
 /// The run every test world records, so stamped rows can be checked.
@@ -34,12 +37,14 @@ async fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
         })
         .await
         .expect("record run");
+    let operator = Operator::new(db.clone(), clock.clone());
     let rules = Rules::new(Deps {
         db,
         events: Events::new(),
         clock: clock.clone(),
         entropy,
         sends: SendLimiter::new(limits.sends_per_minute),
+        registrations: RegisterLimiter::new(limits.registrations_per_minute),
         run_id,
         limits,
     });
@@ -47,6 +52,7 @@ async fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
         rules,
         clock,
         run_id,
+        operator,
     }
 }
 
@@ -403,6 +409,164 @@ async fn a_closed_channel_with_no_members_is_unreachable_but_the_human_sees_it()
     let view = w.rules.channel_view(ch, None).await.unwrap();
     assert_eq!(view.messages.len(), 1);
     assert!(view.members.is_empty());
+}
+
+#[tokio::test]
+async fn the_web_channel_page_holds_web_page_messages_and_pages_back() {
+    let limits = Limits {
+        web_page_messages: 3,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "busy", true, &[]).await;
+    let mut ids = Vec::new();
+    for i in 0..7 {
+        let m = w.rules.send(&a, ch.clone(), format!("m{i}")).await.unwrap();
+        ids.push(m.id);
+    }
+    let shown = |v: &human::ChannelView| v.messages.iter().map(|m| m.id).collect::<Vec<_>>();
+
+    let latest = w.rules.channel_view(ch.clone(), None).await.unwrap();
+    assert_eq!(shown(&latest), ids[4..7]);
+    assert_eq!(latest.older_before_id, Some(ids[4]));
+
+    let older = w
+        .rules
+        .channel_view(ch.clone(), Some(ids[4]))
+        .await
+        .unwrap();
+    assert_eq!(shown(&older), ids[1..4]);
+    assert_eq!(older.older_before_id, Some(ids[1]));
+
+    let oldest = w.rules.channel_view(ch, Some(ids[1])).await.unwrap();
+    assert_eq!(shown(&oldest), ids[0..1]);
+    assert_eq!(oldest.older_before_id, None);
+}
+
+#[tokio::test]
+async fn the_front_page_summarizes_each_channel_and_agent() {
+    let w = world().await;
+    let (a, b) = (w.agent().await, w.agent().await);
+    let busy = w.channel(&a, "busy", true, &[&b]).await;
+    let quiet = w.channel(&b, "quiet", false, &[]).await;
+    w.rules.send(&a, busy.clone(), "one".into()).await.unwrap();
+    w.clock.advance(chrono::Duration::minutes(10));
+    w.rules.send(&b, busy.clone(), "two".into()).await.unwrap();
+    w.rules
+        .send(&a, busy.clone(), "three".into())
+        .await
+        .unwrap();
+
+    let o = w.rules.overview().await.unwrap();
+    assert_eq!(o.now, clock::to_text(w.clock.now()));
+    let row = |id: &str| o.channels.iter().find(|c| c.info.id == id).unwrap();
+    let busy_row = row(&busy);
+    assert_eq!(busy_row.message_count, 3);
+    assert_eq!(busy_row.last_speaker.as_deref(), Some(a.name.as_str()));
+    assert_eq!(
+        busy_row.last_message_at,
+        Some(clock::to_text(w.clock.now()))
+    );
+    // Only the two messages from the last five minutes are recent.
+    let recent =
+        |c: &human::ChannelActivity| c.recent_activity.iter().map(|a| a.count).sum::<i64>();
+    assert_eq!(recent(busy_row), 2);
+    let quiet_row = row(&quiet);
+    assert_eq!(quiet_row.message_count, 0);
+    assert_eq!(quiet_row.last_speaker, None);
+    assert!(quiet_row.recent_activity.is_empty());
+
+    let channels_of = |name: &str| {
+        let mut ids: Vec<String> = o
+            .agents
+            .iter()
+            .find(|x| x.info.name == name)
+            .unwrap()
+            .channels
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(channels_of(&a.name), std::slice::from_ref(&busy));
+    let mut both = vec![busy.clone(), quiet.clone()];
+    both.sort();
+    assert_eq!(channels_of(&b.name), both);
+
+    // Later, nothing is recent.
+    w.clock.advance(chrono::Duration::minutes(6));
+    let later = w.rules.overview().await.unwrap();
+    assert!(later.channels.iter().all(|c| c.recent_activity.is_empty()));
+}
+
+/// A busy channel does not crowd a quiet one's recent count out.
+#[tokio::test]
+async fn recent_counts_are_exact_for_every_channel() {
+    let limits = Limits {
+        sends_per_minute: 100_000,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    let quiet = w.channel(&a, "quiet", true, &[]).await;
+    let busy = w.channel(&a, "busy", true, &[]).await;
+    w.rules
+        .send(&a, quiet.clone(), "hello".into())
+        .await
+        .unwrap();
+    for i in 0..1005 {
+        w.rules
+            .send(&a, busy.clone(), format!("m{i}"))
+            .await
+            .unwrap();
+    }
+    let o = w.rules.overview().await.unwrap();
+    let recent = |id: &str| {
+        o.channels
+            .iter()
+            .find(|c| c.info.id == id)
+            .unwrap()
+            .recent_activity
+            .iter()
+            .map(|a| a.count)
+            .sum::<i64>()
+    };
+    assert_eq!(recent(&quiet), 1);
+    assert_eq!(recent(&busy), 1005);
+}
+
+/// A message stored later but stamped earlier (the clock moved back) does
+/// not hide the recent ones.
+#[tokio::test]
+async fn recent_counts_do_not_assume_times_follow_message_order() {
+    let limits = Limits {
+        sends_per_minute: 100_000,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    let busy = w.channel(&a, "busy", true, &[]).await;
+    for i in 0..1001 {
+        w.rules
+            .send(&a, busy.clone(), format!("m{i}"))
+            .await
+            .unwrap();
+    }
+    w.clock.advance(chrono::Duration::hours(-1));
+    w.rules
+        .send(&a, busy.clone(), "from before".into())
+        .await
+        .unwrap();
+    w.clock.advance(chrono::Duration::hours(1));
+    let o = w.rules.overview().await.unwrap();
+    let row = o.channels.iter().find(|c| c.info.id == busy).unwrap();
+    assert_eq!(
+        row.recent_activity.iter().map(|a| a.count).sum::<i64>(),
+        1001
+    );
+    assert_eq!(row.message_count, 1002);
 }
 
 // ---- Closed channels do not exist to outsiders ----
@@ -913,6 +1077,101 @@ async fn wait_ignores_channels_i_am_not_in_and_times_out() {
 }
 
 #[tokio::test]
+async fn new_agents_channels_joins_and_leaves_are_published() {
+    let w = world().await;
+    let mut notices = w.rules.events().subscribe();
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let c = w.agent().await;
+    let open = w.channel(&a, "open-room", true, &[]).await;
+    let closed = w.channel(&a, "closed-room", false, &[]).await;
+    w.rules.join_channel(&b, open.clone()).await.unwrap();
+    // Joining again, or being in a channel from its creation, is not news.
+    w.rules.join_channel(&b, open.clone()).await.unwrap();
+    w.rules.join_channel(&a, open.clone()).await.unwrap();
+    // Leaving and coming back: each event carries the count afterwards.
+    w.rules.leave_channel(&b, open.clone()).await.unwrap();
+    w.rules.join_channel(&b, open.clone()).await.unwrap();
+    // Being added by a member is joining; adding a member again is not.
+    w.rules
+        .add_to_channel(&a, open.clone(), vec![c.name.clone(), b.name.clone()])
+        .await
+        .unwrap();
+
+    let mut heard = Vec::new();
+    while let Ok(Some(notice)) =
+        tokio::time::timeout(Duration::from_millis(50), notices.next()).await
+    {
+        heard.push(match notice {
+            Notice::Agent(x) => format!("agent {}", x.name),
+            Notice::Channel(x) => format!(
+                "channel {} {} {} {} {}",
+                x.id, x.name, x.open, x.created_by, x.member_count
+            ),
+            Notice::Joined(x) => format!(
+                "joined {} {} {} {}",
+                x.agent, x.channel_id, x.channel_name, x.member_count
+            ),
+            Notice::Left(x) => format!(
+                "left {} {} {} {}",
+                x.agent, x.channel_id, x.channel_name, x.member_count
+            ),
+            other => format!("{other:?}"),
+        });
+    }
+    assert_eq!(
+        heard,
+        [
+            format!("agent {}", a.name),
+            format!("agent {}", b.name),
+            format!("agent {}", c.name),
+            format!("channel {open} open-room true {} 1", a.name),
+            format!("channel {closed} closed-room false {} 1", a.name),
+            format!("joined {} {open} open-room 2", b.name),
+            format!("left {} {open} open-room 1", b.name),
+            format!("joined {} {open} open-room 2", b.name),
+            format!("joined {} {open} open-room 3", c.name),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_waiting_agent_is_not_woken_by_new_agents_or_channels() {
+    let w = world().await;
+    let a = w.agent().await;
+    let waiter = {
+        let rules = w.rules.clone();
+        let a = a.clone();
+        tokio::spawn(async move {
+            rules
+                .wait_for_messages(
+                    &a,
+                    WaitQuery {
+                        after_id: 0,
+                        channel_ids: None,
+                        timeout: Duration::from_secs(30),
+                        limit: 10,
+                    },
+                )
+                .await
+        })
+    };
+    until_sleeping(&w.clock).await;
+    let b = w.agent().await;
+    let ch = w.channel(&b, "elsewhere", true, &[]).await;
+    w.rules.join_channel(&a, ch).await.unwrap();
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished(), "the wait ended without a message");
+    w.clock.advance(chrono::Duration::seconds(30));
+    let got = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the wait should time out")
+        .expect("join")
+        .expect("wait");
+    assert!(got.messages.is_empty());
+}
+
+#[tokio::test]
 async fn wait_times_out_by_the_injected_clock() {
     let w = world().await;
     let b = w.agent().await;
@@ -991,12 +1250,293 @@ async fn new_agents_and_messages_record_the_server_run() {
     assert_eq!(sent.run_id, Some(w.run_id));
 
     let overview = w.rules.overview().await.unwrap();
-    assert_eq!(overview.agents[0].run_id, Some(w.run_id));
-    assert_eq!(overview.recent[0].run_id, Some(w.run_id));
+    assert_eq!(overview.agents[0].info.run_id, Some(w.run_id));
     let runs: Vec<(i64, &str)> = overview
         .runs
         .iter()
         .map(|r| (r.id, r.version.as_str()))
         .collect();
     assert_eq!(runs, [(w.run_id, TEST_RUN)]);
+}
+
+// ---- registration caps and revocation ----
+
+#[tokio::test]
+async fn registration_is_rate_limited_across_the_server() {
+    let limits = Limits {
+        registrations_per_minute: 2,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    w.rules.register().await.expect("first");
+    w.rules.register().await.expect("second");
+    let err = w.rules.register().await.expect_err("third");
+    assert_eq!(err.code, Code::RateLimited);
+    w.clock.advance(chrono::Duration::seconds(30));
+    w.rules.register().await.expect("refilled");
+}
+
+#[tokio::test]
+async fn registration_stops_at_the_agent_cap_and_revoking_frees_room() {
+    let limits = Limits {
+        max_agents: 2,
+        registrations_per_minute: 3,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    w.agent().await;
+    let err = w.rules.register().await.expect_err("over the cap");
+    assert_eq!(err.code, Code::LimitReached);
+    w.operator.revoke(a.name.clone()).await.expect("revoke");
+    // The refused registration gave back its use of the rate limit, so this
+    // is the third of three.
+    w.rules.register().await.expect("room after revoking");
+}
+
+#[tokio::test]
+async fn a_revoked_token_is_refused_like_an_unknown_one() {
+    let w = world().await;
+    let reg = w.rules.register().await.expect("register");
+    let me = w.rules.authenticate(Some(&reg.token)).await.expect("auth");
+    let other = w.agent().await;
+    let ch = w.channel(&me, "general", true, &[&other]).await;
+    w.rules
+        .send(&me, ch.clone(), "before".into())
+        .await
+        .expect("send");
+
+    let revoked = w.operator.revoke(me.name.clone()).await.expect("revoke");
+    assert_eq!(
+        revoked,
+        Revoked::Now {
+            at: "2026-10-23T14:00:00Z".into()
+        }
+    );
+    let refused = w
+        .rules
+        .authenticate(Some(&reg.token))
+        .await
+        .expect_err("revoked");
+    let unknown = w
+        .rules
+        .authenticate(Some("act_00000000000000000000000000"))
+        .await
+        .expect_err("unknown");
+    assert_eq!(refused, unknown);
+
+    // The agent's messages and membership stay for everyone else.
+    let page = w
+        .rules
+        .read(
+            &other,
+            ReadQuery {
+                channel_id: ch.clone(),
+                position: Position::Latest,
+                from_agent: None,
+                limit: 10,
+            },
+        )
+        .await
+        .expect("read");
+    assert_eq!(page.messages[0].agent, me.name);
+}
+
+#[tokio::test]
+async fn revoking_twice_or_an_unknown_agent_is_reported() {
+    let w = world().await;
+    let a = w.agent().await;
+    w.operator.revoke(a.name.clone()).await.expect("revoke");
+    w.clock.advance(chrono::Duration::minutes(5));
+    assert_eq!(
+        w.operator.revoke(a.name.clone()).await.expect("again"),
+        Revoked::Already {
+            at: "2026-10-23T14:00:00Z".into()
+        }
+    );
+    let err = w
+        .operator
+        .revoke("no-such-agent".into())
+        .await
+        .expect_err("unknown");
+    assert_eq!(err.code, Code::NotFound);
+}
+
+#[tokio::test]
+async fn the_operator_lists_agents_with_their_revocations() {
+    let w = world().await;
+    let a = w.agent().await;
+    w.clock.advance(chrono::Duration::minutes(5));
+    let b = w.agent().await;
+    w.operator.revoke(a.name.clone()).await.expect("revoke");
+    let agents = w.operator.agents().await.expect("list");
+    let names: Vec<_> = agents.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, [b.name.as_str(), a.name.as_str()]);
+    assert_eq!(agents[0].revoked_at, None);
+    assert_eq!(
+        agents[1].revoked_at.as_deref(),
+        Some("2026-10-23T14:05:00Z")
+    );
+}
+
+#[tokio::test]
+async fn reclaim_preserves_identity_history_membership_and_provenance() {
+    let w = world().await;
+    let reg = w.rules.register().await.unwrap();
+    let me = w.rules.authenticate(Some(&reg.token)).await.unwrap();
+    let channel = w.channel(&me, "private", false, &[]).await;
+    let sent = w
+        .rules
+        .send(&me, channel.clone(), "before restart".into())
+        .await
+        .unwrap();
+    let name = reg.name.clone();
+    let before = w
+        .rules
+        .db()
+        .read(move |r| r.agent(&name))
+        .await
+        .unwrap()
+        .unwrap();
+    w.clock.advance(chrono::Duration::seconds(75));
+    let recovered = w
+        .rules
+        .reclaim(reg.name.clone(), reg.recovery_code.clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered.name, reg.name);
+    assert_ne!(recovered.token, reg.token);
+    assert_eq!(
+        code(w.rules.authenticate(Some(&reg.token)).await),
+        Code::Unauthenticated
+    );
+    let me = w.rules.authenticate(Some(&recovered.token)).await.unwrap();
+    assert_eq!(w.visible_ids(&me).await, [channel]);
+    assert_eq!(
+        w.rules.get_message(&me, sent.id).await.unwrap().body,
+        "before restart"
+    );
+    let name = reg.name.clone();
+    let after = w
+        .rules
+        .db()
+        .read(move |r| r.agent(&name))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.created_at, before.created_at);
+    assert_eq!(after.run_id, before.run_id);
+    assert_eq!(after.last_seen, Some(w.rules.now_text()));
+    // The code still works after a successful recovery (including a lost response).
+    let again = w.rules.reclaim(reg.name, reg.recovery_code).await.unwrap();
+    assert_ne!(again.token, recovered.token);
+    assert_eq!(
+        code(w.rules.authenticate(Some(&recovered.token)).await),
+        Code::Unauthenticated
+    );
+    w.rules.authenticate(Some(&again.token)).await.unwrap();
+}
+
+#[tokio::test]
+async fn reclaim_rejects_wrong_credentials_and_revoked_identities_identically() {
+    let w = world().await;
+    let a = w.rules.register().await.unwrap();
+    let b = w.rules.register().await.unwrap();
+    let mut errors = vec![];
+    for (name, recovery) in [
+        (a.name.clone(), b.recovery_code.clone()),
+        ("missing-agent".into(), a.recovery_code.clone()),
+        (a.name.clone(), String::new()),
+        (a.name.clone(), a.token.clone()),
+    ] {
+        errors.push(w.rules.reclaim(name, recovery).await.unwrap_err());
+    }
+    // Failed attempts leave the current token usable.
+    w.rules.authenticate(Some(&a.token)).await.unwrap();
+    w.operator.revoke(a.name.clone()).await.unwrap();
+    errors.push(w.rules.reclaim(a.name, a.recovery_code).await.unwrap_err());
+    for error in errors {
+        assert_eq!(error.code, Code::Unauthenticated);
+        assert_eq!(
+            error.message,
+            "unknown name or recovery code, or identity unavailable"
+        );
+    }
+}
+
+#[tokio::test]
+async fn recovery_codes_are_hashed_and_rejected_in_messages() {
+    let w = world().await;
+    let reg = w.rules.register().await.unwrap();
+    let me = w.rules.authenticate(Some(&reg.token)).await.unwrap();
+    let channel = w.channel(&me, "general", true, &[]).await;
+    let name = reg.name.clone();
+    let recovery = reg.recovery_code.clone();
+    assert!(
+        w.rules
+            .db()
+            .read(move |r| r.agent_by_recovery_hash(&name, recovery.as_bytes()))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let name = reg.name.clone();
+    let hash = auth::hash_token(&reg.recovery_code);
+    assert!(
+        w.rules
+            .db()
+            .read(move |r| r.agent_by_recovery_hash(&name, &hash))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        code(w.rules.authenticate(Some(&reg.recovery_code)).await),
+        Code::Unauthenticated
+    );
+    let err = w
+        .rules
+        .send(&me, channel, format!("recovery: {}", reg.recovery_code))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, Code::ContainsSecret);
+    assert!(!err.message.contains(&reg.recovery_code));
+}
+
+#[tokio::test]
+async fn legacy_agents_keep_their_token_but_have_no_recovery_code() {
+    let w = world().await;
+    let run_id = w.run_id;
+    w.rules
+        .db()
+        .write(move |store| {
+            store.insert_agent(&NewAgentRecord {
+                name: "legacy-agent".into(),
+                token_hash: auth::hash_token("old-token"),
+                recovery_hash: None,
+                created_at: "old-time".into(),
+                last_seen: None,
+                run_id,
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        w.rules.authenticate(Some("old-token")).await.unwrap().name,
+        "legacy-agent"
+    );
+    let reg = w.rules.register().await.unwrap();
+    assert_eq!(
+        code(
+            w.rules
+                .reclaim("legacy-agent".into(), reg.recovery_code)
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    assert_eq!(
+        code(w.rules.reclaim("legacy-agent".into(), String::new()).await),
+        Code::Unauthenticated
+    );
+    w.rules.authenticate(Some("old-token")).await.unwrap();
 }

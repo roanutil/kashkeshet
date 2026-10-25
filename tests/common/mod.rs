@@ -1,9 +1,14 @@
 //! Shared by the integration tests: start a server on a free port and connect
 //! an MCP client to it.
 
+// Each test file builds this module on its own, and none uses every helper.
+#![allow(dead_code)]
+
+use kashkeshet::admission::Admission;
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
-use kashkeshet::config::Limits;
+use kashkeshet::config::{Limits, LogLevel};
+use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::shutdown::Shutdown;
@@ -29,9 +34,15 @@ impl Drop for Server {
 /// The settings `start` uses.
 pub fn test_config() -> AppConfig {
     AppConfig {
+        admission: Admission::Open,
         limits: Limits::DEFAULT,
         allowed_origins: vec!["http://localhost:6274".into()],
+        allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
         instructions: "test instructions: call register".into(),
+        config_file: None,
+        log_file: None,
+        log_level: LogLevel::Info,
+        dependency_log_level: LogLevel::Warn,
     }
 }
 
@@ -40,10 +51,14 @@ pub async fn start() -> Server {
 }
 
 pub async fn start_with(config: AppConfig) -> Server {
+    start_with_clock(config, Arc::new(SystemClock)).await
+}
+
+/// Starts a server whose time comes from `clock`.
+pub async fn start_with_clock(config: AppConfig, clock: Arc<dyn Clock>) -> Server {
     let shutdown = Shutdown::new();
     let db = Db::open_in_memory().expect("db");
     let run = ServerRun::new(Build::CURRENT, &config);
-    let clock = Arc::new(SystemClock);
     let run_id = provenance::record(&db, &run, clock.now())
         .await
         .expect("record run");
@@ -69,17 +84,45 @@ pub async fn start_with(config: AppConfig) -> Server {
 pub type Client = RunningService<RoleClient, ()>;
 
 pub async fn connect(server: &Server, lifecycle: ClientLifecycleMode) -> Client {
-    let transport = StreamableHttpClientTransport::from_config(
+    connect_with(
         StreamableHttpClientTransportConfig::with_uri(format!("{}/mcp", server.base)),
-    );
+        lifecycle,
+    )
+    .await
+}
+
+async fn connect_with(
+    config: StreamableHttpClientTransportConfig,
+    lifecycle: ClientLifecycleMode,
+) -> Client {
+    let transport = StreamableHttpClientTransport::from_config(config);
     ().serve_with_lifecycle(transport, lifecycle)
         .await
         .expect("connect")
 }
 
+/// Connects as `connect_new` does, sending `Authorization: Bearer <key>`
+/// with every request.
+pub async fn connect_new_with_key(server: &Server, key: &str) -> Client {
+    connect_with(
+        StreamableHttpClientTransportConfig::with_uri(format!("{}/mcp", server.base))
+            .auth_header(key),
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    )
+    .await
+}
+
 pub async fn connect_new(server: &Server) -> Client {
-    connect(
-        server,
+    connect_new_at(&server.base).await
+}
+
+/// Connects as `connect_new` does, to a server at `base` (such as
+/// `http://127.0.0.1:7420`) that this process did not start.
+pub async fn connect_new_at(base: &str) -> Client {
+    connect_with(
+        StreamableHttpClientTransportConfig::with_uri(format!("{base}/mcp")),
         ClientLifecycleMode::Discover {
             preferred_versions: vec![ProtocolVersion::V_2026_07_28],
         },

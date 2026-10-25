@@ -3,7 +3,8 @@
 
 mod common;
 
-use common::{Client, connect, connect_new, start};
+use common::{Client, Server, connect, connect_new, start, start_with, test_config};
+use kashkeshet::hosts::AllowedHosts;
 use rmcp::ClientLifecycleMode;
 use rmcp::model::{CallToolRequestParams, ProtocolVersion};
 use serde_json::{Value, json};
@@ -293,6 +294,60 @@ async fn browser_origins_are_refused_unless_allowed() {
     );
 }
 
+/// Status codes for `/mcp` and the web page when a request names `host`.
+async fn statuses_for_host(server: &Server, host: &str) -> (u16, u16) {
+    let http = reqwest::Client::new();
+    let port = server.base.rsplit(':').next().expect("port");
+    let host = format!("{host}:{port}");
+    let mcp = http
+        .post(format!("{}/mcp", server.base))
+        .header("Host", &host)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "server/discover")
+        .body(
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "server/discover",
+                "params": { "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }},
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .expect("mcp request");
+    let web = http
+        .get(format!("{}/", server.base))
+        .header("Host", &host)
+        .send()
+        .await
+        .expect("web request");
+    (mcp.status().as_u16(), web.status().as_u16())
+}
+
+#[tokio::test]
+async fn other_host_names_are_refused_unless_allowed() {
+    let server = start().await;
+    assert_eq!(statuses_for_host(&server, "localhost").await, (200, 200));
+    assert_eq!(
+        statuses_for_host(&server, "host.docker.internal").await,
+        (403, 403)
+    );
+
+    let mut config = test_config();
+    config.allowed_hosts = AllowedHosts::new(&["host.docker.internal".into()]).expect("valid host");
+    let server = start_with(config).await;
+    assert_eq!(
+        statuses_for_host(&server, "host.docker.internal").await,
+        (200, 200)
+    );
+    assert_eq!(statuses_for_host(&server, "localhost").await, (200, 200));
+    assert_eq!(statuses_for_host(&server, "evil.example").await, (403, 403));
+}
+
 #[tokio::test]
 async fn web_pages_show_everything() {
     let server = start().await;
@@ -328,11 +383,6 @@ async fn web_pages_show_everything() {
     let (status, index) = get("/".into()).await;
     assert!(status.is_success());
     assert!(index.contains("hidden-room") && index.contains(&name));
-    // Bodies are escaped, not rendered as HTML.
-    assert!(
-        index.contains("&#60;b&#62;not bold") || index.contains("&lt;b&gt;not bold"),
-        "{index}"
-    );
 
     // The server run is listed, with the settings it ran with.
     assert!(index.contains("Server runs (1)"), "{index}");
@@ -340,7 +390,11 @@ async fn web_pages_show_everything() {
 
     let (status, page) = get(format!("/channels/{ch}")).await;
     assert!(status.is_success());
-    assert!(page.contains("not bold"));
+    // Bodies are escaped, not rendered as HTML.
+    assert!(
+        page.contains("&#60;b&#62;not bold") || page.contains("&lt;b&gt;not bold"),
+        "{page}"
+    );
     assert!(page.contains("· run 1"), "{page}");
     let (status, page) = get(format!("/agents/{name}")).await;
     assert!(status.is_success());
@@ -395,6 +449,74 @@ async fn web_events_stream_new_messages() {
     assert!(seen.contains("event: message"), "{seen}");
 }
 
+/// The web page hears about new agents, channels (closed ones too: the
+/// human sees everything) and joins, for its toasts.
+#[tokio::test]
+async fn web_events_announce_new_agents_channels_and_joins() {
+    let server = start().await;
+    let mut stream = reqwest::Client::new()
+        .get(format!("{}/events", server.base))
+        .send()
+        .await
+        .expect("events");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let c = connect_new(&server).await;
+    let (alice, t) = register(&c).await;
+    let (bob, bt) = register(&c).await;
+    let open = json_of(
+        &ok(
+            &c,
+            "create_channel",
+            json!({"token": t, "name": "town-square", "open": true, "format": "json"}),
+        )
+        .await,
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok(
+        &c,
+        "create_channel",
+        json!({"token": t, "name": "back-room", "open": false}),
+    )
+    .await;
+    ok(&c, "join_channel", json!({"token": bt, "channel_id": open})).await;
+    ok(
+        &c,
+        "leave_channel",
+        json!({"token": bt, "channel_id": open}),
+    )
+    .await;
+
+    let mut seen = String::new();
+    let expected = [
+        format!("event: agent\ndata: {{\"name\":\"{alice}\",\"created_at\":\""),
+        format!("event: agent\ndata: {{\"name\":\"{bob}\",\"created_at\":\""),
+        format!(
+            "event: channel\ndata: {{\"id\":\"{open}\",\"name\":\"town-square\",\"open\":true,\"created_by\":\"{alice}\",\"member_count\":1}}"
+        ),
+        "\"name\":\"back-room\",\"open\":false".to_string(),
+        format!(
+            "event: joined\ndata: {{\"agent\":\"{bob}\",\"channel_id\":\"{open}\",\"channel_name\":\"town-square\",\"member_count\":2}}"
+        ),
+        format!(
+            "event: left\ndata: {{\"agent\":\"{bob}\",\"channel_id\":\"{open}\",\"channel_name\":\"town-square\",\"member_count\":1}}"
+        ),
+    ];
+    let all_seen = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(chunk) = stream.chunk().await.expect("chunk") {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+            if expected.iter().all(|e| seen.contains(e.as_str())) {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert!(matches!(all_seen, Ok(true)), "{seen}");
+}
+
 #[tokio::test]
 async fn agents_receive_the_configured_instructions() {
     let server = start().await;
@@ -411,4 +533,74 @@ async fn agents_receive_the_configured_instructions() {
             Some("test instructions: call register")
         );
     }
+}
+
+#[tokio::test]
+async fn reconnect_and_reclaim_keeps_closed_channel_access() {
+    let server = start().await;
+    let first = connect_new(&server).await;
+    let registration = ok(&first, "register", json!({})).await;
+    let field = |key: &str| {
+        registration
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}: ")))
+            .unwrap()
+            .to_string()
+    };
+    let name = field("name");
+    let token = field("token");
+    let recovery_code = field("recovery_code");
+    let channel = json_of(
+        &ok(
+            &first,
+            "create_channel",
+            json!({"token": token, "name": "private", "open": false, "format": "json"}),
+        )
+        .await,
+    );
+    let channel_id = channel["id"].as_str().unwrap();
+    let sent = json_of(&ok(&first, "send", json!({"token": token, "channel_id": channel_id, "body": "history survives", "format": "json"})).await);
+    first.cancel().await.unwrap();
+    let second = connect_new(&server).await;
+    let recovered = json_of(
+        &ok(
+            &second,
+            "reclaim",
+            json!({"name": name, "recovery_code": recovery_code, "format": "json"}),
+        )
+        .await,
+    );
+    assert_eq!(recovered["name"], name);
+    assert_ne!(recovered["token"], token);
+    assert!(recovered.get("recovery_code").is_none());
+    let (text, error) = call(&second, "whoami", json!({"token": token})).await;
+    assert!(error && text.starts_with("error: unauthenticated"));
+    let next_token = recovered["token"].as_str().unwrap();
+    assert_eq!(
+        ok(&second, "whoami", json!({"token": next_token})).await,
+        format!("name: {name}")
+    );
+    let history = ok(
+        &second,
+        "get_message",
+        json!({"token": next_token, "message_id": sent["message_id"]}),
+    )
+    .await;
+    assert!(history.contains("history survives"));
+    let (text, error) = call(
+        &second,
+        "send",
+        json!({"token": next_token, "channel_id": channel_id, "body": recovery_code}),
+    )
+    .await;
+    assert!(error && text.starts_with("error: contains_secret"));
+    let text_recovery = ok(
+        &second,
+        "reclaim",
+        json!({"name": name, "recovery_code": recovery_code}),
+    )
+    .await;
+    assert!(text_recovery.starts_with(&format!("name: {name}\ntoken: act_")));
+    assert!(!text_recovery.contains(&recovery_code));
+    second.cancel().await.unwrap();
 }
