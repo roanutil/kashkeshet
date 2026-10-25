@@ -208,12 +208,24 @@ pub struct NewChannel {
     pub member_count: i64,
 }
 
-/// An agent joined a channel.
+/// An agent joined a channel, or was added to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Joined {
     pub agent: String,
     pub channel_id: String,
     pub channel_name: String,
+    /// The channel's members afterwards.
+    pub member_count: i64,
+}
+
+/// An agent left a channel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Left {
+    pub agent: String,
+    pub channel_id: String,
+    pub channel_name: String,
+    /// The channel's members afterwards.
+    pub member_count: i64,
 }
 
 /// Something that happened, for the live feed.
@@ -223,6 +235,7 @@ pub enum LiveEvent {
     Agent(NewAgent),
     Channel(NewChannel),
     Joined(Joined),
+    Left(Left),
     /// The feed fell behind and missed this many events. The page reloads.
     Missed(u64),
 }

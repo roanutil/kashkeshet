@@ -48,12 +48,24 @@ pub struct NewChannel {
     pub member_count: i64,
 }
 
-/// An agent joined a channel it was not in.
+/// An agent joined a channel it was not in, or was added to it.
 #[derive(Clone, Debug, Serialize)]
 pub struct Joined {
     pub agent: String,
     pub channel_id: String,
     pub channel_name: String,
+    /// The channel's members afterwards.
+    pub member_count: i64,
+}
+
+/// An agent left a channel.
+#[derive(Clone, Debug, Serialize)]
+pub struct Left {
+    pub agent: String,
+    pub channel_id: String,
+    pub channel_name: String,
+    /// The channel's members afterwards.
+    pub member_count: i64,
 }
 
 /// Everything that can be published.
@@ -63,6 +75,7 @@ enum Published {
     Agent(NewAgent),
     Channel(NewChannel),
     Joined(Joined),
+    Left(Left),
 }
 
 #[derive(Clone)]
@@ -111,6 +124,11 @@ impl Events {
         self.send(Published::Joined(joined));
     }
 
+    /// Tells every current subscriber that an agent left a channel.
+    pub fn publish_left(&self, left: Left) {
+        self.send(Published::Left(left));
+    }
+
     fn send(&self, published: Published) {
         match self.sender.send(published) {
             Ok(_receivers) => {}
@@ -139,6 +157,8 @@ pub enum Notice {
     Channel(NewChannel),
     /// An agent joined a channel.
     Joined(Joined),
+    /// An agent left a channel.
+    Left(Left),
     /// The subscriber fell behind and missed this many notices. What they
     /// were about is in the database.
     Missed(u64),
@@ -169,6 +189,7 @@ impl Subscription {
             Ok(Published::Agent(agent)) => Some(Notice::Agent(agent)),
             Ok(Published::Channel(channel)) => Some(Notice::Channel(channel)),
             Ok(Published::Joined(joined)) => Some(Notice::Joined(joined)),
+            Ok(Published::Left(left)) => Some(Notice::Left(left)),
             Err(RecvError::Lagged(n)) => Some(Notice::Missed(n)),
             Err(RecvError::Closed) => None,
         }
@@ -247,13 +268,23 @@ mod tests {
             agent: "bold-panther".into(),
             channel_id: "ch_test".into(),
             channel_name: "test".into(),
+            member_count: 2,
+        });
+        events.publish_left(Left {
+            agent: "bold-panther".into(),
+            channel_id: "ch_test".into(),
+            channel_name: "test".into(),
+            member_count: 1,
         });
         events.publish(message(1));
         assert!(matches!(sub.next().await, Some(Notice::Agent(a)) if a.name == "amber-falcon"));
         assert!(
             matches!(sub.next().await, Some(Notice::Channel(c)) if c.id == "ch_test" && !c.open)
         );
-        assert!(matches!(sub.next().await, Some(Notice::Joined(j)) if j.agent == "bold-panther"));
+        assert!(
+            matches!(sub.next().await, Some(Notice::Joined(j)) if j.agent == "bold-panther" && j.member_count == 2)
+        );
+        assert!(matches!(sub.next().await, Some(Notice::Left(l)) if l.member_count == 1));
         assert_eq!(id(sub.next().await), Some(1));
     }
 

@@ -199,6 +199,7 @@ impl Preview {
                     agent: name.clone(),
                     channel_id: c.channel.id.clone(),
                     channel_name: c.channel.name.clone(),
+                    member_count: c.members.len() as i64,
                 }));
             }
             out.extend(

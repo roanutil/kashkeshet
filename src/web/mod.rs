@@ -17,7 +17,7 @@ pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
     ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, Gate, Joined, LiveEvent, Message, NewAgent, NewChannel, Overview, ServerRun,
+    ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel, Overview, ServerRun,
     SignIn, Source, SourceError,
 };
 
@@ -208,8 +208,10 @@ async fn agent(State(pages): State<Pages>, Path(name): Path<String>) -> Response
 
 /// What happens, as server-sent events, each carrying JSON: `message` (a new
 /// message), `agent` (an agent registered), `channel` (a channel was
-/// created) and `joined` (an agent joined a channel). A `lagged` event means
-/// this stream fell behind and missed some; the page reloads.
+/// created), `joined` (an agent joined or was added to a channel) and `left`
+/// (an agent left one); the last two carry the channel's member count
+/// afterwards. A `lagged` event means this stream fell behind and missed
+/// some; the page reloads.
 async fn events(State(pages): State<Pages>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let stream = pages.source.live().map(|event| {
         Ok(match event {
@@ -217,6 +219,7 @@ async fn events(State(pages): State<Pages>) -> Sse<impl Stream<Item = Result<Eve
             LiveEvent::Agent(agent) => json_event("agent", &agent),
             LiveEvent::Channel(channel) => json_event("channel", &channel),
             LiveEvent::Joined(joined) => json_event("joined", &joined),
+            LiveEvent::Left(left) => json_event("left", &left),
             LiveEvent::Missed(n) => Event::default().event("lagged").data(n.to_string()),
         })
     });

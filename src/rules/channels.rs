@@ -126,6 +126,7 @@ impl Rules {
                 agent: who,
                 channel_id: info.id.clone(),
                 channel_name: info.name.clone(),
+                member_count: info.member_count,
             });
         }
         Ok(info)
@@ -133,13 +134,23 @@ impl Rules {
 
     pub async fn leave_channel(&self, me: &Agent, channel_id: String) -> Result<()> {
         let me = me.name.clone();
-        self.db()
+        let who = me.clone();
+        let (channel, member_count) = self
+            .db()
             .write(move |store| {
                 let channel = member_channel(store, &me, &channel_id)?;
                 store.remove_member(&channel.id, &me)?;
-                Ok(())
+                let count = store.member_count(&channel.id)?;
+                Ok::<_, RuleError>((channel, count))
             })
-            .await
+            .await?;
+        self.events().publish_left(Left {
+            agent: who,
+            channel_id: channel.id,
+            channel_name: channel.name,
+            member_count,
+        });
+        Ok(())
     }
 
     /// Adds agents to a channel `me` is in. They become members at once.
@@ -153,22 +164,39 @@ impl Rules {
         let me = me.name.clone();
         let now = self.now_text();
         let limit = self.limits().default_limit;
-        self.db()
+        let (page, channel, added, member_count) = self
+            .db()
             .write(move |store| {
                 let channel = member_channel(store, &me, &channel_id)?;
                 if agents.is_empty() {
                     return Err(RuleError::invalid("`agents` must name at least one agent"));
                 }
+                let mut added: Vec<String> = Vec::new();
                 for a in &agents {
                     let a = a.trim();
                     if !agent_exists(store, a)? {
                         return Err(RuleError::agent_not_found(a));
                     }
+                    if !store.is_member(&channel.id, a)? && !added.iter().any(|x| x == a) {
+                        added.push(a.to_string());
+                    }
                     store.add_member(&channel.id, a, &now)?;
                 }
-                members_page(store, &channel.id, limit, None)
+                let page = members_page(store, &channel.id, limit, None)?;
+                let count = store.member_count(&channel.id)?;
+                Ok::<_, RuleError>((page, channel, added, count))
             })
-            .await
+            .await?;
+        // Being added is joining, as far as anyone watching is concerned.
+        for agent in added {
+            self.events().publish_joined(Joined {
+                agent,
+                channel_id: channel.id.clone(),
+                channel_name: channel.name.clone(),
+                member_count,
+            });
+        }
+        Ok(page)
     }
 
     pub async fn set_purpose(

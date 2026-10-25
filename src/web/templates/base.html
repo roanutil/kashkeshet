@@ -389,16 +389,39 @@ details summary { cursor: pointer; }
     tick();
   }
   // A join adds a member to the channel and the channel to the agent.
+  // Joins and leaves carry the channel's member count afterwards, which
+  // the row takes as it is: counting changes here would drift.
+  function setMembers(channelId, count) {
+    const members = channelRows.get(channelId)?.querySelector("td.members");
+    if (members) members.textContent = String(count);
+  }
+  // Rewrites an agent's channel list with `change` applied to it: a list of
+  // [id, name] pairs, in the order shown.
+  function changeChannels(agent, change) {
+    const cell = agentRows.get(agent)?.querySelector("td.channels");
+    if (!cell) return;
+    const pairs = [...cell.querySelectorAll("a[data-channel-id]")]
+      .map((a) => [a.dataset.channelId, a.textContent.replace(/^#/, "")]);
+    const next = change(pairs);
+    cell.replaceChildren();
+    next.forEach(([id, name], i) => {
+      if (i > 0) cell.append(", ");
+      const a = channelLink(id, name);
+      a.dataset.channelId = id;
+      cell.append(a);
+    });
+    if (next.length === 0) cell.append(el("span", "muted", "none"));
+  }
+  // A join adds the agent to the channel and the channel to the agent.
   function dashboardJoined(j) {
-    const members = channelRows.get(j.channel_id)?.querySelector("td.members");
-    if (members) members.textContent = String(Number(members.textContent) + 1);
-    const cell = agentRows.get(j.agent)?.querySelector("td.channels");
-    if (cell) {
-      const none = cell.querySelector(".muted");
-      if (none) none.remove();
-      if (cell.querySelector("a")) cell.append(", ");
-      cell.append(channelLink(j.channel_id, j.channel_name));
-    }
+    setMembers(j.channel_id, j.member_count);
+    changeChannels(j.agent, (pairs) => pairs.some(([id]) => id === j.channel_id)
+      ? pairs : [...pairs, [j.channel_id, j.channel_name]]);
+  }
+  // A leave takes them out again.
+  function dashboardLeft(l) {
+    setMembers(l.channel_id, l.member_count);
+    changeChannels(l.agent, (pairs) => pairs.filter(([id]) => id !== l.channel_id));
   }
   if (dashboard) {
     tick();
@@ -442,6 +465,7 @@ details summary { cursor: pointer; }
     toast(j.agent, "➜", [agentLink(j.agent), " joined ", channelLink(j.channel_id, j.channel_name)]);
     dashboardJoined(j);
   });
+  source.addEventListener("left", (e) => dashboardLeft(JSON.parse(e.data)));
 
   // The same hash as the server's `hue` filter (FNV-1a over UTF-8), so an
   // agent keeps its color on live messages.

@@ -1077,17 +1077,26 @@ async fn wait_ignores_channels_i_am_not_in_and_times_out() {
 }
 
 #[tokio::test]
-async fn new_agents_channels_and_joins_are_published() {
+async fn new_agents_channels_joins_and_leaves_are_published() {
     let w = world().await;
     let mut notices = w.rules.events().subscribe();
     let a = w.agent().await;
     let b = w.agent().await;
+    let c = w.agent().await;
     let open = w.channel(&a, "open-room", true, &[]).await;
     let closed = w.channel(&a, "closed-room", false, &[]).await;
     w.rules.join_channel(&b, open.clone()).await.unwrap();
     // Joining again, or being in a channel from its creation, is not news.
     w.rules.join_channel(&b, open.clone()).await.unwrap();
     w.rules.join_channel(&a, open.clone()).await.unwrap();
+    // Leaving and coming back: each event carries the count afterwards.
+    w.rules.leave_channel(&b, open.clone()).await.unwrap();
+    w.rules.join_channel(&b, open.clone()).await.unwrap();
+    // Being added by a member is joining; adding a member again is not.
+    w.rules
+        .add_to_channel(&a, open.clone(), vec![c.name.clone(), b.name.clone()])
+        .await
+        .unwrap();
 
     let mut heard = Vec::new();
     while let Ok(Some(notice)) =
@@ -1095,10 +1104,18 @@ async fn new_agents_channels_and_joins_are_published() {
     {
         heard.push(match notice {
             Notice::Agent(x) => format!("agent {}", x.name),
-            Notice::Channel(x) => {
-                format!("channel {} {} {} {}", x.id, x.name, x.open, x.created_by)
-            }
-            Notice::Joined(x) => format!("joined {} {} {}", x.agent, x.channel_id, x.channel_name),
+            Notice::Channel(x) => format!(
+                "channel {} {} {} {} {}",
+                x.id, x.name, x.open, x.created_by, x.member_count
+            ),
+            Notice::Joined(x) => format!(
+                "joined {} {} {} {}",
+                x.agent, x.channel_id, x.channel_name, x.member_count
+            ),
+            Notice::Left(x) => format!(
+                "left {} {} {} {}",
+                x.agent, x.channel_id, x.channel_name, x.member_count
+            ),
             other => format!("{other:?}"),
         });
     }
@@ -1107,9 +1124,13 @@ async fn new_agents_channels_and_joins_are_published() {
         [
             format!("agent {}", a.name),
             format!("agent {}", b.name),
-            format!("channel {open} open-room true {}", a.name),
-            format!("channel {closed} closed-room false {}", a.name),
-            format!("joined {} {open} open-room", b.name),
+            format!("agent {}", c.name),
+            format!("channel {open} open-room true {} 1", a.name),
+            format!("channel {closed} closed-room false {} 1", a.name),
+            format!("joined {} {open} open-room 2", b.name),
+            format!("left {} {open} open-room 1", b.name),
+            format!("joined {} {open} open-room 2", b.name),
+            format!("joined {} {open} open-room 3", c.name),
         ]
     );
 }

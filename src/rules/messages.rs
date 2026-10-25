@@ -205,7 +205,9 @@ impl Rules {
                         Some(Notice::Missed(_)) => break,
                         // New agents, channels and members are for the web
                         // page; a waiting agent wants messages.
-                        Some(Notice::Agent(_) | Notice::Channel(_) | Notice::Joined(_)) => continue,
+                        Some(
+                            Notice::Agent(_) | Notice::Channel(_) | Notice::Joined(_) | Notice::Left(_),
+                        ) => continue,
                         // The server is shutting down.
                         None => return Ok(found),
                     },

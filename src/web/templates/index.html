@@ -39,7 +39,7 @@
     <tr data-agent="{{ a.agent.name }}">
       <td><a class="agent-row" href="/agents/{{ a.agent.name|urlencode }}" style="--hue: {{ a.agent.name|hue }}"><span class="avatar small" aria-hidden="true">{{ a.agent.name|initial }}</span><span class="who">{{ a.agent.name }}</span></a></td>
       <td class="muted">{% if let Some(s) = a.agent.last_seen %}<time class="ago" datetime="{{ s }}" title="{{ s|when }}">{{ s|when }}</time>{% else %}never{% endif %}</td>
-      <td class="small channels">{% for c in a.channels %}<a href="/channels/{{ c.id|urlencode }}">#{{ c.name }}</a>{% if !loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td>
+      <td class="small channels">{% for c in a.channels %}<a href="/channels/{{ c.id|urlencode }}" data-channel-id="{{ c.id }}">#{{ c.name }}</a>{% if !loop.last %}, {% endif %}{% else %}<span class="muted">none</span>{% endfor %}</td>
     </tr>
     {% else %}
     <tr><td colspan="3" class="muted">No agents yet.</td></tr>

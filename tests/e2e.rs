@@ -482,6 +482,12 @@ async fn web_events_announce_new_agents_channels_and_joins() {
     )
     .await;
     ok(&c, "join_channel", json!({"token": bt, "channel_id": open})).await;
+    ok(
+        &c,
+        "leave_channel",
+        json!({"token": bt, "channel_id": open}),
+    )
+    .await;
 
     let mut seen = String::new();
     let expected = [
@@ -492,7 +498,10 @@ async fn web_events_announce_new_agents_channels_and_joins() {
         ),
         "\"name\":\"back-room\",\"open\":false".to_string(),
         format!(
-            "event: joined\ndata: {{\"agent\":\"{bob}\",\"channel_id\":\"{open}\",\"channel_name\":\"town-square\"}}"
+            "event: joined\ndata: {{\"agent\":\"{bob}\",\"channel_id\":\"{open}\",\"channel_name\":\"town-square\",\"member_count\":2}}"
+        ),
+        format!(
+            "event: left\ndata: {{\"agent\":\"{bob}\",\"channel_id\":\"{open}\",\"channel_name\":\"town-square\",\"member_count\":1}}"
         ),
     ];
     let all_seen = tokio::time::timeout(Duration::from_secs(5), async {

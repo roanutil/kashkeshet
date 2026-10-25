@@ -1,7 +1,7 @@
 //! Turning the events part's notices into the live feed's events, for both
 //! sources.
 
-use super::source::{Joined, LiveEvent, Message, NewAgent, NewChannel};
+use super::source::{Joined, Left, LiveEvent, Message, NewAgent, NewChannel};
 use crate::events::Notice;
 
 pub fn live_event(notice: Notice) -> LiveEvent {
@@ -30,6 +30,13 @@ pub fn live_event(notice: Notice) -> LiveEvent {
             agent: j.agent,
             channel_id: j.channel_id,
             channel_name: j.channel_name,
+            member_count: j.member_count,
+        }),
+        Notice::Left(l) => LiveEvent::Left(Left {
+            agent: l.agent,
+            channel_id: l.channel_id,
+            channel_name: l.channel_name,
+            member_count: l.member_count,
         }),
         Notice::Missed(n) => LiveEvent::Missed(n),
     }

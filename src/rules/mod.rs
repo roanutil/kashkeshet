@@ -44,7 +44,7 @@ pub use rate::{RegisterLimiter, SendLimiter};
 
 use crate::clock::{self, Clock};
 use crate::config::Limits;
-use crate::events::{Events, Joined, NewAgent, NewChannel as NewChannelEvent};
+use crate::events::{Events, Joined, Left, NewAgent, NewChannel as NewChannelEvent};
 use crate::names::{self, Entropy};
 use crate::store::{
     ActivityRecord, AgentRecord, ChannelFacts, ChannelFilter, ChannelUseRecord, Db, MessageRange,
