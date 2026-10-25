@@ -3,8 +3,8 @@
 //! It runs in the user's `gui/<uid>` domain.
 
 use super::{
-    Command, ServiceError, Spec, System, create_dir, failure_detail, path_text, plain_text,
-    remove_file, run, run_attached, run_ok, write_file,
+    Command, ServiceError, ServiceState, Spec, System, create_dir, failure_detail, path_text,
+    plain_text, remove_file, run, run_attached, run_ok, write_file,
 };
 use crate::config::{
     LAUNCH_AGENTS_DIR, LAUNCHD_LABEL, MACOS_LOG_DIR, MACOS_LOG_FILE_NAME, SERVICE_RESTART_DELAY,
@@ -204,6 +204,23 @@ impl Launchd {
                 detail: failure_detail(&finished),
             })
         }
+    }
+
+    pub fn state(&self, system: &dyn System) -> Result<ServiceState, ServiceError> {
+        if !system.exists(&self.plist()) {
+            return Ok(ServiceState {
+                installed: false,
+                running: false,
+            });
+        }
+        let running = match self.print(system)? {
+            Some(printed) => PrintedState::read(&printed).state.as_deref() == Some("running"),
+            None => false,
+        };
+        Ok(ServiceState {
+            installed: true,
+            running,
+        })
     }
 
     pub fn status(&self, system: &dyn System) -> Result<Vec<String>, ServiceError> {

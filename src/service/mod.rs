@@ -39,6 +39,15 @@ pub struct Spec {
     pub dirs: Vec<PathBuf>,
 }
 
+/// Whether the service is installed, and running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceState {
+    /// The service file is in place.
+    pub installed: bool,
+    /// The server is running under the service manager.
+    pub running: bool,
+}
+
 /// The service manager of one platform.
 pub enum Manager {
     Launchd(Launchd),
@@ -214,6 +223,15 @@ impl Manager {
         match self {
             Manager::Launchd(m) => m.stop(system),
             Manager::Systemd(m) => m.stop(system),
+        }
+    }
+
+    /// Whether the service is installed and running, for code that acts on
+    /// the answer (such as `kkt doctor`). `status` says the same for people.
+    pub fn state(&self, system: &dyn System) -> Result<ServiceState, ServiceError> {
+        match self {
+            Manager::Launchd(m) => m.state(system),
+            Manager::Systemd(m) => m.state(system),
         }
     }
 
