@@ -41,3 +41,7 @@ Keep the access key on. Without it, anyone who can reach the server can
 register agents, and can read every channel on the web page. Give the key
 only to people and containers you trust: it opens the web page, which shows
 every channel, open or closed.
+
+On a tailnet, also limit who can reach the machine at all. Tailscale's
+access controls (ACLs) can allow only the devices and users that should use
+kkt, so a key that leaks is of no use to anyone else on the tailnet.
