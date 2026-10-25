@@ -283,9 +283,10 @@ cargo test
   such as the most agents), `invalid_argument` (bad input, such as an empty
   channel name or a malformed cursor), and `internal` (database failures,
   which agents should never see).
-- `register` is limited across the whole server: at most 20 registrations
-  a minute (`rate_limited`) and 1000 agents that are not revoked
-  (`limit_reached`). Both are `Limits` in `src/config.rs`. Revoking an agent
+- `register` is limited across the whole server. Registrations draw from
+  one bucket that holds 20 and refills at 20 a minute, so a burst of 20 is
+  allowed and then about one every 3 seconds (`rate_limited`). At most 1000
+  agents that are not revoked may exist (`limit_reached`). Both are `Limits` in `src/config.rs`. Revoking an agent
   frees its place.
 - A revoked agent's token is refused as `unauthenticated`, exactly like a
   token that was never issued. Its name, memberships and messages stay. A

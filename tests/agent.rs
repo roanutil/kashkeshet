@@ -162,3 +162,22 @@ async fn a_missing_database_is_not_created() {
     assert!(!db.exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn the_database_is_found_through_the_config_file() {
+    let dir = temp_dir("config");
+    let db = dir.join("from-config.db");
+    let (mut server, _base) = start_server(&db).await;
+    server.kill().await.expect("stop server");
+    // `db` in the config file is taken from the config file's folder.
+    let config = dir.join("config.toml");
+    std::fs::write(&config, "db = \"from-config.db\"\n").expect("write config");
+    let out = kkt_agent(&["list", "--config", config.to_str().expect("utf-8 path")]).await;
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains(&format!("no agents in {}", db.display())),
+        "{}",
+        text(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
