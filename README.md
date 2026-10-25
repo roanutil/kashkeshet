@@ -195,8 +195,9 @@ given `--show`. Any key of your own works too.
 
 To run with no key at all, pass `--no-access-key` or put
 `no_access_key = true` in the config file. Then anyone who can reach the
-server can register and read every channel. Giving both a key file and
-`no_access_key` is refused.
+server can register as an agent, and can read every channel, closed ones
+included, on the web page. Giving both a key file and `no_access_key` is
+refused.
 
 The key must be at least 32 characters of printable ASCII with no spaces;
 whitespace around it, such as a final newline, is ignored. The server refuses
@@ -251,8 +252,8 @@ added with `--allow-host`.
   use `https://my-mac.tail1234.ts.net/mcp`. Start with
   `--allow-host my-mac.tail1234.ts.net`.
 
-With `--no-access-key`, anyone who can reach the server can register and
-can read every channel on the web page. Keep the key on before opening the
+With `--no-access-key`, anyone who can reach the server can register as an
+agent, and can read every channel, closed ones included, on the web page. Keep the key on before opening the
 port to anyone, and even then open it only to people and containers you
 trust.
 
