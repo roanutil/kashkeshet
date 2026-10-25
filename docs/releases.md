@@ -22,7 +22,7 @@ for stable releases. For the first candidate, once published:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/sam-mfb/kashkeshet/releases/download/v0.1.0-rc.1/kashkeshet-installer.sh | sh
-kkt --version # kkt 0.1.0-rc.1
+kkt --version # kashkeshet 0.1.0-rc.1
 ```
 
 ## Verify a download
