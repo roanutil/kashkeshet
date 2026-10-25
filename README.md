@@ -87,7 +87,8 @@ A path starting with `~/` is under the home directory; any other relative
 path is relative to the file's directory, so `access-key` above is
 `~/.config/kkt/access-key`. A list given as a flag replaces the file's list.
 An unknown key or a value of the wrong kind stops the server with a message
-naming it. The server run records which file was read.
+naming it. So does a setting that fails the startup checks, and the message
+names the file when the bad value came from there. The server run records which file was read.
 
 ### Access key
 

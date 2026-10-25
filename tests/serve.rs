@@ -197,6 +197,10 @@ async fn a_bad_config_file_stops_serve_naming_the_setting() {
             "bind = \"0.0.0.0:7420\"\n",
             "invalid setting: bind must be a loopback address",
         ),
+        (
+            "default_limit = 0\n",
+            "invalid setting: default_limit must be at least 1 (set in ",
+        ),
     ];
     for (i, (text, expected)) in cases.iter().enumerate() {
         let config = home.join(format!("bad-{i}.toml"));
@@ -221,5 +225,56 @@ async fn flags_and_subcommands_do_not_mix() {
     let home = temp_home("mix");
     let out = refused(kkt(&home, &["--bind", "127.0.0.1:1", "serve"])).await;
     assert!(out.contains("cannot be used with"), "{out}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A bad limit given as a flag is not blamed on the config file.
+#[tokio::test]
+async fn a_bad_flag_is_not_blamed_on_the_config_file() {
+    let home = temp_home("blame");
+    let config = home.join("ok.toml");
+    std::fs::write(&config, "max_limit = 50\n").expect("write config");
+    let config_arg = config.display().to_string();
+    let db = home.join("never.db").display().to_string();
+    let out = refused(kkt(
+        &home,
+        &[
+            "serve",
+            "--config",
+            &config_arg,
+            "--db",
+            &db,
+            "--default-limit",
+            "0",
+        ],
+    ))
+    .await;
+    assert!(
+        out.contains("invalid setting: default_limit must be at least 1"),
+        "{out}"
+    );
+    assert!(!out.contains("(set in"), "{out}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// `kkt serve` stops cleanly on SIGTERM, as launchd and systemd send.
+#[cfg(unix)]
+#[tokio::test]
+async fn serve_stops_cleanly_on_sigterm() {
+    let home = temp_home("sigterm");
+    let bind = free_bind();
+    let (mut child, _) = start(kkt(&home, &["serve", "--bind", &bind])).await;
+    let pid = child.id().expect("pid").to_string();
+    let sent = Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()
+        .await
+        .expect("run kill");
+    assert!(sent.success());
+    let status = tokio::time::timeout(TIMEOUT, child.wait())
+        .await
+        .expect("kkt serve did not stop in time")
+        .expect("wait");
+    assert!(status.success(), "{status}");
     let _ = std::fs::remove_dir_all(&home);
 }

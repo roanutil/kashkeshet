@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
-use kashkeshet::config::{self, DEFAULT_BIND, LEGACY_DB_PATH, Limits};
+use kashkeshet::config::{self, DEFAULT_BIND, InvalidSetting, LEGACY_DB_PATH, Limits};
 use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
@@ -152,7 +152,7 @@ async fn main() -> std::process::ExitCode {
     let result = match cli.command {
         None => {
             let settings = cli.flags.options().resolve(PathBuf::from(LEGACY_DB_PATH));
-            serve(settings, None).await
+            serve(settings, &Sources::FLAGS_ONLY).await
         }
         Some(Command::Serve { config, flags }) => serve_from_config(&env, config, flags).await,
         Some(Command::Key {
@@ -207,7 +207,12 @@ async fn serve_from_config(
         }
         None => ServeOptions::NONE,
     };
-    let options = flags.options().over(from_file);
+    let flags = flags.options();
+    let sources = Sources {
+        file: config_file.map(|path| (path, from_file.clone())),
+        flags: flags.clone(),
+    };
+    let options = flags.over(from_file);
     let default_db = match &options.db {
         // Given, so the default is never used.
         Some(given) => given.clone(),
@@ -223,10 +228,37 @@ async fn serve_from_config(
         }
     };
     let settings = options.resolve(default_db);
-    serve(settings, config_file.map(|p| p.display().to_string())).await
+    serve(settings, &sources).await
 }
 
-async fn serve(settings: ServeSettings, config_file: Option<String>) -> Result<(), String> {
+/// Where a server's settings came from, so a bad one can be traced to the
+/// config file when that is where it was set.
+struct Sources {
+    flags: ServeOptions,
+    /// The config file read, and what it gave.
+    file: Option<(PathBuf, ServeOptions)>,
+}
+
+impl Sources {
+    /// Bare `kkt`: flags and defaults only.
+    const FLAGS_ONLY: Sources = Sources {
+        flags: ServeOptions::NONE,
+        file: None,
+    };
+
+    /// The message for a bad setting, naming the config file if the setting
+    /// came from there.
+    fn invalid(&self, e: InvalidSetting) -> String {
+        match &self.file {
+            Some((path, file)) if file.gives(e.name) && !self.flags.gives(e.name) => {
+                format!("invalid setting: {e} (set in {})", path.display())
+            }
+            _ => format!("invalid setting: {e}"),
+        }
+    }
+}
+
+async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String> {
     let ServeSettings {
         db: db_path,
         bind,
@@ -236,12 +268,9 @@ async fn serve(settings: ServeSettings, config_file: Option<String>) -> Result<(
         instructions,
         access_key_file,
     } = settings;
-    config::check_bind(bind).map_err(|e| format!("invalid setting: {e}"))?;
-    limits
-        .check()
-        .map_err(|e| format!("invalid setting: {e}"))?;
-    let allowed_hosts =
-        AllowedHosts::new(&allow_hosts).map_err(|e| format!("invalid setting: {e}"))?;
+    config::check_bind(bind).map_err(|e| sources.invalid(e))?;
+    limits.check().map_err(|e| sources.invalid(e))?;
+    let allowed_hosts = AllowedHosts::new(&allow_hosts).map_err(|e| sources.invalid(e))?;
     let instructions = match &instructions {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|e| format!("could not read {}: {e}", path.display()))?,
@@ -256,7 +285,7 @@ async fn serve(settings: ServeSettings, config_file: Option<String>) -> Result<(
                 )
             })?;
             let key = SharedKey::new(&text, path.display().to_string())
-                .map_err(|e| format!("invalid setting: {e}"))?;
+                .map_err(|e| sources.invalid(e))?;
             Admission::SharedKey(key)
         }
         None => Admission::Open,
@@ -269,7 +298,7 @@ async fn serve(settings: ServeSettings, config_file: Option<String>) -> Result<(
         allowed_origins: allow_origins,
         allowed_hosts,
         instructions,
-        config_file,
+        config_file: sources.file.as_ref().map(|(p, _)| p.display().to_string()),
     };
     let clock = Arc::new(SystemClock);
     let run = ServerRun::new(Build::CURRENT, &config);

@@ -67,6 +67,24 @@ impl ServeOptions {
         }
     }
 
+    /// Whether the setting `name`, as an `InvalidSetting` names it, is given.
+    pub fn gives(&self, name: &str) -> bool {
+        match name {
+            "db" => self.db.is_some(),
+            "bind" => self.bind.is_some(),
+            "max_response_bytes" => self.max_response_bytes.is_some(),
+            "default_limit" => self.default_limit.is_some(),
+            "max_limit" => self.max_limit.is_some(),
+            "max_body_chars" => self.max_body_chars.is_some(),
+            "sends_per_minute" => self.sends_per_minute.is_some(),
+            "allow_origin" | "allow_origins" => self.allow_origins.is_some(),
+            "allow_host" | "allow_hosts" => self.allow_hosts.is_some(),
+            "instructions" => self.instructions.is_some(),
+            "access_key_file" => self.access_key_file.is_some(),
+            _ => false,
+        }
+    }
+
     /// The settings to run with: what was given, and the defaults for the
     /// rest. `default_db` is used only when no database was given; the
     /// default differs between bare `kkt` and `kkt serve`.
@@ -128,6 +146,20 @@ mod tests {
             }
         );
         assert_eq!(settings.bind.to_string(), "127.0.0.1:7420");
+    }
+
+    #[test]
+    fn gives_answers_by_the_names_checks_use() {
+        let options = ServeOptions {
+            max_limit: Some(1),
+            allow_hosts: Some(vec![]),
+            ..ServeOptions::NONE
+        };
+        assert!(options.gives("max_limit"));
+        assert!(options.gives("allow_host"));
+        assert!(!options.gives("default_limit"));
+        assert!(!options.gives("max_wait"));
+        assert!(!ServeOptions::NONE.gives("bind"));
     }
 
     #[test]
