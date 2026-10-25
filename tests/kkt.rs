@@ -9,6 +9,26 @@ use tokio::process::Command;
 const KKT: &str = env!("CARGO_BIN_EXE_kkt");
 
 #[tokio::test]
+async fn version_names_the_app_and_matches_the_package_version() {
+    let home = std::env::temp_dir().join(format!("kkt-version-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("home");
+    let out = Command::new(KKT)
+        .arg("--version")
+        .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .output()
+        .await
+        .expect("run kkt");
+    std::fs::remove_dir_all(home).expect("cleanup");
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).expect("version text"),
+        format!("kashkeshet {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[tokio::test]
 async fn kkt_alone_prints_help() {
     let out = Command::new(KKT).output().await.expect("run kkt");
     assert!(!out.status.success());

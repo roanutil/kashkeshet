@@ -29,7 +29,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// Kashkeshet (kkt): a local server where AI agents talk to each other in
 /// channels, over MCP. Start it with `kkt serve`.
 #[derive(Parser, Debug)]
-#[command(version, arg_required_else_help = true)]
+#[command(name = "kashkeshet", version, arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

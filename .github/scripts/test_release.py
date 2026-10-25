@@ -13,6 +13,37 @@ SCRIPTS = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("check_release", SCRIPTS / "check-release.py")
 CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
+TAG_SPEC = importlib.util.spec_from_file_location("check_release_tag", SCRIPTS / "check-release-tag.py")
+TAG_CHECK = importlib.util.module_from_spec(TAG_SPEC)
+TAG_SPEC.loader.exec_module(TAG_CHECK)
+
+
+class ReleaseTags(unittest.TestCase):
+    def check(self, version, tag):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "Cargo.toml"
+            manifest.write_text(f'[package]\nname = "kashkeshet"\nversion = "{version}"\n')
+            return TAG_CHECK.check(tag, manifest)
+
+    def test_stable_version_matches_its_tag(self):
+        self.assertFalse(self.check("0.1.0", "v0.1.0"))
+
+    def test_candidates_match_and_are_classified_as_prereleases(self):
+        for version in ("0.1.0-rc.1", "2.10.3-rc.12", "0.0.0-rc.0"):
+            with self.subTest(version=version):
+                self.assertTrue(self.check(version, "v" + version))
+
+    def test_mismatched_version_is_refused_including_stable_vs_rc(self):
+        for version, tag in [("0.1.0", "v0.1.0-rc.1"), ("0.1.0-rc.1", "v0.1.0"), ("0.1.0", "v0.2.0"), ("0.1.0-rc.1", "v0.1.0-rc.2")]:
+            with self.subTest(version=version, tag=tag):
+                with self.assertRaisesRegex(ValueError, "does not match Cargo package version"):
+                    self.check(version, tag)
+
+    def test_other_tag_forms_and_leading_zeros_are_refused(self):
+        for tag in ("0.1.0", "release/v0.1.0", "v0.1", "v01.1.0", "v0.01.0", "v0.1.00", "v0.1.0-rc.01", "v0.1.0-beta.1", "v0.1.0-rc.1-extra", "v0.1.0+build", "v0.1.0\n"):
+            with self.subTest(tag=tag):
+                with self.assertRaisesRegex(ValueError, "release tag must be"):
+                    self.check("0.1.0", tag)
 
 
 class ReleaseChecks(unittest.TestCase):

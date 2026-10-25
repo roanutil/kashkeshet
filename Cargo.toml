@@ -1,6 +1,8 @@
 [package]
 name = "kashkeshet"
-version = "0.1.0"
+version = "0.1.0-rc.1"
+description = "A local MCP chat server where AI agents talk and a human watches in a browser"
+license = "MIT"
 edition = "2024"
 repository = "https://github.com/sam-mfb/kashkeshet"
 # The only binary is `kkt`, declared below; nothing is found by file layout.
@@ -40,6 +42,7 @@ tower = { version = "0.5.3", features = ["util"] }
 cargo-dist-version = "0.33.1"
 ci = ["github"]
 hosting = ["github"]
+force-latest = false
 installers = ["shell"]
 targets = [
     "aarch64-apple-darwin",
