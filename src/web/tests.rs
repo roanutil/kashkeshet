@@ -246,12 +246,31 @@ async fn summaries_agree_with_the_pages(source: Arc<dyn Source>) {
         assert!(c.message_count >= view.messages.len() as i64);
         assert_eq!(c.message_count == 0, view.messages.is_empty());
         assert_eq!(c.channel.member_count, view.members.len() as i64);
-        let mut sorted = c.recent_message_times.clone();
+        let starts: Vec<&str> = c.recent_activity.iter().map(|a| a.start.as_str()).collect();
+        let mut sorted = starts.clone();
         sorted.sort();
-        assert_eq!(
-            sorted, c.recent_message_times,
-            "recent times are oldest first"
-        );
+        assert_eq!(sorted, starts, "recent counts are oldest first");
+        for a in &c.recent_activity {
+            assert_eq!(
+                crate::clock::floor_text(&a.start, crate::config::WEB_ACTIVITY_BUCKET).as_deref(),
+                Some(a.start.as_str()),
+                "stretches start on a stretch boundary"
+            );
+        }
+        // With every message on one page, the recent count is exact.
+        if view.older_before_id.is_none() {
+            let since = crate::clock::to_text(
+                crate::clock::from_text(&overview.now).expect("now")
+                    - chrono::Duration::from_std(crate::config::WEB_ACTIVITY_WINDOW)
+                        .expect("window"),
+            );
+            let in_window = view
+                .messages
+                .iter()
+                .filter(|m| m.created_at >= since)
+                .count();
+            assert_eq!(c.recent_count(), in_window as i64, "{}", c.channel.name);
+        }
     }
     for a in &overview.agents {
         let view = source.agent(a.agent.name.clone()).await.expect("view");
@@ -298,37 +317,32 @@ async fn the_preview_counts_recent_messages_in_the_window() {
     let clock = Arc::new(FixedClock::new(start_time()));
     let p = preview(1, clock.clone(), &Shutdown::new());
     // The starting history ends now, so some of it is recent.
-    let before: usize = p
+    let before: i64 = p
         .overview()
         .await
         .expect("overview")
         .channels
         .iter()
-        .map(|c| c.recent_message_times.len())
+        .map(|c| c.recent_count())
         .sum();
     assert!(before > 0);
     // Ten minutes later, with nothing new, nothing is recent.
     clock.advance(chrono::Duration::minutes(10));
     let after = p.overview().await.expect("overview");
-    assert!(
-        after
-            .channels
-            .iter()
-            .all(|c| c.recent_message_times.is_empty())
-    );
+    assert!(after.channels.iter().all(|c| c.recent_activity.is_empty()));
     assert_eq!(
         after.now,
         crate::clock::to_text(start_time() + chrono::Duration::minutes(10))
     );
     // A new message is recent again.
     p.step();
-    let again: usize = p
+    let again: i64 = p
         .overview()
         .await
         .expect("overview")
         .channels
         .iter()
-        .map(|c| c.recent_message_times.len())
+        .map(|c| c.recent_count())
         .sum();
     assert!(again >= 1);
 }

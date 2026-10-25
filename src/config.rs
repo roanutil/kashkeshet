@@ -23,9 +23,10 @@ pub const EVENT_BUFFER: usize = 1024;
 /// The front page counts each channel's messages in this last stretch of
 /// time, to show which channels are busy.
 pub const WEB_ACTIVITY_WINDOW: Duration = Duration::from_secs(5 * 60);
-/// How many of the newest messages that count looks through. A channel
-/// busier than this in the window shows this many at most.
-pub const WEB_ACTIVITY_SAMPLE: usize = 1000;
+/// Those messages are counted in stretches this long, so the page gets a few
+/// numbers per channel rather than a time for every message, and a count
+/// leaves the window at most this late.
+pub const WEB_ACTIVITY_BUCKET: Duration = Duration::from_secs(10);
 /// Largest `web_page_messages`. More would make a page slow to load and
 /// heavy to keep live.
 pub const MAX_WEB_PAGE_MESSAGES: usize = 5000;

@@ -2,8 +2,8 @@
 //! including closed channels, and changes nothing.
 
 use super::*;
-use crate::config::{WEB_ACTIVITY_SAMPLE, WEB_ACTIVITY_WINDOW};
-use std::collections::HashMap;
+use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW};
+use std::collections::{BTreeMap, HashMap};
 
 impl Rules {
     /// The front page: every channel with how much it is used, every agent
@@ -22,13 +22,17 @@ impl Rules {
                     .into_iter()
                     .map(|u| (u.channel_id.clone(), u))
                     .collect();
-                // Times of the messages in the window, from the newest
-                // `WEB_ACTIVITY_SAMPLE` messages overall.
-                let mut recent: HashMap<String, Vec<String>> = HashMap::new();
-                for m in store.recent_messages(WEB_ACTIVITY_SAMPLE)? {
-                    if m.created_at >= since {
-                        recent.entry(m.channel_id).or_default().push(m.created_at);
-                    }
+                // Every message in the window, counted per channel in
+                // stretches of `WEB_ACTIVITY_BUCKET`.
+                let mut recent: HashMap<String, BTreeMap<String, i64>> = HashMap::new();
+                for m in store.message_times_since(&since)? {
+                    let start = clock::floor_text(&m.created_at, WEB_ACTIVITY_BUCKET)
+                        .unwrap_or(m.created_at);
+                    *recent
+                        .entry(m.channel_id)
+                        .or_default()
+                        .entry(start)
+                        .or_default() += 1;
                 }
                 let channels = store
                     .all_channel_ids(None)?
@@ -36,13 +40,17 @@ impl Rules {
                     .map(|id| {
                         let info = channel_info(store, id, None, None, preview)?;
                         let use_ = used.remove(id);
-                        let mut recent_message_times = recent.remove(id).unwrap_or_default();
-                        recent_message_times.reverse();
+                        let recent_activity = recent
+                            .remove(id)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|(start, count)| ActivityCount { start, count })
+                            .collect();
                         Ok(ChannelActivity {
                             message_count: use_.as_ref().map_or(0, |u| u.message_count),
                             last_message_at: use_.as_ref().and_then(|u| u.last_message_at.clone()),
                             last_speaker: use_.and_then(|u| u.last_speaker),
-                            recent_message_times,
+                            recent_activity,
                             info,
                         })
                     })
@@ -155,9 +163,16 @@ pub struct ChannelActivity {
     pub message_count: i64,
     pub last_message_at: Option<String>,
     pub last_speaker: Option<String>,
-    /// When each message in the last `WEB_ACTIVITY_WINDOW` was sent, oldest
-    /// first (counted from the newest `WEB_ACTIVITY_SAMPLE` messages).
-    pub recent_message_times: Vec<String>,
+    /// The messages of the last `WEB_ACTIVITY_WINDOW`, counted in
+    /// stretches of `WEB_ACTIVITY_BUCKET`, oldest first.
+    pub recent_activity: Vec<ActivityCount>,
+}
+
+/// How many messages a channel got in the stretch starting at `start`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivityCount {
+    pub start: String,
+    pub count: i64,
 }
 
 /// An agent and the channels it is in.

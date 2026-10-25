@@ -468,11 +468,13 @@ async fn the_front_page_summarizes_each_channel_and_agent() {
         Some(clock::to_text(w.clock.now()))
     );
     // Only the two messages from the last five minutes are recent.
-    assert_eq!(busy_row.recent_message_times.len(), 2);
+    let recent =
+        |c: &human::ChannelActivity| c.recent_activity.iter().map(|a| a.count).sum::<i64>();
+    assert_eq!(recent(busy_row), 2);
     let quiet_row = row(&quiet);
     assert_eq!(quiet_row.message_count, 0);
     assert_eq!(quiet_row.last_speaker, None);
-    assert!(quiet_row.recent_message_times.is_empty());
+    assert!(quiet_row.recent_activity.is_empty());
 
     let channels_of = |name: &str| {
         let mut ids: Vec<String> = o
@@ -495,12 +497,43 @@ async fn the_front_page_summarizes_each_channel_and_agent() {
     // Later, nothing is recent.
     w.clock.advance(chrono::Duration::minutes(6));
     let later = w.rules.overview().await.unwrap();
-    assert!(
-        later
-            .channels
+    assert!(later.channels.iter().all(|c| c.recent_activity.is_empty()));
+}
+
+/// A busy channel does not crowd a quiet one's recent count out.
+#[tokio::test]
+async fn recent_counts_are_exact_for_every_channel() {
+    let limits = Limits {
+        sends_per_minute: 100_000,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    let quiet = w.channel(&a, "quiet", true, &[]).await;
+    let busy = w.channel(&a, "busy", true, &[]).await;
+    w.rules
+        .send(&a, quiet.clone(), "hello".into())
+        .await
+        .unwrap();
+    for i in 0..1005 {
+        w.rules
+            .send(&a, busy.clone(), format!("m{i}"))
+            .await
+            .unwrap();
+    }
+    let o = w.rules.overview().await.unwrap();
+    let recent = |id: &str| {
+        o.channels
             .iter()
-            .all(|c| c.recent_message_times.is_empty())
-    );
+            .find(|c| c.info.id == id)
+            .unwrap()
+            .recent_activity
+            .iter()
+            .map(|a| a.count)
+            .sum::<i64>()
+    };
+    assert_eq!(recent(&quiet), 1);
+    assert_eq!(recent(&busy), 1005);
 }
 
 // ---- Closed channels do not exist to outsiders ----

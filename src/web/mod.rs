@@ -15,11 +15,11 @@ mod source;
 pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
-    Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary, ChannelView, Gate,
-    LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
+    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
+    ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
 };
 
-use crate::config::{WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
+use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
 use crate::hosts::AllowedHosts;
 use askama::Template;
 use axum::Router;
@@ -108,6 +108,8 @@ struct IndexPage {
     now: String,
     /// The stretch of time "recent" messages are counted over, in seconds.
     window_secs: u64,
+    /// The stretches they are counted in, in seconds.
+    bucket_secs: u64,
     sign_out: bool,
 }
 
@@ -155,6 +157,7 @@ async fn index(State(pages): State<Pages>) -> Response {
             runs: o.runs,
             now: o.now,
             window_secs: WEB_ACTIVITY_WINDOW.as_secs(),
+            bucket_secs: WEB_ACTIVITY_BUCKET.as_secs(),
             sign_out: pages.sign_out,
         }),
         Err(e) => error_page(e, pages.sign_out),

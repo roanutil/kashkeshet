@@ -3,8 +3,8 @@
 //! rules' and admission's types and the web's.
 
 use super::source::{
-    Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary, ChannelView, Gate,
-    LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
+    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
+    ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
 };
 use crate::admission::{self, Credentials, Decision, WebAdmission};
 use crate::events::Notice;
@@ -38,7 +38,14 @@ impl Source for RulesSource {
                         message_count: c.message_count,
                         last_message_at: c.last_message_at,
                         last_speaker: c.last_speaker,
-                        recent_message_times: c.recent_message_times,
+                        recent_activity: c
+                            .recent_activity
+                            .into_iter()
+                            .map(|a| ActivityCount {
+                                start: a.start,
+                                count: a.count,
+                            })
+                            .collect(),
                     })
                     .collect(),
                 agents: o

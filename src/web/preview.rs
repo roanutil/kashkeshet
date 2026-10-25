@@ -8,14 +8,14 @@
 //! seeded entropy gives the same world and the same feed every time.
 
 use super::source::{
-    Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary, ChannelView, LiveEvent,
-    Message, Overview, ServerRun, Source, SourceError,
+    ActivityCount, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
+    ChannelView, LiveEvent, Message, Overview, ServerRun, Source, SourceError,
 };
 use crate::clock::{self, Clock};
 use crate::config::{
     PREVIEW_AGENTS, PREVIEW_BURST_MAX, PREVIEW_BURST_ONE_IN, PREVIEW_CHANNELS, PREVIEW_HISTORY,
     PREVIEW_LONG_MESSAGE_ONE_IN, PREVIEW_MESSAGES, PREVIEW_NEW_AGENT_ONE_IN,
-    PREVIEW_NEW_CHANNEL_ONE_IN, PreviewSettings, WEB_ACTIVITY_WINDOW,
+    PREVIEW_NEW_CHANNEL_ONE_IN, PreviewSettings, WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW,
 };
 use crate::events::{Events, NewMessage, Notice};
 use crate::names::{self, Entropy};
@@ -434,10 +434,7 @@ impl World {
                     message_count: mine.clone().count() as i64,
                     last_message_at: last.map(|m| m.created_at.clone()),
                     last_speaker: last.map(|m| m.agent.clone()),
-                    recent_message_times: mine
-                        .filter(|m| m.created_at.as_str() >= since)
-                        .map(|m| m.created_at.clone())
-                        .collect(),
+                    recent_activity: activity(mine.filter(|m| m.created_at.as_str() >= since)),
                 }
             })
             .collect();
@@ -516,6 +513,20 @@ impl World {
             message_count,
         })
     }
+}
+
+/// `messages` counted in stretches of `WEB_ACTIVITY_BUCKET`, oldest first.
+fn activity<'a>(messages: impl Iterator<Item = &'a Message>) -> Vec<ActivityCount> {
+    let mut counts: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for m in messages {
+        let start = clock::floor_text(&m.created_at, WEB_ACTIVITY_BUCKET)
+            .unwrap_or_else(|| m.created_at.clone());
+        *counts.entry(start).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(start, count)| ActivityCount { start, count })
+        .collect()
 }
 
 /// A message body: usually one line, sometimes several long paragraphs.

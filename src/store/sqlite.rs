@@ -627,6 +627,25 @@ impl Reads for Sql<'_> {
         Ok(rows)
     }
 
+    fn message_times_since(&self, since: &str) -> StoreResult<Vec<MessageTimeRecord>> {
+        let mut stmt = self
+            .0
+            .prepare_cached("SELECT channel_id, created_at FROM messages ORDER BY id DESC")?;
+        let mut rows = stmt.query([])?;
+        let mut times = Vec::new();
+        while let Some(row) = rows.next()? {
+            let created_at: String = row.get(1)?;
+            if created_at.as_str() < since {
+                break;
+            }
+            times.push(MessageTimeRecord {
+                channel_id: row.get(0)?,
+                created_at,
+            });
+        }
+        Ok(times)
+    }
+
     fn server_runs(&self) -> StoreResult<Vec<ServerRunRecord>> {
         let mut stmt = self.0.prepare_cached(
             "SELECT id, started_at, version, git_commit, settings, instructions_sha256

@@ -474,3 +474,47 @@ async fn memberships_list_every_agent_in_every_channel() {
         ]
     );
 }
+
+#[tokio::test]
+async fn message_times_since_reads_back_only_as_far_as_it_must() {
+    let db = world(&[("ch_open", "a", "old one"), ("ch_closed", "a", "old two")]).await;
+    db.write(|w| {
+        for (channel_id, at) in [
+            ("ch_open", "2026-10-23T14:10:00Z"),
+            ("ch_closed", "2026-10-23T14:11:00Z"),
+            ("ch_open", "2026-10-23T14:12:00Z"),
+        ] {
+            w.insert_message(&NewMessageRecord {
+                channel_id: channel_id.into(),
+                agent: "a".into(),
+                body: "new".into(),
+                created_at: at.into(),
+                run_id: 1,
+            })?;
+        }
+        Ok::<_, StoreError>(())
+    })
+    .await
+    .expect("seed");
+    let times = db
+        .read(|r| r.message_times_since("2026-10-23T14:10:00Z"))
+        .await
+        .expect("read");
+    let pairs: Vec<(&str, &str)> = times
+        .iter()
+        .map(|t| (t.channel_id.as_str(), t.created_at.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("ch_open", "2026-10-23T14:12:00Z"),
+            ("ch_closed", "2026-10-23T14:11:00Z"),
+            ("ch_open", "2026-10-23T14:10:00Z"),
+        ]
+    );
+    let none = db
+        .read(|r| r.message_times_since("2026-10-23T15:00:00Z"))
+        .await
+        .expect("read");
+    assert!(none.is_empty());
+}

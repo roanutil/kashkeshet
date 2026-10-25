@@ -247,14 +247,21 @@ details summary { cursor: pointer; }
   const dashboard = document.querySelector("table[data-dashboard]");
   const skew = dashboard ? Date.parse(dashboard.dataset.now) - Date.now() : 0;
   const windowMs = dashboard ? Number(dashboard.dataset.window) * 1000 : 0;
-  // Rows by channel ID and by agent name, and each channel's recent times.
+  const bucketMs = dashboard ? Number(dashboard.dataset.bucket) * 1000 : 1000;
+  // Rows by channel ID and by agent name, and each channel's recent
+  // messages as counts per stretch: stretch start (ms) to count.
   const channelRows = new Map();
   const agentRows = new Map();
-  const recentTimes = new Map();
+  const recentCounts = new Map();
   if (dashboard) {
     dashboard.querySelectorAll("tr[data-channel-id]").forEach((row) => {
       channelRows.set(row.dataset.channelId, row);
-      recentTimes.set(row.dataset.channelId, row.dataset.recent.split(" ").filter(Boolean).map(Date.parse));
+      const counts = new Map();
+      row.dataset.recent.split(" ").filter(Boolean).forEach((pair) => {
+        const [start, count] = pair.split("=");
+        counts.set(Date.parse(start), Number(count));
+      });
+      recentCounts.set(row.dataset.channelId, counts);
     });
     document.querySelectorAll("tr[data-agent]").forEach((row) => agentRows.set(row.dataset.agent, row));
   }
@@ -271,12 +278,17 @@ details summary { cursor: pointer; }
     document.querySelectorAll("time.ago").forEach((t) => {
       t.textContent = ago(now - Date.parse(t.getAttribute("datetime")));
     });
-    recentTimes.forEach((times, id) => {
-      while (times.length && times[0] < now - windowMs) times.shift();
+    recentCounts.forEach((counts, id) => {
+      let total = 0;
+      counts.forEach((count, start) => {
+        // A stretch leaves the window once all of it is older than the window.
+        if (start + bucketMs <= now - windowMs) counts.delete(start);
+        else total += count;
+      });
       const cell = channelRows.get(id)?.querySelector("td.recent");
       if (cell) {
-        cell.textContent = String(times.length);
-        cell.classList.toggle("zero", times.length === 0);
+        cell.textContent = String(total);
+        cell.classList.toggle("zero", total === 0);
       }
     });
   }
@@ -286,9 +298,10 @@ details summary { cursor: pointer; }
     if (row) {
       const count = row.querySelector("td.count");
       count.textContent = String(Number(count.textContent) + 1);
-      const times = recentTimes.get(m.channel_id) || [];
-      times.push(Date.parse(m.created_at));
-      recentTimes.set(m.channel_id, times);
+      const counts = recentCounts.get(m.channel_id) || new Map();
+      const start = Math.floor(Date.parse(m.created_at) / bucketMs) * bucketMs;
+      counts.set(start, (counts.get(start) || 0) + 1);
+      recentCounts.set(m.channel_id, counts);
       const last = row.querySelector("td.last");
       const when = el("time", "ago");
       when.setAttribute("datetime", m.created_at);

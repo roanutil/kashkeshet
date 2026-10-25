@@ -205,6 +205,13 @@ pub struct ChannelUseRecord {
     pub last_speaker: Option<String>,
 }
 
+/// When a message was sent, and where.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageTimeRecord {
+    pub channel_id: String,
+    pub created_at: String,
+}
+
 /// One agent's membership of one channel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MembershipRecord {
@@ -310,6 +317,13 @@ pub trait Reads {
 
     /// Every membership, in the order agents joined.
     fn memberships(&self) -> StoreResult<Vec<MembershipRecord>>;
+
+    /// The channel and time of every message sent at or after `since` (a
+    /// stored time), newest first. Messages are numbered in the order they
+    /// are stored, so this reads back from the newest and stops at the first
+    /// older one: it costs as many rows as the answer, however large the
+    /// table.
+    fn message_times_since(&self, since: &str) -> StoreResult<Vec<MessageTimeRecord>>;
 
     // ---- server runs ----
 

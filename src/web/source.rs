@@ -141,9 +141,23 @@ pub struct ChannelSummary {
     /// When the newest message was sent, and by whom.
     pub last_message_at: Option<String>,
     pub last_speaker: Option<String>,
-    /// When each message in the last `WEB_ACTIVITY_WINDOW` was sent, oldest
-    /// first.
-    pub recent_message_times: Vec<String>,
+    /// The messages of the last `WEB_ACTIVITY_WINDOW`, counted in
+    /// stretches of `WEB_ACTIVITY_BUCKET`, oldest first.
+    pub recent_activity: Vec<ActivityCount>,
+}
+
+impl ChannelSummary {
+    /// Messages in the last `WEB_ACTIVITY_WINDOW`.
+    pub fn recent_count(&self) -> i64 {
+        self.recent_activity.iter().map(|a| a.count).sum()
+    }
+}
+
+/// How many messages a channel got in the stretch starting at `start`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivityCount {
+    pub start: String,
+    pub count: i64,
 }
 
 /// An agent and the channels it is in, for the front page.
