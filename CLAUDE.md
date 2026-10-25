@@ -40,6 +40,7 @@ require reading another's internals.
 | `provenance/` | What produced a server run | |
 | `events.rs` | New-message notifications for waiting agents and the web page | Decide who may see a message |
 | `shutdown.rs` | The stop signal (Ctrl-C, SIGTERM) and the `Shutdown` that ends the server | |
+| `logs.rs` | A log file the server writes itself, rolled over and pruned by `config::LogPolicy`, timed by the injected `Clock` | Decide what is logged (that is `main.rs`'s filter) |
 | `names.rs` | Agent names, channel IDs, and the randomness behind them (`Entropy`) | |
 | `clock.rs` | The current time and waiting (`Clock`), injected so tests can control them | |
 | `app.rs` | Assembling the parts | Hold business logic |
@@ -178,6 +179,9 @@ Where the tests are:
   The other service commands are tested against a fake system in
   `src/service/tests.rs`, and the plist and unit are pinned by the files in
   `src/service/golden/`.
+- `tests/logs.rs`: `kkt serve --log-file`: the server's lines go to the
+  file, the MCP library's per-request lines don't, and no key, token or
+  session ID does.
 - `tests/shutdown.rs`: on Unix, stops a real server with SIGTERM and Ctrl-C,
   including with open event streams and pending message waits.
 - `tests/common/`: starts a server on a free port for the tests above.

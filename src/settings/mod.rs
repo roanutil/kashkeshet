@@ -12,7 +12,9 @@ mod paths;
 pub use file::parse_file;
 pub use paths::{Env, Platform};
 
-use crate::config::{DEFAULT_BIND, InvalidSetting, Limits};
+use crate::config::{
+    DEFAULT_BIND, DEFAULT_DEPENDENCY_LOG_LEVEL, DEFAULT_LOG_LEVEL, InvalidSetting, Limits, LogLevel,
+};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -33,6 +35,12 @@ pub struct ServeOptions {
     pub access_key_file: Option<PathBuf>,
     /// Run with no access key. Refused together with `access_key_file`.
     pub no_access_key: Option<bool>,
+    /// Write the log to this file, kept bounded, instead of to stdout.
+    pub log_file: Option<PathBuf>,
+    /// How much kkt's own code logs.
+    pub log_level: Option<LogLevel>,
+    /// How much the libraries kkt uses log.
+    pub dependency_log_level: Option<LogLevel>,
 }
 
 impl ServeOptions {
@@ -50,6 +58,9 @@ impl ServeOptions {
         instructions: None,
         access_key_file: None,
         no_access_key: None,
+        log_file: None,
+        log_level: None,
+        dependency_log_level: None,
     };
 
     /// Each setting from `self` if given there, else from `fallback`. A list
@@ -68,6 +79,9 @@ impl ServeOptions {
             instructions: self.instructions.or(fallback.instructions),
             access_key_file: self.access_key_file.or(fallback.access_key_file),
             no_access_key: self.no_access_key.or(fallback.no_access_key),
+            log_file: self.log_file.or(fallback.log_file),
+            log_level: self.log_level.or(fallback.log_level),
+            dependency_log_level: self.dependency_log_level.or(fallback.dependency_log_level),
         }
     }
 
@@ -86,6 +100,9 @@ impl ServeOptions {
             "instructions" => self.instructions.is_some(),
             "access_key_file" => self.access_key_file.is_some(),
             "no_access_key" => self.no_access_key.is_some(),
+            "log_file" => self.log_file.is_some(),
+            "log_level" => self.log_level.is_some(),
+            "dependency_log_level" => self.dependency_log_level.is_some(),
             _ => false,
         }
     }
@@ -138,6 +155,11 @@ impl ServeOptions {
             allow_hosts: self.allow_hosts.unwrap_or_default(),
             instructions: self.instructions,
             access_key,
+            log_file: self.log_file,
+            log_level: self.log_level.unwrap_or(DEFAULT_LOG_LEVEL),
+            dependency_log_level: self
+                .dependency_log_level
+                .unwrap_or(DEFAULT_DEPENDENCY_LOG_LEVEL),
         })
     }
 }
@@ -165,6 +187,10 @@ pub struct ServeSettings {
     /// A file of instructions for agents, in place of the built-in ones.
     pub instructions: Option<PathBuf>,
     pub access_key: AccessKey,
+    /// The log file, if the log goes to one instead of stdout.
+    pub log_file: Option<PathBuf>,
+    pub log_level: LogLevel,
+    pub dependency_log_level: LogLevel,
 }
 
 #[cfg(test)]
@@ -189,6 +215,9 @@ mod tests {
                 allow_hosts: vec![],
                 instructions: None,
                 access_key: AccessKey::Default(PathBuf::from("default-key")),
+                log_file: None,
+                log_level: LogLevel::Info,
+                dependency_log_level: LogLevel::Warn,
             }
         );
         assert_eq!(settings.bind.to_string(), "127.0.0.1:7420");

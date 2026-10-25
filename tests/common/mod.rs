@@ -7,7 +7,7 @@
 use kashkeshet::admission::Admission;
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::{Clock, SystemClock};
-use kashkeshet::config::Limits;
+use kashkeshet::config::{Limits, LogLevel};
 use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
@@ -40,6 +40,9 @@ pub fn test_config() -> AppConfig {
         allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
         instructions: "test instructions: call register".into(),
         config_file: None,
+        log_file: None,
+        log_level: LogLevel::Info,
+        dependency_log_level: LogLevel::Warn,
     }
 }
 

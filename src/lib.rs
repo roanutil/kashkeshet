@@ -10,6 +10,7 @@ pub mod clock;
 pub mod config;
 pub mod diagnostics;
 pub mod hosts;
+pub mod logs;
 pub mod names;
 pub mod provenance;
 pub mod service;
