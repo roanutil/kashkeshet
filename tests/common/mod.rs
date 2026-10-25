@@ -39,6 +39,7 @@ pub fn test_config() -> AppConfig {
         allowed_origins: vec!["http://localhost:6274".into()],
         allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
         instructions: "test instructions: call register".into(),
+        config_file: None,
     }
 }
 

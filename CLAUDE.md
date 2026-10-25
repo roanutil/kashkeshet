@@ -19,6 +19,7 @@ require reading another's internals.
 | `mcp.rs` | Tool definitions; parse parameters, call `rules`, call `format` | Touch storage or decide permissions |
 | `web/` | The human's read-only pages, and logging in to them | Change anything except sign-in sessions, through `admission` |
 | `hosts.rs` | Which `Host` names the server answers to, for `/mcp` and the web page | Touch storage, rules, or HTTP library types |
+| `settings/` | Gathering a server's settings from flags, the config file and defaults; default paths | Read files or environment variables itself; check limits (that is `config.rs`) |
 | `config.rs` | Every limit, fixed setting and default, and the startup checks | Hold logic beyond checking settings |
 | `provenance/` | What produced a server run | |
 | `app.rs` | Assembling the parts | Hold business logic |
@@ -54,7 +55,8 @@ in our own types inside the part that uses the library: `events::Subscription`
 over tokio's broadcast receiver, `shutdown::Shutdown` over tokio-util's
 cancellation token, `store` over rusqlite. rmcp stays in `mcp.rs` and
 `app.rs`; askama stays in `web/`; axum stays in `web/`, `app.rs`, and
-`main.rs`, which serves the router.
+`main.rs`, which serves the router; toml stays in `settings/`; clap stays in
+`main.rs`.
 
 **Settings and defaults.** Every limit or fixed value lives in `config.rs`,
 with its default written out. Settings agents or operators can change are

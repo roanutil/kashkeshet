@@ -49,6 +49,7 @@ impl ServerRun {
                 &config.limits,
                 &config.allowed_origins,
                 config.allowed_hosts.extra(),
+                config.config_file.as_deref(),
                 config.admission.key_source(),
             ),
             instructions_sha256: sha256_hex(&config.instructions),
@@ -71,12 +72,14 @@ pub async fn record(db: &Db, run: &ServerRun, started_at: DateTime<Utc>) -> Stor
 
 /// The settings as text that stays the same for the same settings: one
 /// `name=value` line each, in a fixed order, with times in milliseconds and
-/// origins and added host names sorted. When an access key is set, the file it came from is the
-/// last line; the key itself is never recorded.
+/// origins and added host names sorted. Then come the config file the
+/// settings were read from, if any, and, when an access key is set, the file
+/// it came from as the last line; the key itself is never recorded.
 pub fn settings_text(
     limits: &Limits,
     allowed_origins: &[String],
     allowed_hosts: &[String],
+    config_file: Option<&str>,
     access_key_file: Option<&str>,
 ) -> String {
     // Listing every field, with no `..`, makes a new limit fail to compile
@@ -122,6 +125,7 @@ pub fn settings_text(
     let mut hosts = allowed_hosts.to_vec();
     hosts.sort();
     lines.extend(hosts.iter().map(|h| format!("allowed_host={h}")));
+    lines.extend(config_file.map(|f| format!("config_file={f}")));
     lines.extend(access_key_file.map(|f| format!("access_key_file={f}")));
     lines.join("\n")
 }
@@ -146,6 +150,7 @@ mod tests {
             allowed_origins: origins.iter().map(|o| o.to_string()).collect(),
             allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
             instructions: instructions.into(),
+            config_file: None,
         }
     }
 
@@ -161,7 +166,7 @@ mod tests {
         assert_eq!(run.commit, "abc123");
         assert_eq!(
             run.settings,
-            settings_text(&Limits::DEFAULT, &[], &[], None)
+            settings_text(&Limits::DEFAULT, &[], &[], None, None)
         );
         // SHA-256 of the empty string.
         assert_eq!(
@@ -177,6 +182,7 @@ mod tests {
                 &Limits::DEFAULT,
                 &["http://localhost:6274".into()],
                 &["host.docker.internal".into()],
+                None,
                 None
             ),
             "max_response_bytes=8192\n\
@@ -205,14 +211,30 @@ mod tests {
             &["http://b".into(), "http://a".into()],
             &[],
             None,
+            None,
         );
         let b = settings_text(
             &Limits::DEFAULT,
             &["http://a".into(), "http://b".into()],
             &[],
             None,
+            None,
         );
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn a_run_records_the_config_file_before_the_key_file() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let mut from_file = config(Limits::DEFAULT, &[], "");
+        from_file.config_file = Some("/home/sam/.config/kkt/config.toml".into());
+        from_file.admission = Admission::SharedKey(SharedKey::new(key, "/keys/kkt").expect("key"));
+        let run = ServerRun::new(TEST_BUILD, &from_file);
+        assert!(run.settings.ends_with(
+            "\nconfig_file=/home/sam/.config/kkt/config.toml\naccess_key_file=/keys/kkt"
+        ));
+        let plain = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
+        assert!(!plain.settings.contains("config_file"));
     }
 
     #[test]
@@ -222,11 +244,13 @@ mod tests {
             &[],
             &["b.example".into(), "a.example".into()],
             None,
+            None,
         );
         let b = settings_text(
             &Limits::DEFAULT,
             &[],
             &["a.example".into(), "b.example".into()],
+            None,
             None,
         );
         assert_eq!(a, b);
