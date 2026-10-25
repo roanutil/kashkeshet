@@ -15,6 +15,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0002_server_runs.sql"),
     include_str!("../../migrations/0003_revoked_agents.sql"),
     include_str!("../../migrations/0004_identity_recovery.sql"),
+    include_str!("../../migrations/0005_messages_by_time.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -628,21 +629,19 @@ impl Reads for Sql<'_> {
     }
 
     fn message_times_since(&self, since: &str) -> StoreResult<Vec<MessageTimeRecord>> {
-        let mut stmt = self
-            .0
-            .prepare_cached("SELECT channel_id, created_at FROM messages ORDER BY id DESC")?;
-        let mut rows = stmt.query([])?;
-        let mut times = Vec::new();
-        while let Some(row) = rows.next()? {
-            let created_at: String = row.get(1)?;
-            if created_at.as_str() < since {
-                break;
-            }
-            times.push(MessageTimeRecord {
-                channel_id: row.get(0)?,
-                created_at,
-            });
-        }
+        // A range on the messages_by_time index: it reads only the answer,
+        // and does not assume times follow message IDs.
+        let mut stmt = self.0.prepare_cached(
+            "SELECT channel_id, created_at FROM messages WHERE created_at >= ? ORDER BY created_at",
+        )?;
+        let times = stmt
+            .query_map([since], |r| {
+                Ok(MessageTimeRecord {
+                    channel_id: r.get(0)?,
+                    created_at: r.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(times)
     }
 

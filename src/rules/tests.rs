@@ -536,6 +536,38 @@ async fn recent_counts_are_exact_for_every_channel() {
     assert_eq!(recent(&busy), 1005);
 }
 
+/// A message stored later but stamped earlier (the clock moved back) does
+/// not hide the recent ones.
+#[tokio::test]
+async fn recent_counts_do_not_assume_times_follow_message_order() {
+    let limits = Limits {
+        sends_per_minute: 100_000,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    let busy = w.channel(&a, "busy", true, &[]).await;
+    for i in 0..1001 {
+        w.rules
+            .send(&a, busy.clone(), format!("m{i}"))
+            .await
+            .unwrap();
+    }
+    w.clock.advance(chrono::Duration::hours(-1));
+    w.rules
+        .send(&a, busy.clone(), "from before".into())
+        .await
+        .unwrap();
+    w.clock.advance(chrono::Duration::hours(1));
+    let o = w.rules.overview().await.unwrap();
+    let row = o.channels.iter().find(|c| c.info.id == busy).unwrap();
+    assert_eq!(
+        row.recent_activity.iter().map(|a| a.count).sum::<i64>(),
+        1001
+    );
+    assert_eq!(row.message_count, 1002);
+}
+
 // ---- Closed channels do not exist to outsiders ----
 
 #[tokio::test]

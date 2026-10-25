@@ -319,10 +319,8 @@ pub trait Reads {
     fn memberships(&self) -> StoreResult<Vec<MembershipRecord>>;
 
     /// The channel and time of every message sent at or after `since` (a
-    /// stored time), newest first. Messages are numbered in the order they
-    /// are stored, so this reads back from the newest and stops at the first
-    /// older one: it costs as many rows as the answer, however large the
-    /// table.
+    /// stored time), oldest first. It reads only those messages, through an
+    /// index on the time, however large the table.
     fn message_times_since(&self, since: &str) -> StoreResult<Vec<MessageTimeRecord>>;
 
     // ---- server runs ----

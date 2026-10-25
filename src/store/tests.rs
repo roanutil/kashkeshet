@@ -476,13 +476,17 @@ async fn memberships_list_every_agent_in_every_channel() {
 }
 
 #[tokio::test]
-async fn message_times_since_reads_back_only_as_far_as_it_must() {
+async fn message_times_since_finds_every_message_in_the_window() {
     let db = world(&[("ch_open", "a", "old one"), ("ch_closed", "a", "old two")]).await;
     db.write(|w| {
         for (channel_id, at) in [
             ("ch_open", "2026-10-23T14:10:00Z"),
             ("ch_closed", "2026-10-23T14:11:00Z"),
             ("ch_open", "2026-10-23T14:12:00Z"),
+            // Stored after the others but stamped earlier, as when the clock
+            // was read before the write got its turn, or the clock moved
+            // back. It must not hide the rest.
+            ("ch_closed", "2026-10-23T13:00:00Z"),
         ] {
             w.insert_message(&NewMessageRecord {
                 channel_id: channel_id.into(),
@@ -507,9 +511,9 @@ async fn message_times_since_reads_back_only_as_far_as_it_must() {
     assert_eq!(
         pairs,
         [
-            ("ch_open", "2026-10-23T14:12:00Z"),
-            ("ch_closed", "2026-10-23T14:11:00Z"),
             ("ch_open", "2026-10-23T14:10:00Z"),
+            ("ch_closed", "2026-10-23T14:11:00Z"),
+            ("ch_open", "2026-10-23T14:12:00Z"),
         ]
     );
     let none = db
