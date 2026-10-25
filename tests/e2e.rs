@@ -334,11 +334,17 @@ async fn web_pages_show_everything() {
         "{index}"
     );
 
+    // The server run is listed, with the settings it ran with.
+    assert!(index.contains("Server runs (1)"), "{index}");
+    assert!(index.contains("default_limit=20"), "{index}");
+
     let (status, page) = get(format!("/channels/{ch}")).await;
     assert!(status.is_success());
     assert!(page.contains("not bold"));
-    let (status, _) = get(format!("/agents/{name}")).await;
+    assert!(page.contains("· run 1"), "{page}");
+    let (status, page) = get(format!("/agents/{name}")).await;
     assert!(status.is_success());
+    assert!(page.contains("created in server run 1"), "{page}");
     let (status, _) = get("/channels/ch_missing".into()).await;
     assert_eq!(status, reqwest::StatusCode::NOT_FOUND);
 }

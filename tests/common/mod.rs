@@ -2,9 +2,10 @@
 //! an MCP client to it.
 
 use kashkeshet::app::{self, AppConfig, Parts};
-use kashkeshet::clock::SystemClock;
+use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::Limits;
 use kashkeshet::names::OsEntropy;
+use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::shutdown::Shutdown;
 use kashkeshet::store::Db;
 use rmcp::model::ProtocolVersion;
@@ -40,12 +41,13 @@ pub async fn start() -> Server {
 
 pub async fn start_with(config: AppConfig) -> Server {
     let shutdown = Shutdown::new();
-    let parts = Parts::new(
-        Db::open_in_memory().expect("db"),
-        Arc::new(SystemClock),
-        Arc::new(OsEntropy),
-        &config.limits,
-    );
+    let db = Db::open_in_memory().expect("db");
+    let run = ServerRun::new(Build::CURRENT, &config);
+    let clock = Arc::new(SystemClock);
+    let run_id = provenance::record(&db, &run, clock.now())
+        .await
+        .expect("record run");
+    let parts = Parts::new(db, clock, Arc::new(OsEntropy), &config.limits, run_id);
     let router = app::build(parts, config, shutdown.child());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

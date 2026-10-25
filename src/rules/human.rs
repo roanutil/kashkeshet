@@ -25,10 +25,16 @@ impl Rules {
                     .map(Message::from)
                     .collect();
                 recent.reverse();
+                let runs = store
+                    .server_runs()?
+                    .into_iter()
+                    .map(ServerRunInfo::from)
+                    .collect();
                 Ok(Overview {
                     channels,
                     agents,
                     recent,
+                    runs,
                 })
             })
             .await
@@ -96,6 +102,32 @@ pub struct Overview {
     pub channels: Vec<ChannelInfo>,
     pub agents: Vec<AgentInfo>,
     pub recent: Vec<Message>,
+    /// Every server run, newest first.
+    pub runs: Vec<ServerRunInfo>,
+}
+
+/// One start of the server and what produced it.
+#[derive(Clone, Debug)]
+pub struct ServerRunInfo {
+    pub id: i64,
+    pub started_at: String,
+    pub version: String,
+    pub git_commit: String,
+    pub settings: String,
+    pub instructions_sha256: String,
+}
+
+impl From<ServerRunRecord> for ServerRunInfo {
+    fn from(r: ServerRunRecord) -> ServerRunInfo {
+        ServerRunInfo {
+            id: r.id,
+            started_at: r.started_at,
+            version: r.version,
+            git_commit: r.git_commit,
+            settings: r.settings,
+            instructions_sha256: r.instructions_sha256,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

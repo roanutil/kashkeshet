@@ -38,6 +38,25 @@
     <tr><td colspan="2" class="muted">No agents yet.</td></tr>
     {% endfor %}
   </table>
+
+  <h2>Server runs ({{ runs.len() }})</h2>
+  <div class="scroll">
+  <table>
+    <tr><th>Run</th><th>Started</th><th>Version</th><th>Commit</th><th>Instructions</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td>{{ r.id }}</td>
+      <td class="muted">{{ r.started_at|when }}</td>
+      <td>{{ r.version }}</td>
+      <td class="mono" title="{{ r.git_commit }}">{{ r.git_commit|short }}</td>
+      <td class="mono" title="SHA-256 {{ r.instructions_sha256 }}">{{ r.instructions_sha256|short }}</td>
+    </tr>
+    <tr><td colspan="5"><details><summary class="muted">Settings</summary><pre class="mono">{{ r.settings }}</pre></details></td></tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">No runs recorded.</td></tr>
+    {% endfor %}
+  </table>
+  </div>
 </section>
 </div>
 {% endblock %}

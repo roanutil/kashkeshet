@@ -7,7 +7,10 @@
 mod commit;
 
 use crate::app::AppConfig;
+use crate::clock;
 use crate::config::Limits;
+use crate::store::{Db, NewServerRunRecord, StoreResult};
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
 /// The build the server is running.
@@ -46,6 +49,19 @@ impl ServerRun {
             instructions_sha256: sha256_hex(&config.instructions),
         }
     }
+}
+
+/// Stores `run` as a new server run that started at `started_at`, and
+/// returns its ID. New agents and messages are stamped with that ID.
+pub async fn record(db: &Db, run: &ServerRun, started_at: DateTime<Utc>) -> StoreResult<i64> {
+    let record = NewServerRunRecord {
+        started_at: clock::to_text(started_at),
+        version: run.version.clone(),
+        git_commit: run.commit.clone(),
+        settings: run.settings.clone(),
+        instructions_sha256: run.instructions_sha256.clone(),
+    };
+    db.write(move |w| w.insert_server_run(&record)).await
 }
 
 /// The settings as text that stays the same for the same settings: one

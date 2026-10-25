@@ -3,7 +3,7 @@
 
 use crate::config::WEB_KEEP_ALIVE;
 use crate::events::Notice;
-use crate::rules::{AgentInfo, ChannelInfo, Code, Message, RuleError, Rules};
+use crate::rules::{AgentInfo, ChannelInfo, Code, Message, RuleError, Rules, ServerRunInfo};
 use askama::Template;
 use axum::Router;
 use axum::extract::{Path, Query, State};
@@ -30,6 +30,7 @@ struct IndexPage {
     channels: Vec<ChannelInfo>,
     agents: Vec<AgentInfo>,
     recent: Vec<Message>,
+    runs: Vec<ServerRunInfo>,
 }
 
 #[derive(Template)]
@@ -69,6 +70,7 @@ async fn index(State(rules): State<Rules>) -> Response {
             channels: o.channels,
             agents: o.agents,
             recent: o.recent,
+            runs: o.runs,
         }),
         Err(e) => error_page(e),
     }
@@ -128,6 +130,21 @@ mod filters {
     pub fn when<T: std::fmt::Display>(stored: T, _: &dyn askama::Values) -> askama::Result<String> {
         Ok(stored.to_string().replace('T', " ").replace('Z', ""))
     }
+
+    /// The first 12 characters of a hash, as git shows a short commit. Any
+    /// `-dirty` mark is kept.
+    #[askama::filter_fn]
+    pub fn short<T: std::fmt::Display>(hash: T, _: &dyn askama::Values) -> askama::Result<String> {
+        let text = hash.to_string();
+        let (hash, dirty) = match text.strip_suffix("-dirty") {
+            Some(h) => (h, "-dirty"),
+            None => (text.as_str(), ""),
+        };
+        Ok(format!(
+            "{}{dirty}",
+            hash.chars().take(12).collect::<String>()
+        ))
+    }
 }
 
 fn page(t: impl Template) -> Response {
@@ -159,5 +176,29 @@ fn error_page(e: RuleError) -> Response {
             tracing::error!(error = %render_error, "could not render error page");
             (status, "error").into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Askama finds custom filters through a `filters` module in scope.
+    use super::filters;
+    use askama::Template;
+
+    #[derive(Template)]
+    #[template(source = "{{ h|short }}", ext = "txt")]
+    struct Short<'a> {
+        h: &'a str,
+    }
+
+    fn render(h: &str) -> String {
+        Short { h }.render().expect("render")
+    }
+
+    #[test]
+    fn short_keeps_twelve_characters_and_the_dirty_mark() {
+        assert_eq!(render("0123456789abcdef0123"), "0123456789ab");
+        assert_eq!(render("0123456789abcdef0123-dirty"), "0123456789ab-dirty");
+        assert_eq!(render("unknown"), "unknown");
     }
 }

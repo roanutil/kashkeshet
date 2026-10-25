@@ -46,11 +46,13 @@ impl Rules {
                 }
                 charged_in_tx.store(true, Ordering::SeqCst);
                 let created_at = clock::to_text(now);
+                let run_id = rules.inner.deps.run_id;
                 let id = store.insert_message(&NewMessageRecord {
                     channel_id: channel.id.clone(),
                     agent: me.clone(),
                     body: body.clone(),
                     created_at: created_at.clone(),
+                    run_id,
                 })?;
                 Ok(Message {
                     id,
@@ -59,6 +61,7 @@ impl Rules {
                     agent: me,
                     body,
                     created_at,
+                    run_id: Some(run_id),
                 })
             })
             .await;
@@ -78,6 +81,7 @@ impl Rules {
             agent: message.agent.clone(),
             body: message.body.clone(),
             created_at: message.created_at.clone(),
+            run_id: message.run_id,
         });
         Ok(message)
     }
@@ -266,6 +270,8 @@ pub struct Message {
     pub agent: String,
     pub body: String,
     pub created_at: String,
+    /// The server run that stored the message, if it was recorded.
+    pub run_id: Option<i64>,
 }
 
 /// Where to read from in a channel.
@@ -346,6 +352,7 @@ impl From<MessageRecord> for Message {
             agent: m.agent,
             body: m.body,
             created_at: m.created_at,
+            run_id: m.run_id,
         }
     }
 }

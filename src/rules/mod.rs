@@ -33,7 +33,7 @@ mod tests;
 pub use agents::{Agent, AgentInfo, Registration};
 pub use channels::{ChannelInfo, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
-pub use human::{AgentView, ChannelView, Overview};
+pub use human::{AgentView, ChannelView, Overview, ServerRunInfo};
 pub use messages::{
     ActivityRow, Message, MessagePage, Position, ReadQuery, SearchHit, SearchQuery, WaitQuery,
     WaitResult,
@@ -47,7 +47,7 @@ use crate::names::{self, Entropy};
 use crate::store::{
     ActivityRecord, AgentRecord, ChannelFacts, ChannelFilter, Db, MessageRange, MessageRecord,
     NewAgentRecord, NewChannelRecord, NewMessageRecord, NewerFilter, Reads, SearchFilter,
-    SearchHitRecord,
+    SearchHitRecord, ServerRunRecord,
 };
 use access::{Decision, Need};
 use serde::Serialize;
@@ -70,6 +70,9 @@ pub struct Deps {
     pub entropy: Arc<dyn Entropy>,
     /// Counts each agent's sends against `limits.sends_per_minute`.
     pub sends: SendLimiter,
+    /// This server run, from `provenance::record`. New agents and messages
+    /// are stamped with it.
+    pub run_id: i64,
     pub limits: Limits,
 }
 

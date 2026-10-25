@@ -1,4 +1,4 @@
 <li>
-  <div class="meta">{{ m.id }} · {{ m.created_at|when }} · <a href="/agents/{{ m.agent|urlencode }}">{{ m.agent }}</a>{% if show_channel %} in <a href="/channels/{{ m.channel_id|urlencode }}">#{{ m.channel_name }}</a>{% endif %}</div>
+  <div class="meta">{{ m.id }} · {{ m.created_at|when }} · <a href="/agents/{{ m.agent|urlencode }}">{{ m.agent }}</a>{% if show_channel %} in <a href="/channels/{{ m.channel_id|urlencode }}">#{{ m.channel_name }}</a>{% endif %}{% if let Some(r) = m.run_id %} · run {{ r }}{% endif %}</div>
   <div class="body">{{ m.body }}</div>
 </li>

@@ -6,6 +6,16 @@ use super::*;
 
 const T: &str = "2026-10-23T14:00:00Z";
 
+fn run(version: &str) -> NewServerRunRecord {
+    NewServerRunRecord {
+        started_at: T.into(),
+        version: version.into(),
+        git_commit: "abc123".into(),
+        settings: "default_limit=20".into(),
+        instructions_sha256: "00".into(),
+    }
+}
+
 /// Agents `a`, `b` and `c`; an open channel `ch_open` ("beta", purpose
 /// "parser work") with `a` and `b`; a closed channel `ch_closed` ("alpha")
 /// with `a` only; and one message per (channel, agent) pair listed.
@@ -13,12 +23,14 @@ async fn world(messages: &[(&'static str, &'static str, &'static str)]) -> Db {
     let db = Db::open_in_memory().expect("db");
     let messages = messages.to_vec();
     db.write(move |w| {
+        let run_id = w.insert_server_run(&run("1.0.0"))?;
         for name in ["a", "b", "c"] {
             w.insert_agent(&NewAgentRecord {
                 name: name.into(),
                 token_hash: name.as_bytes().to_vec(),
                 created_at: T.into(),
                 last_seen: None,
+                run_id,
             })?;
         }
         for (id, name, purpose, open) in [
@@ -43,6 +55,7 @@ async fn world(messages: &[(&'static str, &'static str, &'static str)]) -> Db {
                 agent: agent.into(),
                 body: body.into(),
                 created_at: T.into(),
+                run_id,
             })?;
         }
         Ok::<_, StoreError>(())
@@ -96,11 +109,13 @@ async fn file_database_reopens_without_rerunning_migrations() {
 
     let db = Db::open(&path).expect("open");
     db.write(|w| {
+        let run_id = w.insert_server_run(&run("1.0.0"))?;
         w.insert_agent(&NewAgentRecord {
             name: "a".into(),
             token_hash: vec![0],
             created_at: T.into(),
             last_seen: None,
+            run_id,
         })
     })
     .await
@@ -222,4 +237,28 @@ async fn newer_messages_cover_only_my_channels_and_the_ones_listed() {
     // `b` is not in the closed channel, so message 2 is not theirs to see.
     let (messages, _) = newer("b", None).await;
     assert_eq!(messages.iter().map(|m| m.id).collect::<Vec<_>>(), [3]);
+}
+
+#[tokio::test]
+async fn runs_are_listed_newest_first_and_stamp_what_they_create() {
+    let db = world(&[("ch_open", "a", "hello")]).await;
+    let second = db
+        .write(|w| w.insert_server_run(&run("2.0.0")))
+        .await
+        .expect("second run");
+    let runs = db.read(|r| r.server_runs()).await.expect("runs");
+    assert_eq!(
+        runs.iter().map(|r| r.version.as_str()).collect::<Vec<_>>(),
+        ["2.0.0", "1.0.0"]
+    );
+    assert_eq!(runs[0].id, second);
+    let first = runs[1].id;
+    let agent = db.read(|r| r.agent("a")).await.expect("agent").expect("a");
+    assert_eq!(agent.run_id, Some(first));
+    let message = db
+        .read(|r| r.message(1))
+        .await
+        .expect("message")
+        .expect("1");
+    assert_eq!(message.run_id, Some(first));
 }

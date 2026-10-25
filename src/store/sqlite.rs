@@ -158,17 +158,18 @@ fn migrate(conn: &mut Connection) -> StoreResult<()> {
 /// [`Db::write`] the connection is a transaction.
 struct Sql<'a>(&'a Connection);
 
-const AGENT_COLUMNS: &str = "name, created_at, last_seen";
+const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id";
 
 fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
     Ok(AgentRecord {
         name: r.get(0)?,
         created_at: r.get(1)?,
         last_seen: r.get(2)?,
+        run_id: r.get(3)?,
     })
 }
 
-const MESSAGE_COLUMNS: &str = "m.id, m.channel_id, c.name, m.agent, m.body, m.created_at";
+const MESSAGE_COLUMNS: &str = "m.id, m.channel_id, c.name, m.agent, m.body, m.created_at, m.run_id";
 
 fn message_from_row(r: &rusqlite::Row) -> rusqlite::Result<MessageRecord> {
     Ok(MessageRecord {
@@ -178,6 +179,7 @@ fn message_from_row(r: &rusqlite::Row) -> rusqlite::Result<MessageRecord> {
         agent: r.get(3)?,
         body: r.get(4)?,
         created_at: r.get(5)?,
+        run_id: r.get(6)?,
     })
 }
 
@@ -561,17 +563,39 @@ impl Reads for Sql<'_> {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+
+    fn server_runs(&self) -> StoreResult<Vec<ServerRunRecord>> {
+        let mut stmt = self.0.prepare_cached(
+            "SELECT id, started_at, version, git_commit, settings, instructions_sha256
+             FROM server_runs ORDER BY id DESC",
+        )?;
+        let runs = stmt
+            .query_map([], |r| {
+                Ok(ServerRunRecord {
+                    id: r.get(0)?,
+                    started_at: r.get(1)?,
+                    version: r.get(2)?,
+                    git_commit: r.get(3)?,
+                    settings: r.get(4)?,
+                    instructions_sha256: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(runs)
+    }
 }
 
 impl Writes for Sql<'_> {
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()> {
         self.0.execute(
-            "INSERT INTO agents (name, token_hash, created_at, last_seen) VALUES (?, ?, ?, ?)",
+            "INSERT INTO agents (name, token_hash, created_at, last_seen, run_id)
+             VALUES (?, ?, ?, ?, ?)",
             rusqlite::params![
                 agent.name,
                 agent.token_hash,
                 agent.created_at,
-                agent.last_seen
+                agent.last_seen,
+                agent.run_id
             ],
         )?;
         Ok(())
@@ -625,12 +649,29 @@ impl Writes for Sql<'_> {
 
     fn insert_message(&self, message: &NewMessageRecord) -> StoreResult<i64> {
         self.0.execute(
-            "INSERT INTO messages (channel_id, agent, body, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO messages (channel_id, agent, body, created_at, run_id)
+             VALUES (?, ?, ?, ?, ?)",
+            rusqlite::params![
+                message.channel_id,
+                message.agent,
+                message.body,
+                message.created_at,
+                message.run_id
+            ],
+        )?;
+        Ok(self.0.last_insert_rowid())
+    }
+
+    fn insert_server_run(&self, run: &NewServerRunRecord) -> StoreResult<i64> {
+        self.0.execute(
+            "INSERT INTO server_runs (started_at, version, git_commit, settings, instructions_sha256)
+             VALUES (?, ?, ?, ?, ?)",
             [
-                &message.channel_id,
-                &message.agent,
-                &message.body,
-                &message.created_at,
+                &run.started_at,
+                &run.version,
+                &run.git_commit,
+                &run.settings,
+                &run.instructions_sha256,
             ],
         )?;
         Ok(self.0.last_insert_rowid())

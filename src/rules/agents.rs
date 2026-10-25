@@ -10,6 +10,7 @@ impl Rules {
         let token = auth::token(entropy.as_ref());
         let hash = auth::hash_token(&token);
         let now = self.now_text();
+        let run_id = self.inner.deps.run_id;
         let name = self
             .db()
             .write(move |store| {
@@ -19,6 +20,7 @@ impl Rules {
                     token_hash: hash,
                     created_at: now.clone(),
                     last_seen: Some(now),
+                    run_id,
                 })?;
                 Ok::<_, RuleError>(name)
             })
@@ -87,6 +89,8 @@ pub struct AgentInfo {
     pub name: String,
     pub created_at: String,
     pub last_seen: Option<String>,
+    /// The server run that created the agent, if it was recorded.
+    pub run_id: Option<i64>,
 }
 
 impl From<AgentRecord> for AgentInfo {
@@ -95,6 +99,7 @@ impl From<AgentRecord> for AgentInfo {
             name: a.name,
             created_at: a.created_at,
             last_seen: a.last_seen,
+            run_id: a.run_id,
         }
     }
 }

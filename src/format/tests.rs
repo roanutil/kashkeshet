@@ -20,6 +20,7 @@ fn msg(id: i64, body: &str) -> Message {
         agent: "amber-falcon".into(),
         body: body.into(),
         created_at: "2026-10-23T14:02:00Z".into(),
+        run_id: None,
     }
 }
 
@@ -97,6 +98,7 @@ fn lists_cut_at_cap_with_cursor() {
                 name: format!("agent-{i:03}"),
                 created_at: "2026-10-23T14:00:00Z".into(),
                 last_seen: None,
+                run_id: None,
             })
             .collect(),
         next_cursor: None,

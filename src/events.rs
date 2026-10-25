@@ -20,6 +20,8 @@ pub struct NewMessage {
     pub agent: String,
     pub body: String,
     pub created_at: String,
+    /// The server run that stored the message.
+    pub run_id: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -109,6 +111,7 @@ mod tests {
             agent: "a".into(),
             body: "hi".into(),
             created_at: "2026-10-23T14:00:00Z".into(),
+            run_id: None,
         }
     }
 

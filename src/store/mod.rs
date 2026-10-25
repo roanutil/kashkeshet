@@ -33,6 +33,9 @@ pub struct AgentRecord {
     pub name: String,
     pub created_at: String,
     pub last_seen: Option<String>,
+    /// The server run that created the agent. `None` for agents from before
+    /// runs were recorded.
+    pub run_id: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +44,7 @@ pub struct NewAgentRecord {
     pub token_hash: Vec<u8>,
     pub created_at: String,
     pub last_seen: Option<String>,
+    pub run_id: i64,
 }
 
 /// The facts about a channel that decide who may use it.
@@ -102,6 +106,9 @@ pub struct MessageRecord {
     pub agent: String,
     pub body: String,
     pub created_at: String,
+    /// The server run that stored the message. `None` for messages from
+    /// before runs were recorded.
+    pub run_id: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +117,27 @@ pub struct NewMessageRecord {
     pub agent: String,
     pub body: String,
     pub created_at: String,
+    pub run_id: i64,
+}
+
+/// One start of the server and what produced it. See `crate::provenance`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerRunRecord {
+    pub id: i64,
+    pub started_at: String,
+    pub version: String,
+    pub git_commit: String,
+    pub settings: String,
+    pub instructions_sha256: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewServerRunRecord {
+    pub started_at: String,
+    pub version: String,
+    pub git_commit: String,
+    pub settings: String,
+    pub instructions_sha256: String,
 }
 
 /// Which messages of a channel to return, and in what order.
@@ -248,6 +276,11 @@ pub trait Reads {
     /// For each channel `member` is in with messages above `after_id`: how
     /// many, and the newest ID. The channel with the newest message comes first.
     fn activity(&self, member: &str, after_id: i64) -> StoreResult<Vec<ActivityRecord>>;
+
+    // ---- server runs ----
+
+    /// Every server run, newest first.
+    fn server_runs(&self) -> StoreResult<Vec<ServerRunRecord>>;
 }
 
 /// Changes the rules can make, on top of what they can ask.
@@ -267,4 +300,7 @@ pub trait Writes: Reads {
 
     /// Stores a message and returns its new ID.
     fn insert_message(&self, message: &NewMessageRecord) -> StoreResult<i64>;
+
+    /// Records a server start and returns its new ID.
+    fn insert_server_run(&self, run: &NewServerRunRecord) -> StoreResult<i64>;
 }

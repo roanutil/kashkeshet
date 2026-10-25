@@ -1,9 +1,10 @@
 use clap::Parser;
 use kashkeshet::app::{self, AppConfig, Parts};
-use kashkeshet::clock::SystemClock;
+use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::{self, Limits};
 use kashkeshet::mcp;
 use kashkeshet::names::OsEntropy;
+use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::shutdown::Shutdown;
 use kashkeshet::store::Db;
 use std::net::SocketAddr;
@@ -77,23 +78,26 @@ async fn run(args: Args) -> Result<(), String> {
     };
     let db =
         Db::open(&args.db).map_err(|e| format!("could not open {}: {e}", args.db.display()))?;
+    let config = AppConfig {
+        limits,
+        allowed_origins: args.allow_origins,
+        instructions,
+    };
+    let clock = Arc::new(SystemClock);
+    let run = ServerRun::new(Build::CURRENT, &config);
+    let run_id = provenance::record(&db, &run, clock.now())
+        .await
+        .map_err(|e| format!("could not record this server run: {e}"))?;
     let shutdown = Shutdown::new();
-    let parts = Parts::new(db, Arc::new(SystemClock), Arc::new(OsEntropy), &limits);
-    let router = app::build(
-        parts,
-        AppConfig {
-            limits,
-            allowed_origins: args.allow_origins,
-            instructions,
-        },
-        shutdown.clone(),
-    );
+    let parts = Parts::new(db, clock, Arc::new(OsEntropy), &config.limits, run_id);
+    let router = app::build(parts, config, shutdown.clone());
     let listener = tokio::net::TcpListener::bind(args.bind)
         .await
         .map_err(|e| format!("could not listen on {}: {e}", args.bind))?;
     tracing::info!(
-        "kashkeshet {} listening: web page http://{}/ , MCP http://{}/mcp , database {}",
-        env!("CARGO_PKG_VERSION"),
+        "kashkeshet {} (commit {}, run {run_id}) listening: web page http://{}/ , MCP http://{}/mcp , database {}",
+        run.version,
+        run.commit,
         args.bind,
         args.bind,
         args.db.display()

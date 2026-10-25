@@ -37,12 +37,22 @@ pub struct Parts {
     pub events: Events,
     pub fmt: Formatter,
     pub sends: SendLimiter,
+    /// This server run, from `provenance::record`.
+    pub run_id: i64,
 }
 
 impl Parts {
-    /// The usual parts around `db`, `clock` and `entropy`, sized by `limits`.
-    pub fn new(db: Db, clock: Arc<dyn Clock>, entropy: Arc<dyn Entropy>, limits: &Limits) -> Parts {
+    /// The usual parts around `db`, `clock` and `entropy`, sized by `limits`,
+    /// for the server run `run_id`.
+    pub fn new(
+        db: Db,
+        clock: Arc<dyn Clock>,
+        entropy: Arc<dyn Entropy>,
+        limits: &Limits,
+        run_id: i64,
+    ) -> Parts {
         Parts {
+            run_id,
             db,
             fmt: Formatter::new(limits.max_response_bytes, clock.clone()),
             clock,
@@ -62,6 +72,7 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
         clock: parts.clock,
         entropy: parts.entropy,
         sends: parts.sends,
+        run_id: parts.run_id,
         limits: config.limits,
     });
 
