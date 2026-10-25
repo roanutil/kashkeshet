@@ -39,6 +39,9 @@ pub struct AppConfig {
     /// The config file the settings were read from, if any, for the record
     /// of the server run.
     pub config_file: Option<String>,
+    /// The file the log goes to, if not stdout, for the record of the
+    /// server run.
+    pub log_file: Option<String>,
 }
 
 /// The parts the server is built from. Callers outside the crate supply the

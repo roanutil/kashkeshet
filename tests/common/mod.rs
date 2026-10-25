@@ -40,6 +40,7 @@ pub fn test_config() -> AppConfig {
         allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
         instructions: "test instructions: call register".into(),
         config_file: None,
+        log_file: None,
     }
 }
 

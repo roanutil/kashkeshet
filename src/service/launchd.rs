@@ -1,5 +1,7 @@
 //! A launchd user agent on macOS. The plist starts the server at login and
-//! again only if it exits with a failure; its output goes to a log file.
+//! again only if it exits with a failure. launchd never rotates a log, so
+//! the server writes its own, bounded one (`--log-file`); launchd's own
+//! output file only catches what comes before logging starts, and crashes.
 //! It runs in the user's `gui/<uid>` domain.
 
 use super::{
@@ -7,8 +9,8 @@ use super::{
     plain_text, remove_file, run, run_attached, run_ok, write_file,
 };
 use crate::config::{
-    LAUNCH_AGENTS_DIR, LAUNCHD_LABEL, MACOS_LOG_DIR, MACOS_LOG_FILE_NAME, SERVICE_RESTART_DELAY,
-    SERVICE_STOP_TIMEOUT,
+    LAUNCH_AGENTS_DIR, LAUNCHD_LABEL, MACOS_CRASH_LOG_FILE_NAME, MACOS_LOG_DIR,
+    MACOS_LOG_FILE_NAME, SERVICE_RESTART_DELAY, SERVICE_STOP_TIMEOUT,
 };
 use std::path::{Path, PathBuf};
 
@@ -40,12 +42,23 @@ impl Launchd {
         self.log_dir.join(MACOS_LOG_FILE_NAME)
     }
 
+    fn crash_log_file(&self) -> PathBuf {
+        self.log_dir.join(MACOS_CRASH_LOG_FILE_NAME)
+    }
+
     pub fn render(&self, spec: &Spec) -> Result<String, ServiceError> {
         let mut arguments = format!("    <string>{}</string>\n", xml(path_text(&spec.program)?)?);
-        for arg in &spec.args {
+        // The server's own, bounded log; it goes last, so it wins over a
+        // `log_file` in the config file.
+        let log_file = path_text(&self.log_file())?.to_string();
+        for arg in spec
+            .args
+            .iter()
+            .chain(&["--log-file".to_string(), log_file])
+        {
             arguments.push_str(&format!("    <string>{}</string>\n", xml(arg)?));
         }
-        let log = xml(path_text(&self.log_file())?)?;
+        let crash_log = xml(path_text(&self.crash_log_file())?)?;
         Ok(format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -71,9 +84,9 @@ impl Launchd {
   <key>ExitTimeOut</key>
   <integer>{stop}</integer>
   <key>StandardOutPath</key>
-  <string>{log}</string>
+  <string>{crash_log}</string>
   <key>StandardErrorPath</key>
-  <string>{log}</string>
+  <string>{crash_log}</string>
 </dict>
 </plist>
 "#,

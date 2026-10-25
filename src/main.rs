@@ -3,9 +3,13 @@ use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clients::{self, Client, Setup};
 use kashkeshet::clock::{Clock, SystemClock};
-use kashkeshet::config::{self, DEFAULT_BIND, InvalidSetting, Limits};
+use kashkeshet::config::{
+    self, DEFAULT_BIND, InvalidSetting, LOG_LEVEL_LIBRARIES, LOG_LEVEL_OWN, LOG_OWN_TARGETS,
+    Limits, LogPolicy,
+};
 use kashkeshet::diagnostics;
 use kashkeshet::hosts::AllowedHosts;
+use kashkeshet::logs::RotatingFile;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::service::{DryRun, Manager, OsSystem, Spec};
@@ -16,7 +20,10 @@ use kashkeshet::{Operator, Revoked};
 use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tracing_subscriber::filter::Targets;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// Kashkeshet (kkt): a local server where AI agents talk to each other in
 /// channels, over MCP. Start it with `kkt serve`.
@@ -241,6 +248,11 @@ struct ServeFlags {
     /// Run with no access key: anyone who can reach the server can use it.
     #[arg(long)]
     no_access_key: bool,
+    /// Write the log to this file instead of stdout. It stays under about
+    /// 60 MB: rolled over at 10 MB, five rolled files kept, none older than
+    /// 30 days.
+    #[arg(long)]
+    log_file: Option<PathBuf>,
 }
 
 impl ServeFlags {
@@ -261,45 +273,33 @@ impl ServeFlags {
             instructions: self.instructions,
             access_key_file: self.access_key_file,
             no_access_key: self.no_access_key.then_some(true),
+            log_file: self.log_file,
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    // Color codes only for a terminal: a service's log file or the journal
-    // would show them as raw escape characters.
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_ansi(std::io::stdout().is_terminal())
-        .init();
     let cli = Cli::parse();
     let env = process_env();
-    let result = match cli.command {
-        Command::Serve { config, flags } => serve_from_config(&env, config, flags).await,
-        Command::Key {
-            command: KeyCommand::Create { path, force, show },
-        } => create_key(&env, path, force, show),
-        Command::Key {
-            command: KeyCommand::Header { key_file, json },
-        } => key_header(&env, key_file, json),
-        Command::Agent {
-            command,
-            db,
-            config,
-        } => agent(&env, command, db, config).await,
-        Command::Service { command } => service(&env, command),
-        Command::Connect {
-            client,
-            connection,
-            write,
-        } => connect(&env, &client, connection, write),
-        Command::Doctor { connection } => doctor(&env, connection).await,
+    // `serve` starts logging once its settings say where the log goes.
+    let logging = match &cli.command {
+        Command::Serve { .. } => Ok(()),
+        _ => init_logging(None),
+    };
+    let result = match (logging, cli.command) {
+        (Err(e), _) => Err(e),
+        (Ok(()), command) => run(&env, command).await,
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            tracing::error!("{e}");
+            // An error from before logging started still needs saying.
+            if tracing::dispatcher::has_been_set() || init_logging(None).is_ok() {
+                tracing::error!("{e}");
+            } else {
+                eprintln!("error: {e}");
+            }
             std::process::ExitCode::FAILURE
         }
     }
@@ -429,6 +429,67 @@ async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
     }
 }
 
+/// Runs one command.
+async fn run(env: &Env, command: Command) -> Result<(), String> {
+    match command {
+        Command::Serve { config, flags } => serve_from_config(env, config, flags).await,
+        Command::Key {
+            command: KeyCommand::Create { path, force, show },
+        } => create_key(env, path, force, show),
+        Command::Agent {
+            command,
+            db,
+            config,
+        } => agent(env, command, db, config).await,
+        Command::Service { command } => service(env, command),
+        Command::Key {
+            command: KeyCommand::Header { key_file, json },
+        } => key_header(env, key_file, json),
+        Command::Connect {
+            client,
+            connection,
+            write,
+        } => connect(env, &client, connection, write),
+        Command::Doctor { connection } => doctor(env, connection).await,
+    }
+}
+
+/// Sends the log to stdout, or to `log_file`, kept within
+/// [`LogPolicy::DEFAULT`]. kkt's own code logs at INFO; the libraries it
+/// uses only log warnings and errors.
+fn init_logging(log_file: Option<&Path>) -> Result<(), String> {
+    let filter = LOG_OWN_TARGETS.iter().fold(
+        Targets::new().with_default(LOG_LEVEL_LIBRARIES),
+        |filter, target| filter.with_target(*target, LOG_LEVEL_OWN),
+    );
+    let format = tracing_subscriber::fmt::layer().with_target(false);
+    let started = match log_file {
+        // Color codes only for a terminal: the journal would show them as
+        // raw escape characters.
+        None => tracing_subscriber::registry()
+            .with(format.with_ansi(std::io::stdout().is_terminal()))
+            .with(filter)
+            .try_init(),
+        Some(path) => {
+            let policy = LogPolicy::DEFAULT;
+            policy
+                .check()
+                .map_err(|e| format!("invalid setting: {e}"))?;
+            let file = RotatingFile::open(path, policy, Arc::new(SystemClock)).map_err(|e| {
+                format!(
+                    "invalid setting: log_file could not be opened at {}: {e}",
+                    path.display()
+                )
+            })?;
+            tracing_subscriber::registry()
+                .with(format.with_ansi(false).with_writer(Mutex::new(file)))
+                .with(filter)
+                .try_init()
+        }
+    };
+    started.map_err(|e| format!("could not start logging: {e}"))
+}
+
 /// The environment values that decide default paths.
 fn process_env() -> Env {
     let var = |name: &str| {
@@ -470,7 +531,14 @@ async fn serve_from_config(
     let settings = options
         .resolve(default_db, env.access_key_file())
         .map_err(|e| sources.invalid(e))?;
-    serve(settings, &sources).await
+    let log_file = settings.log_file.clone();
+    init_logging(log_file.as_deref())?;
+    let served = serve(settings, &sources).await;
+    if let (Some(file), Err(e)) = (&log_file, &served) {
+        // Someone at a terminal reads stderr, not the log file.
+        eprintln!("error: {e} (logged in {})", file.display());
+    }
+    served
 }
 
 /// What `kkt serve` reads before applying defaults: the config file, if
@@ -630,6 +698,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         allow_hosts,
         instructions,
         access_key,
+        log_file,
     } = settings;
     config::check_bind(bind).map_err(|e| sources.invalid(e))?;
     limits.check().map_err(|e| sources.invalid(e))?;
@@ -654,6 +723,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         allowed_hosts,
         instructions,
         config_file: sources.file.as_ref().map(|(p, _)| p.display().to_string()),
+        log_file: log_file.map(|p| p.display().to_string()),
     };
     Ok(Checked {
         db_path,

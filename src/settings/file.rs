@@ -48,6 +48,7 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
                 options.access_key_file = Some(value.path("access_key_file", dir, env)?)
             }
             "no_access_key" => options.no_access_key = Some(value.boolean("no_access_key")?),
+            "log_file" => options.log_file = Some(value.path("log_file", dir, env)?),
             _ => {
                 return Err(InvalidSetting::new(
                     "config",
@@ -167,6 +168,7 @@ mod tests {
             instructions = "instructions.md"
             access_key_file = "/keys/kkt"
             no_access_key = false
+            log_file = "~/logs/kkt.log"
             "#,
         )
         .expect("valid file");
@@ -185,6 +187,7 @@ mod tests {
                 instructions: Some(PathBuf::from("/etc/kkt/instructions.md")),
                 access_key_file: Some(PathBuf::from("/keys/kkt")),
                 no_access_key: Some(false),
+                log_file: Some(PathBuf::from("/home/sam/logs/kkt.log")),
             }
         );
     }

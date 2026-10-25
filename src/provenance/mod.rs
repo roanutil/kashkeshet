@@ -8,7 +8,7 @@ mod commit;
 
 use crate::app::AppConfig;
 use crate::clock;
-use crate::config::Limits;
+use crate::config::{Limits, LogPolicy};
 use crate::store::{Db, NewServerRunRecord, StoreResult};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
@@ -45,13 +45,20 @@ impl ServerRun {
         ServerRun {
             version: build.version.to_string(),
             commit: build.commit.to_string(),
-            settings: settings_text(
-                &config.limits,
-                &config.allowed_origins,
-                config.allowed_hosts.extra(),
-                config.config_file.as_deref(),
-                config.admission.key_source(),
-            ),
+            settings: {
+                let mut settings = settings_text(
+                    &config.limits,
+                    &config.allowed_origins,
+                    config.allowed_hosts.extra(),
+                    config.config_file.as_deref(),
+                    config.admission.key_source(),
+                );
+                if let Some(file) = &config.log_file {
+                    settings.push('\n');
+                    settings.push_str(&log_text(file, &LogPolicy::DEFAULT));
+                }
+                settings
+            },
             instructions_sha256: sha256_hex(&config.instructions),
         }
     }
@@ -136,6 +143,24 @@ pub fn settings_text(
     lines.join("\n")
 }
 
+/// The log file and the policy that bounds it, as `name=value` lines.
+pub fn log_text(file: &str, policy: &LogPolicy) -> String {
+    // Listing every field, with no `..`, makes a new one fail to compile
+    // here until it is added to the text.
+    let LogPolicy {
+        max_bytes,
+        rotated_files,
+        max_age,
+    } = policy;
+    [
+        format!("log_file={file}"),
+        format!("log_max_bytes={max_bytes}"),
+        format!("log_rotated_files={rotated_files}"),
+        format!("log_max_age_ms={}", max_age.as_millis()),
+    ]
+    .join("\n")
+}
+
 fn sha256_hex(text: &str) -> String {
     Sha256::digest(text.as_bytes())
         .iter()
@@ -157,6 +182,7 @@ mod tests {
             allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
             instructions: instructions.into(),
             config_file: None,
+            log_file: None,
         }
     }
 
@@ -315,5 +341,24 @@ mod tests {
                 || (hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit())),
             "unexpected commit text {commit:?}"
         );
+    }
+
+    #[test]
+    fn a_run_records_its_log_file_and_how_it_is_bounded() {
+        let mut with_log = config(Limits::DEFAULT, &[], "");
+        with_log.log_file = Some("/logs/kkt.log".into());
+        let run = ServerRun::new(TEST_BUILD, &with_log);
+        assert!(
+            run.settings.ends_with(
+                "\nlog_file=/logs/kkt.log\n\
+                 log_max_bytes=10485760\n\
+                 log_rotated_files=5\n\
+                 log_max_age_ms=2592000000"
+            ),
+            "{}",
+            run.settings
+        );
+        let without = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
+        assert!(!without.settings.contains("log_"));
     }
 }

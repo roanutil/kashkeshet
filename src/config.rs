@@ -3,6 +3,7 @@
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::time::Duration;
+use tracing::level_filters::LevelFilter;
 
 // ---- Fixed settings ----
 //
@@ -169,8 +170,13 @@ pub const LAUNCH_AGENTS_DIR: &str = "Library/LaunchAgents";
 /// Where the service's log goes on macOS, under the home directory. Linux
 /// services log to the journal.
 pub const MACOS_LOG_DIR: &str = "Library/Logs/kashkeshet";
-/// The service's log file on macOS, in [`MACOS_LOG_DIR`].
+/// The service's log file on macOS, in [`MACOS_LOG_DIR`]. The server writes
+/// it itself (`--log-file`), within [`LogPolicy::DEFAULT`].
 pub const MACOS_LOG_FILE_NAME: &str = "kashkeshet.log";
+/// Where launchd sends the service's stdout and stderr on macOS, in
+/// [`MACOS_LOG_DIR`]. Only output from before logging starts, and crashes,
+/// land here.
+pub const MACOS_CRASH_LOG_FILE_NAME: &str = "kashkeshet.crash.log";
 /// The systemd user unit on Linux.
 pub const SYSTEMD_UNIT: &str = "kashkeshet.service";
 /// Where systemd user units live, under `$XDG_CONFIG_HOME`.
@@ -183,6 +189,63 @@ pub const SERVICE_RESTART_DELAY: Duration = Duration::from_secs(5);
 pub const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Log lines `kkt service logs` shows when not told how many.
 pub const DEFAULT_LOG_LINES: usize = 100;
+
+// ---- Logging ----
+
+/// The level logged for kkt's own code.
+pub const LOG_LEVEL_OWN: LevelFilter = LevelFilter::INFO;
+/// The level logged for the libraries kkt uses. Above INFO, because the MCP
+/// library logs several lines for every request.
+pub const LOG_LEVEL_LIBRARIES: LevelFilter = LevelFilter::WARN;
+/// The targets of kkt's own code: the library and the `kkt` binary.
+pub const LOG_OWN_TARGETS: &[&str] = &["kashkeshet", "kkt"];
+/// Smallest allowed [`LogPolicy::max_bytes`].
+pub const MIN_LOG_FILE_BYTES: u64 = 64 * 1024;
+
+/// How a log file the server writes itself (`--log-file`) is kept bounded.
+/// When the file would grow past `max_bytes`, it is renamed `<file>.1`, the
+/// older ones move up to `<file>.<rotated_files>`, and the oldest is
+/// deleted. Rolled files older than `max_age` are deleted too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogPolicy {
+    pub max_bytes: u64,
+    pub rotated_files: usize,
+    pub max_age: Duration,
+}
+
+impl LogPolicy {
+    /// At most about 60 MB: the current file and five rolled ones of 10 MB,
+    /// none rolled more than 30 days ago.
+    pub const DEFAULT: LogPolicy = LogPolicy {
+        max_bytes: 10 * 1024 * 1024,
+        rotated_files: 5,
+        max_age: Duration::from_secs(30 * 24 * 60 * 60),
+    };
+
+    /// Checks that the policy bounds the log. The server refuses to start
+    /// with one that fails.
+    pub fn check(&self) -> Result<(), InvalidSetting> {
+        if self.max_bytes < MIN_LOG_FILE_BYTES {
+            return Err(InvalidSetting::new(
+                "log_max_bytes",
+                format!("must be at least {MIN_LOG_FILE_BYTES}"),
+            ));
+        }
+        if self.rotated_files == 0 {
+            return Err(InvalidSetting::new(
+                "log_rotated_files",
+                "must be at least 1",
+            ));
+        }
+        if self.max_age < Duration::from_secs(60 * 60) {
+            return Err(InvalidSetting::new(
+                "log_max_age",
+                "must be at least an hour",
+            ));
+        }
+        Ok(())
+    }
+}
 
 // ---- Limits ----
 
@@ -499,6 +562,37 @@ mod tests {
         for bad in ["", short.as_str(), spaced.as_str(), accented.as_str()] {
             let err = check_access_key(bad).expect_err(bad);
             assert_eq!(err.name, "access_key_file");
+        }
+    }
+
+    #[test]
+    fn the_default_log_policy_passes_and_bad_ones_are_named() {
+        assert_eq!(LogPolicy::DEFAULT.check(), Ok(()));
+        let cases = [
+            (
+                LogPolicy {
+                    max_bytes: MIN_LOG_FILE_BYTES - 1,
+                    ..LogPolicy::DEFAULT
+                },
+                "log_max_bytes",
+            ),
+            (
+                LogPolicy {
+                    rotated_files: 0,
+                    ..LogPolicy::DEFAULT
+                },
+                "log_rotated_files",
+            ),
+            (
+                LogPolicy {
+                    max_age: Duration::from_secs(59 * 60),
+                    ..LogPolicy::DEFAULT
+                },
+                "log_max_age",
+            ),
+        ];
+        for (policy, name) in cases {
+            assert_eq!(policy.check().map_err(|e| e.name), Err(name));
         }
     }
 }
