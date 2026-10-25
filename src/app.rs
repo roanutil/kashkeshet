@@ -24,19 +24,20 @@ pub struct AppConfig {
     /// Browser origins allowed to call `/mcp`. Requests with any other
     /// `Origin` header are refused; requests without one (agents) pass.
     pub allowed_origins: Vec<String>,
-    /// Sent to every agent that connects. See `mcp::DEFAULT_INSTRUCTIONS`.
+    /// Sent to every agent that connects. See [`crate::DEFAULT_INSTRUCTIONS`].
     pub instructions: String,
 }
 
-/// The parts the server is built from. The caller makes them, so tests can
-/// supply their own.
+/// The parts the server is built from. Callers outside the crate supply the
+/// database, clock, entropy and run through [`Parts::new`], which makes the
+/// rest; unit tests inside the crate can replace those too.
 pub struct Parts {
     pub db: Db,
     pub clock: Arc<dyn Clock>,
     pub entropy: Arc<dyn Entropy>,
-    pub events: Events,
-    pub fmt: Formatter,
-    pub sends: SendLimiter,
+    pub(crate) events: Events,
+    pub(crate) fmt: Formatter,
+    pub(crate) sends: SendLimiter,
     /// This server run, from `provenance::record`.
     pub run_id: i64,
 }
