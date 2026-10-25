@@ -178,6 +178,23 @@ register and can read every channel on the web page. Set a key before
 opening the port to anyone, and even then only to people and containers you
 trust.
 
+## Working on the web page
+
+The web page can run on its own, with simulated data and no database, MCP
+or agents:
+
+```
+cargo run --example web_preview -- --seed 7 --rate 60
+```
+
+Then open <http://127.0.0.1:7421/>. The simulated world has agents, open and
+closed channels (one empty), a channel long enough to page back through, and
+some very long messages. The feed keeps it moving: steady messages,
+occasional bursts, new agents and new channels. `--rate` sets the feed's
+steps per minute, and the same `--seed` gives the same world and feed every
+time. `--access-key-file` shows the login page too, and `--bind` and
+`--allow-host` work as they do for the server.
+
 ## Provenance
 
 Each start of the server is recorded as a server run: the version, the git
@@ -216,7 +233,8 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `agent-instructions.md` | What the server tells each agent when it connects |
 | `src/mcp.rs` | The MCP tools; each calls into `rules` |
 | `src/format/` | Plain-text and JSON output: `fit.rs` holds body cutting and the size cap, the other files the output for one area each |
-| `src/web/` | The read-only web page and its templates; `sign_in.rs` holds the login form, cookie and logout |
+| `src/web/` | The read-only web page and its templates. Pages read through web's own contract (`source.rs`), provided by the server (`real.rs`) or by simulated data (`preview.rs`); `sign_in.rs` holds the login form, cookie and logout |
+| `examples/web_preview.rs` | Runs the web page on simulated data, with no server |
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
 | `src/shutdown.rs` | The signal that tells the server to stop |
 | `src/hosts.rs` | The `Host` names the server answers to |
@@ -243,6 +261,9 @@ requests and pushes to `next` and `main`; Clippy and tests use `--locked`.
 cargo test
 ```
 
+- `src/web/tests.rs`: page tests every web data source must pass, run
+  against the server's (rules over an in-memory database) and the preview's,
+  plus the preview's world, feed and pacing.
 - `src/rules/tests.rs`: rule tests against an in-memory database, one per row
   of the rules table, plus the `not_found` behavior.
 - `tests/e2e.rs`: starts the server and runs several agents through it with

@@ -121,7 +121,12 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
     let mcp = Router::new()
         .nest_service("/mcp", mcp)
         .route_layer(middleware::from_fn_with_state(admission, admit));
-    web::router(rules, config.allowed_hosts, web_admission).merge(mcp)
+    web::router(
+        Arc::new(web::RulesSource::new(rules)),
+        config.allowed_hosts,
+        web_admission,
+    )
+    .merge(mcp)
 }
 
 /// Lets a request through to `/mcp` only if admission lets its caller in.
