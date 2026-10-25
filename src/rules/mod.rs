@@ -33,7 +33,7 @@ mod tests;
 pub use agents::{Agent, AgentInfo, Registration};
 pub use channels::{ChannelInfo, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
-pub use human::{AgentView, ChannelView, Overview, ServerRunInfo};
+pub use human::ServerRunInfo;
 pub use messages::{
     ActivityRow, Message, MessagePage, Position, ReadQuery, SearchHit, SearchQuery, WaitQuery,
     WaitResult,
