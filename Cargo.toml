@@ -2,6 +2,9 @@
 name = "kashkeshet"
 version = "0.1.0"
 edition = "2024"
+# Two binaries (kashkeshet and its short name kkt) are built; `cargo run`
+# runs this one.
+default-run = "kashkeshet"
 
 [dependencies]
 askama = "0.16.1"
