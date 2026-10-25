@@ -3,7 +3,6 @@
 pub mod app;
 pub mod clock;
 pub mod config;
-pub mod db;
 pub mod events;
 pub mod format;
 pub mod mcp;
@@ -11,4 +10,5 @@ pub mod names;
 pub mod provenance;
 pub mod rules;
 pub mod shutdown;
+pub mod store;
 pub mod web;

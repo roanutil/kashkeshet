@@ -50,19 +50,14 @@ impl Rules {
             _ => return Err(RuleError::unauthenticated()),
         };
         let hash = hash_token(token);
-        let found: Option<(String, Option<String>)> = self
+        let found = self
             .db()
-            .read(move |conn| {
-                conn.query_row(
-                    "SELECT name, last_seen FROM agents WHERE token_hash = ?",
-                    [&hash],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()
-                .map_err(RuleError::from)
-            })
+            .read(move |store| store.agent_by_token_hash(&hash).map_err(RuleError::from))
             .await?;
-        let Some((name, last_seen)) = found else {
+        let Some(AgentRecord {
+            name, last_seen, ..
+        }) = found
+        else {
             return Err(RuleError::unauthenticated());
         };
 
@@ -77,11 +72,8 @@ impl Rules {
             let who = name.clone();
             let now = clock::to_text(now);
             self.db()
-                .write(move |tx| {
-                    tx.execute(
-                        "UPDATE agents SET last_seen = ? WHERE name = ?",
-                        [&now, &who],
-                    )?;
+                .write(move |store| {
+                    store.set_last_seen(&who, &now)?;
                     Ok::<_, RuleError>(())
                 })
                 .await?;

@@ -1,7 +1,7 @@
 //! Opening a database made by an older version brings it up to date and
 //! keeps its rows.
 
-use kashkeshet::db::Db;
+use kashkeshet::store::Db;
 use rusqlite::{Connection, OptionalExtension};
 use std::path::PathBuf;
 

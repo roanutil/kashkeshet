@@ -12,12 +12,14 @@ impl Rules {
         let now = self.now_text();
         let name = self
             .db()
-            .write(move |tx| {
-                let name = free_name(tx, &base)?;
-                tx.execute(
-                    "INSERT INTO agents (name, token_hash, created_at, last_seen) VALUES (?, ?, ?, ?)",
-                    rusqlite::params![name, hash, now, now],
-                )?;
+            .write(move |store| {
+                let name = free_name(store, &base)?;
+                store.insert_agent(&NewAgentRecord {
+                    name: name.clone(),
+                    token_hash: hash,
+                    created_at: now.clone(),
+                    last_seen: Some(now),
+                })?;
                 Ok::<_, RuleError>(name)
             })
             .await?;
@@ -32,31 +34,13 @@ impl Rules {
         limit: usize,
         cursor: Option<String>,
     ) -> Result<Page<AgentInfo>> {
-        let pattern = query.as_deref().map(like_pattern);
         self.db()
-            .read(move |conn| {
-                let mut stmt = conn.prepare_cached(
-                    "SELECT name, created_at, last_seen FROM agents
-                     WHERE (:pattern IS NULL OR name LIKE :pattern ESCAPE '\\')
-                       AND (:cursor IS NULL OR name > :cursor)
-                     ORDER BY name LIMIT :limit",
-                )?;
-                let mut items = stmt
-                    .query_map(
-                        named_params! {
-                            ":pattern": pattern,
-                            ":cursor": cursor,
-                            ":limit": (limit + 1) as i64,
-                        },
-                        |r| {
-                            Ok(AgentInfo {
-                                name: r.get(0)?,
-                                created_at: r.get(1)?,
-                                last_seen: r.get(2)?,
-                            })
-                        },
-                    )?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
+            .read(move |store| {
+                let mut items: Vec<AgentInfo> = store
+                    .agents(query.as_deref(), cursor.as_deref(), limit + 1)?
+                    .into_iter()
+                    .map(AgentInfo::from)
+                    .collect();
                 let next_cursor = if items.len() > limit {
                     items.truncate(limit);
                     items.last().map(|a| a.name.clone())
@@ -70,13 +54,13 @@ impl Rules {
 }
 
 /// `base` if no agent has it, else the first free numbered form of it.
-fn free_name(conn: &Connection, base: &str) -> Result<String> {
-    if !agent_exists(conn, base)? {
+fn free_name(store: &dyn Reads, base: &str) -> Result<String> {
+    if !agent_exists(store, base)? {
         return Ok(base.to_string());
     }
     for attempt in 1..=MAX_NAME_ATTEMPTS {
         let candidate = names::numbered_name(base, attempt);
-        if !agent_exists(conn, &candidate)? {
+        if !agent_exists(store, &candidate)? {
             return Ok(candidate);
         }
     }
@@ -103,4 +87,14 @@ pub struct AgentInfo {
     pub name: String,
     pub created_at: String,
     pub last_seen: Option<String>,
+}
+
+impl From<AgentRecord> for AgentInfo {
+    fn from(a: AgentRecord) -> AgentInfo {
+        AgentInfo {
+            name: a.name,
+            created_at: a.created_at,
+            last_seen: a.last_seen,
+        }
+    }
 }

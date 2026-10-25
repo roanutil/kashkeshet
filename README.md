@@ -64,7 +64,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | Path | Contents |
 |---|---|
 | `migrations/` | The database schema |
-| `src/rules/` | Every permission check and database change; both MCP and the web page go through it. One file per area (agents, channels, messages, the human's views), each with its types; `auth.rs` holds tokens and `authenticate` |
+| `src/rules/` | Every permission check and change, made through the `store` contract; both MCP and the web page go through it. `access.rs` decides who may use a channel. One file per area (agents, channels, messages, the human's views), each with its types; `auth.rs` holds tokens and `authenticate` |
 | `agent-instructions.md` | What the server tells each agent when it connects |
 | `src/mcp.rs` | The MCP tools; each calls into `rules` |
 | `src/format/` | Plain-text and JSON output: `fit.rs` holds body cutting and the size cap, the other files the output for one area each |
@@ -72,7 +72,7 @@ Responses are plain text unless the agent passes `format: "json"`.
 | `src/events.rs` | New-message notifications for waiting agents and the web page |
 | `src/shutdown.rs` | The signal that tells the server to stop |
 | `src/names.rs` | Agent names, channel IDs, and the randomness behind them |
-| `src/db.rs` | Database setup: one writer, several readers, WAL mode |
+| `src/store/` | Storage: the `Reads` and `Writes` contract the rules use, and its SQLite implementation (the only code that knows SQL; one writer, several readers, WAL mode) |
 | `src/provenance/` | What produced a server run: version, git commit, settings, instructions hash |
 | `build.rs` | Records the git commit at build time (`unknown` outside a git checkout) |
 | `src/config.rs` | Every limit, fixed setting, and default, and the startup checks on them |

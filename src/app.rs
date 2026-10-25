@@ -5,13 +5,13 @@ use crate::clock::Clock;
 use crate::config::{
     Limits, MCP_ALLOWED_HOSTS, MCP_MAX_REQUEST_BYTES, MCP_SSE_KEEP_ALIVE, MCP_SSE_RETRY,
 };
-use crate::db::Db;
 use crate::events::Events;
 use crate::format::Formatter;
 use crate::mcp::{self, ChatServer};
 use crate::names::Entropy;
 use crate::rules::{Deps, Rules, SendLimiter};
 use crate::shutdown::Shutdown;
+use crate::store::Db;
 use crate::web;
 use axum::Router;
 use rmcp::transport::streamable_http_server::{

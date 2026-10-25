@@ -1,7 +1,8 @@
 //! Every permission check and database change.
 //!
 //! Both the MCP tools and the web page go through this module. Nothing else
-//! touches the database.
+//! touches the database, and this module reaches it only through the
+//! [`crate::store`] contract.
 //!
 //! The rules:
 //!
@@ -17,6 +18,7 @@
 //! `not_found`. Outside an open channel, calls that need membership answer
 //! `not_member`.
 
+mod access;
 mod agents;
 mod auth;
 mod channels;
@@ -40,10 +42,14 @@ pub use rate::SendLimiter;
 
 use crate::clock::{self, Clock};
 use crate::config::Limits;
-use crate::db::Db;
 use crate::events::Events;
 use crate::names::{self, Entropy};
-use rusqlite::{Connection, OptionalExtension, named_params};
+use crate::store::{
+    ActivityRecord, AgentRecord, ChannelFacts, ChannelFilter, Db, MessageRange, MessageRecord,
+    NewAgentRecord, NewChannelRecord, NewMessageRecord, NewerFilter, Reads, SearchFilter,
+    SearchHitRecord,
+};
+use access::{Decision, Need};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -100,138 +106,60 @@ impl Rules {
     }
 }
 
-/// A channel's stored fields.
-#[derive(Clone, Debug)]
-struct ChannelRow {
-    id: String,
-    name: String,
-    is_open: bool,
-}
-
-fn channel_row(conn: &Connection, id: &str) -> Result<Option<ChannelRow>> {
-    conn.query_row(
-        "SELECT id, name, is_open FROM channels WHERE id = ?",
-        [id],
-        |r| {
-            Ok(ChannelRow {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                is_open: r.get(2)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(RuleError::from)
-}
-
-fn is_member(conn: &Connection, channel_id: &str, agent: &str) -> Result<bool> {
-    let found: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM memberships WHERE channel_id = ? AND agent = ?",
-            [channel_id, agent],
-            |r| r.get(0),
-        )
-        .optional()?;
-    Ok(found.is_some())
-}
-
-/// The channel, if `agent` can see it. A closed channel the agent is not in
-/// is reported as `not_found`, exactly as if it did not exist.
-fn visible_channel(conn: &Connection, agent: &str, id: &str) -> Result<(ChannelRow, bool)> {
-    let row = channel_row(conn, id)?.ok_or_else(|| RuleError::channel_not_found(id))?;
-    let member = is_member(conn, id, agent)?;
-    if !row.is_open && !member {
-        return Err(RuleError::channel_not_found(id));
-    }
-    Ok((row, member))
+/// The channel, if `agent` can see it, and whether `agent` is in it.
+fn visible_channel(store: &dyn Reads, agent: &str, id: &str) -> Result<(ChannelFacts, bool)> {
+    channel_for(store, agent, id, Need::See)
 }
 
 /// The channel, if `agent` is a member of it.
-fn member_channel(conn: &Connection, agent: &str, id: &str) -> Result<ChannelRow> {
-    let (row, member) = visible_channel(conn, agent, id)?;
-    if !member {
-        return Err(RuleError::not_member(id));
-    }
-    Ok(row)
+fn member_channel(store: &dyn Reads, agent: &str, id: &str) -> Result<ChannelFacts> {
+    channel_for(store, agent, id, Need::Membership).map(|(facts, _)| facts)
 }
 
-fn agent_exists(conn: &Connection, name: &str) -> Result<bool> {
-    let found: Option<i64> = conn
-        .query_row("SELECT 1 FROM agents WHERE name = ?", [name], |r| r.get(0))
-        .optional()?;
-    Ok(found.is_some())
+fn channel_for(
+    store: &dyn Reads,
+    agent: &str,
+    id: &str,
+    need: Need,
+) -> Result<(ChannelFacts, bool)> {
+    let facts = store.channel(id)?;
+    let member = match &facts {
+        Some(_) => store.is_member(id, agent)?,
+        None => false,
+    };
+    let open = facts.as_ref().is_some_and(|f| f.open);
+    match (access::decide(facts.is_some(), open, member, need), facts) {
+        (Decision::Allowed, Some(facts)) => Ok((facts, member)),
+        (Decision::NotMember, _) => Err(RuleError::not_member(id)),
+        _ => Err(RuleError::channel_not_found(id)),
+    }
+}
+
+fn agent_exists(store: &dyn Reads, name: &str) -> Result<bool> {
+    Ok(store.agent(name)?.is_some())
 }
 
 /// Full details of one channel, as `viewer` sees it. `viewer` is `None` for the human.
 fn channel_info(
-    conn: &Connection,
+    store: &dyn Reads,
     id: &str,
     viewer: Option<&str>,
     after_id: Option<i64>,
     preview: usize,
 ) -> Result<ChannelInfo> {
-    let mut info = conn.query_row(
-        "SELECT c.id, c.name, c.purpose, c.is_open, c.created_by, c.created_at,
-                (SELECT count(*) FROM memberships m WHERE m.channel_id = c.id),
-                EXISTS (SELECT 1 FROM memberships m WHERE m.channel_id = c.id AND m.agent = :viewer),
-                CASE WHEN :after IS NULL THEN NULL
-                     ELSE (SELECT count(*) FROM messages g WHERE g.channel_id = c.id AND g.id > :after)
-                END
-         FROM channels c WHERE c.id = :id",
-        named_params! { ":id": id, ":viewer": viewer, ":after": after_id },
-        |r| {
-            Ok(ChannelInfo {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                purpose: r.get(2)?,
-                open: r.get(3)?,
-                created_by: r.get(4)?,
-                created_at: r.get(5)?,
-                member_count: r.get(6)?,
-                members_preview: Vec::new(),
-                is_member: r.get(7)?,
-                new_messages: r.get(8)?,
-            })
-        },
-    )?;
-    info.members_preview = member_names(conn, id, preview)?;
-    Ok(info)
-}
-
-/// Up to `limit` member names, in the order they joined.
-fn member_names(conn: &Connection, channel_id: &str, limit: usize) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT agent FROM memberships WHERE channel_id = ? ORDER BY joined_at, agent LIMIT ?",
-    )?;
-    let names = stmt
-        .query_map(rusqlite::params![channel_id, limit as i64], |r| r.get(0))?
-        .collect::<rusqlite::Result<Vec<String>>>()?;
-    Ok(names)
-}
-
-const MESSAGE_COLUMNS: &str = "m.id, m.channel_id, c.name, m.agent, m.body, m.created_at";
-
-fn message_from_row(r: &rusqlite::Row) -> rusqlite::Result<Message> {
-    Ok(Message {
-        id: r.get(0)?,
-        channel_id: r.get(1)?,
-        channel_name: r.get(2)?,
-        agent: r.get(3)?,
-        body: r.get(4)?,
-        created_at: r.get(5)?,
+    let summary = store
+        .channel_summary(id, viewer, after_id)?
+        .ok_or_else(|| RuleError::channel_not_found(id))?;
+    Ok(ChannelInfo {
+        id: summary.id,
+        name: summary.name,
+        purpose: summary.purpose,
+        open: summary.open,
+        created_by: summary.created_by,
+        created_at: summary.created_at,
+        member_count: summary.member_count,
+        members_preview: store.members_by_join(id, preview)?,
+        is_member: summary.viewer_is_member,
+        new_messages: summary.new_messages,
     })
-}
-
-/// Escapes `%`, `_` and `\` so text matches literally in a `LIKE ... ESCAPE '\'` pattern.
-fn like_pattern(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('%');
-    for ch in text.chars() {
-        if matches!(ch, '%' | '_' | '\\') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out.push('%');
-    out
 }

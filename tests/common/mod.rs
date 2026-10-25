@@ -4,9 +4,9 @@
 use kashkeshet::app::{self, AppConfig, Parts};
 use kashkeshet::clock::SystemClock;
 use kashkeshet::config::Limits;
-use kashkeshet::db::Db;
 use kashkeshet::names::OsEntropy;
 use kashkeshet::shutdown::Shutdown;
+use kashkeshet::store::Db;
 use rmcp::model::ProtocolVersion;
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;

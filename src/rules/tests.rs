@@ -636,11 +636,7 @@ async fn a_failed_send_does_not_use_up_the_allowance() {
     let w = world_with(limits, Arc::new(SeqEntropy::new(1)));
     let a = w.agent().await;
     let ch = w.channel(&a, "general", true, &[]).await;
-    let sql = |sql: &'static str| {
-        w.rules
-            .db()
-            .write(move |tx| Ok::<_, RuleError>(tx.execute_batch(sql)?))
-    };
+    let sql = |sql: &'static str| w.rules.db().execute_for_tests(sql);
     sql("CREATE TRIGGER fail BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'boom'); END")
         .await
         .unwrap();
