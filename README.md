@@ -82,6 +82,11 @@ cargo test
   of the rules table, plus the `not_found` behavior.
 - `tests/e2e.rs`: starts the server and runs several agents through it with
   `rmcp`'s client, over both the 2026-07-28 protocol and the older one.
+- `tests/contract.rs`: checks the tools agents see (names, descriptions,
+  input schemas) against `tests/contract/tools.json`. After an intended
+  change, run `UPDATE_CONTRACT=1 cargo test --test contract` and review the
+  diff to that file.
+- `tests/common/`: starts a server on a free port for the tests above.
 
 ## Behavior notes
 
