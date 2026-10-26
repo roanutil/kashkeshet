@@ -1,8 +1,9 @@
 //! Output tests: message formatting, the size cap, and the shared helpers.
 
-use super::fit::{cut_body, short_time};
+use super::fit::{cut_body, cut_bytes, short_time};
 use super::*;
 use crate::clock::testing::FixedClock;
+use crate::config::Limits;
 use crate::rules::{AgentInfo, Members, Message, MessagePage, Page, Position};
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
@@ -126,7 +127,7 @@ fn described(name: &str, description: Option<&str>) -> AgentInfo {
 #[test]
 fn agent_and_member_lists_show_descriptions() {
     let items = vec![
-        described("amber-falcon", Some("Codex,\nreviews only")),
+        described("amber-falcon", Some("Codex, reviews only")),
         described("brave-beaver", None),
     ];
     let page = Page {
@@ -138,7 +139,7 @@ fn agent_and_member_lists_show_descriptions() {
         "amber-falcon  last seen 14:05 — Codex, reviews only\nbrave-beaver  last seen 14:05"
     );
     let json: Value = serde_json::from_str(&formatter(8000).agents(Format::Json, &page)).unwrap();
-    assert_eq!(json["agents"][0]["description"], "Codex,\nreviews only");
+    assert_eq!(json["agents"][0]["description"], "Codex, reviews only");
     assert_eq!(json["agents"][1]["description"], Value::Null);
 
     let members = Members {
@@ -156,8 +157,62 @@ fn agent_and_member_lists_show_descriptions() {
     let json: Value =
         serde_json::from_str(&formatter(8000).members(Format::Json, &members)).unwrap();
     assert_eq!(json["members"][0]["name"], "amber-falcon");
-    assert_eq!(json["members"][0]["description"], "Codex,\nreviews only");
+    assert_eq!(json["members"][0]["description"], "Codex, reviews only");
     assert_eq!(json["members"][1]["description"], Value::Null);
+}
+
+#[test]
+fn the_longest_descriptions_fit_the_smallest_response_cap() {
+    let cap = crate::config::MIN_RESPONSE_BYTES;
+    let max_chars = Limits::DEFAULT.max_description_chars;
+    // Four-byte characters, and characters JSON must escape.
+    for long in ["😀".repeat(max_chars), "\"\\".repeat(max_chars / 2)] {
+        let agent = described("amber-falcon", Some(&long));
+        let fmt = formatter(cap);
+        for f in [Format::Text, Format::Json] {
+            let reply = fmt.description(f, &agent);
+            assert!(reply.len() <= cap, "{} bytes", reply.len());
+            let page = Page {
+                items: vec![agent.clone()],
+                next_cursor: None,
+            };
+            let agents = fmt.agents(f, &page);
+            assert!(agents.len() <= cap, "{} bytes", agents.len());
+            assert!(!agents.contains("larger than"), "{agents}");
+            let members = fmt.members(
+                f,
+                &Members {
+                    channel_id: "ch_7k2m9q4x".into(),
+                    total: 1,
+                    page,
+                },
+            );
+            assert!(members.len() <= cap, "{} bytes", members.len());
+            assert!(!members.contains("larger than"), "{members}");
+            if f == Format::Json {
+                for out in [&reply, &agents, &members] {
+                    let json: Value = serde_json::from_str(out).expect("valid JSON");
+                    assert!(json.to_string().contains('…'), "the description is cut");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn descriptions_are_whole_at_the_default_cap() {
+    let long = "😀".repeat(Limits::DEFAULT.max_description_chars);
+    let agent = described("amber-falcon", Some(&long));
+    let reply = formatter(Limits::DEFAULT.max_response_bytes).description(Format::Json, &agent);
+    let json: Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(json["description"], long.as_str());
+}
+
+#[test]
+fn cut_bytes_keeps_characters_whole() {
+    assert_eq!(cut_bytes("héllo", 5), "h…");
+    assert_eq!(cut_bytes("héllo", 6), "héllo");
+    assert_eq!(cut_bytes("😀😀", 7), "😀…");
 }
 
 #[test]

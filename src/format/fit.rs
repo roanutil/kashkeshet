@@ -195,6 +195,19 @@ pub(super) fn cut_body(body: &str, max_chars: usize) -> (String, bool) {
     }
 }
 
+/// `text` cut at a character boundary to at most `max_bytes` bytes, ending
+/// in `…` if anything was cut.
+pub(super) fn cut_bytes(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = max_bytes.saturating_sub('…'.len_utf8());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
 pub(super) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }

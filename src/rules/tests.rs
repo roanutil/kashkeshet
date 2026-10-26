@@ -260,6 +260,10 @@ async fn descriptions_over_the_limit_are_refused() {
         code(w.rules.set_description(&a, "héllo!".into()).await),
         Code::InvalidArgument
     );
+    assert_eq!(
+        code(w.rules.set_description(&a, "a\nb".into()).await),
+        Code::InvalidArgument
+    );
     // A refused change keeps the old description.
     let me = w.rules.agent_view(a.name.clone()).await.unwrap();
     assert_eq!(me.agent.description.as_deref(), Some("héllo"));
