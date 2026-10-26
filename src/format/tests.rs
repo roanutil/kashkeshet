@@ -165,8 +165,13 @@ fn agent_and_member_lists_show_descriptions() {
 fn the_longest_descriptions_fit_the_smallest_response_cap() {
     let cap = crate::config::MIN_RESPONSE_BYTES;
     let max_chars = Limits::DEFAULT.max_description_chars;
-    // Four-byte characters, and characters JSON must escape.
-    for long in ["😀".repeat(max_chars), "\"\\".repeat(max_chars / 2)] {
+    // Four-byte characters, characters JSON must escape, and control
+    // characters JSON writes as six bytes each.
+    for long in [
+        "😀".repeat(max_chars),
+        "\"\\".repeat(max_chars / 2),
+        "\u{1}\n".repeat(max_chars / 2),
+    ] {
         let agent = described("amber-falcon", Some(&long));
         let fmt = formatter(cap);
         for f in [Format::Text, Format::Json] {
@@ -190,9 +195,11 @@ fn the_longest_descriptions_fit_the_smallest_response_cap() {
             assert!(members.len() <= cap, "{} bytes", members.len());
             assert!(!members.contains("larger than"), "{members}");
             if f == Format::Json {
-                for out in [&reply, &agents, &members] {
+                // Cut only when the whole one could not fit.
+                let too_big = serde_json::to_string(&long).unwrap().len() > cap;
+                for out in [&agents, &members] {
                     let json: Value = serde_json::from_str(out).expect("valid JSON");
-                    assert!(json.to_string().contains('…'), "the description is cut");
+                    assert_eq!(json.to_string().contains('…'), too_big, "{out}");
                 }
             }
         }
@@ -200,12 +207,43 @@ fn the_longest_descriptions_fit_the_smallest_response_cap() {
 }
 
 #[test]
-fn descriptions_are_whole_at_the_default_cap() {
-    let long = "😀".repeat(Limits::DEFAULT.max_description_chars);
+fn descriptions_are_whole_when_their_row_fits() {
+    // 300 ASCII characters fit whole even at the smallest cap.
+    let long = "x".repeat(Limits::DEFAULT.max_description_chars);
     let agent = described("amber-falcon", Some(&long));
-    let reply = formatter(Limits::DEFAULT.max_response_bytes).description(Format::Json, &agent);
-    let json: Value = serde_json::from_str(&reply).unwrap();
-    assert_eq!(json["description"], long.as_str());
+    let page = Page {
+        items: vec![agent.clone()],
+        next_cursor: None,
+    };
+    let out = formatter(crate::config::MIN_RESPONSE_BYTES).agents(Format::Json, &page);
+    let json: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["agents"][0]["description"], long.as_str());
+    // At the default cap, so do the longest four-byte descriptions.
+    let long = "😀".repeat(Limits::DEFAULT.max_description_chars);
+    let page = Page {
+        items: vec![described("amber-falcon", Some(&long))],
+        next_cursor: None,
+    };
+    let out = formatter(Limits::DEFAULT.max_response_bytes).agents(Format::Json, &page);
+    let json: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["agents"][0]["description"], long.as_str());
+}
+
+#[test]
+fn the_set_description_reply_gives_the_length_not_the_text() {
+    let agent = described("amber-falcon", Some("héllo"));
+    let fmt = formatter(8000);
+    assert_eq!(
+        fmt.description(Format::Text, &agent),
+        "name: amber-falcon\ndescription set (5 characters)"
+    );
+    let json: Value = serde_json::from_str(&fmt.description(Format::Json, &agent)).unwrap();
+    assert_eq!(json["description_chars"], 5);
+    let cleared = described("amber-falcon", None);
+    assert_eq!(
+        fmt.description(Format::Text, &cleared),
+        "name: amber-falcon\ndescription cleared"
+    );
 }
 
 #[test]

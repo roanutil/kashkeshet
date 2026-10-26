@@ -160,8 +160,7 @@ fn free_name(store: &dyn Reads, base: &str) -> Result<String> {
     ))
 }
 
-/// Trimmed description text, or `None` if it is empty. One line, like a
-/// channel name.
+/// Trimmed description text, or `None` if it is empty.
 fn clean_description(text: &str, max_chars: usize) -> Result<Option<String>> {
     let text = text.trim();
     if text.is_empty() {
@@ -171,11 +170,6 @@ fn clean_description(text: &str, max_chars: usize) -> Result<Option<String>> {
         return Err(RuleError::invalid(format!(
             "description must be at most {max_chars} characters"
         )));
-    }
-    if text.chars().any(char::is_control) {
-        return Err(RuleError::invalid(
-            "description must not contain line breaks or control characters",
-        ));
     }
     Ok(Some(text.to_string()))
 }
