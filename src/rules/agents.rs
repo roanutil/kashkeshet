@@ -100,6 +100,22 @@ impl Rules {
         Ok(Reclaimed { name, token })
     }
 
+    /// Replaces `me`'s description, which others see when they list agents
+    /// or members. Empty text clears it.
+    pub async fn set_description(&self, me: &Agent, text: String) -> Result<AgentInfo> {
+        let description = clean_description(&text, self.limits().max_description_chars)?;
+        let me = me.name.clone();
+        self.db()
+            .write(move |store| {
+                store.set_description(&me, description.as_deref())?;
+                store
+                    .agent(&me)?
+                    .map(AgentInfo::from)
+                    .ok_or_else(|| RuleError::new(Code::Internal, format!("agent {me} vanished")))
+            })
+            .await
+    }
+
     /// Agents in name order, optionally only those whose names contain `query`.
     pub async fn list_agents(
         &self,
@@ -144,6 +160,20 @@ fn free_name(store: &dyn Reads, base: &str) -> Result<String> {
     ))
 }
 
+/// Trimmed description text, or `None` if it is empty.
+fn clean_description(text: &str, max_chars: usize) -> Result<Option<String>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if text.chars().count() > max_chars {
+        return Err(RuleError::invalid(format!(
+            "description must be at most {max_chars} characters"
+        )));
+    }
+    Ok(Some(text.to_string()))
+}
+
 /// An agent that has proven who it is on this call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Agent {
@@ -171,6 +201,8 @@ pub struct AgentInfo {
     pub last_seen: Option<String>,
     /// The server run that created the agent, if it was recorded.
     pub run_id: Option<i64>,
+    /// What the agent says about itself, if anything.
+    pub description: Option<String>,
 }
 
 // Agents see revoked agents like any other: their names and messages stay.
@@ -181,6 +213,7 @@ impl From<AgentRecord> for AgentInfo {
             created_at: a.created_at,
             last_seen: a.last_seen,
             run_id: a.run_id,
+            description: a.description,
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Output for registration and agent lists.
 
-use super::fit::{Row, short_time};
+use super::fit::{Row, one_line, short_time};
 use super::{Format, Formatter};
 use crate::rules::{AgentInfo, Page, Reclaimed, Registration};
 use serde_json::json;
@@ -39,21 +39,47 @@ impl Formatter {
         }
     }
 
+    pub fn description(&self, f: Format, a: &AgentInfo) -> String {
+        match f {
+            Format::Text => match &a.description {
+                Some(d) => format!("name: {}\ndescription: {}", a.name, one_line(d)),
+                None => format!("name: {}\ndescription cleared", a.name),
+            },
+            Format::Json => json!({ "name": a.name, "description": a.description }).to_string(),
+        }
+    }
+
     pub fn agents(&self, f: Format, page: &Page<AgentInfo>) -> String {
         let now = self.clock.now();
         let rows: Vec<Row> = page
             .items
             .iter()
             .map(|a| Row {
-                text: match &a.last_seen {
-                    Some(seen) => format!("{}  last seen {}", a.name, short_time(seen, now)),
-                    None => a.name.clone(),
-                },
-                json: json!({ "name": a.name, "last_seen": a.last_seen }),
+                text: with_description(
+                    match &a.last_seen {
+                        Some(seen) => format!("{}  last seen {}", a.name, short_time(seen, now)),
+                        None => a.name.clone(),
+                    },
+                    a,
+                ),
+                json: json!({
+                    "name": a.name,
+                    "last_seen": a.last_seen,
+                    "description": a.description,
+                }),
                 resume: format!("cursor={}", a.name),
             })
             .collect();
         let tail = page.next_cursor.as_ref().map(|c| format!("cursor={c}"));
         self.list(f, None, "agents", &rows, tail)
     }
+}
+
+/// `line`, followed by the agent's description on the same line if it has one.
+pub(super) fn with_description(mut line: String, a: &AgentInfo) -> String {
+    if let Some(d) = &a.description {
+        line.push_str(" — ");
+        line.push_str(&one_line(d));
+    }
+    line
 }

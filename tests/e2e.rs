@@ -87,6 +87,32 @@ async fn three_agents_talk() {
     )
     .await;
 
+    // Alice describes herself; Bob sees it among the channel's members.
+    ok(
+        &alice_c,
+        "set_description",
+        json!({"token": at, "text": "Parser maintainer"}),
+    )
+    .await;
+    let members = ok(
+        &bob_c,
+        "list_members",
+        json!({"token": bt, "channel_id": general, "format": "json"}),
+    )
+    .await;
+    let members = json_of(&members);
+    let alice_row = members["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == alice.as_str())
+        .cloned();
+    assert_eq!(
+        alice_row.map(|m| m["description"].clone()),
+        Some(json!("Parser maintainer")),
+        "{members}"
+    );
+
     // Bob waits; Alice speaks; Bob hears it.
     let waiting = {
         let bt = bt.clone();

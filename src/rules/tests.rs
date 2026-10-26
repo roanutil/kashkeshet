@@ -201,6 +201,70 @@ async fn list_agents_pages_by_name() {
     assert!(rest.items[0].name > first.items[2].name);
 }
 
+#[tokio::test]
+async fn descriptions_are_set_replaced_and_cleared() {
+    let w = world().await;
+    let (a, b) = (w.agent().await, w.agent().await);
+    let ch = w.channel(&a, "general", true, &[&b]).await;
+    let set = w
+        .rules
+        .set_description(&a, "  Codex, reviews only  ".into())
+        .await
+        .unwrap();
+    assert_eq!(set.description.as_deref(), Some("Codex, reviews only"));
+    w.rules
+        .set_description(&a, "Claude Code".into())
+        .await
+        .unwrap();
+    let described = |items: &[AgentInfo]| {
+        items
+            .iter()
+            .find(|i| i.name == a.name)
+            .and_then(|i| i.description.clone())
+    };
+    // Others see it in list_agents, list_members and the web page.
+    let agents = w.rules.list_agents(&b, None, 10, None).await.unwrap();
+    assert_eq!(described(&agents.items).as_deref(), Some("Claude Code"));
+    let members = w
+        .rules
+        .list_members(&b, ch.clone(), 10, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        described(&members.page.items).as_deref(),
+        Some("Claude Code")
+    );
+    let view = w.rules.channel_view(ch, None).await.unwrap();
+    assert_eq!(described(&view.members).as_deref(), Some("Claude Code"));
+    let page = w.rules.agent_view(a.name.clone()).await.unwrap();
+    assert_eq!(page.agent.description.as_deref(), Some("Claude Code"));
+    // Empty text clears it; it never touches anyone else's.
+    let cleared = w.rules.set_description(&a, "   ".into()).await.unwrap();
+    assert_eq!(cleared.description, None);
+    let agents = w.rules.list_agents(&b, None, 10, None).await.unwrap();
+    assert!(agents.items.iter().all(|i| i.description.is_none()));
+}
+
+#[tokio::test]
+async fn descriptions_over_the_limit_are_refused() {
+    let limits = Limits {
+        max_description_chars: 5,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    // The cap counts characters, not bytes.
+    let fits = w.rules.set_description(&a, "héllo".into()).await.unwrap();
+    assert_eq!(fits.description.as_deref(), Some("héllo"));
+    assert_eq!(
+        code(w.rules.set_description(&a, "héllo!".into()).await),
+        Code::InvalidArgument
+    );
+    // A refused change keeps the old description.
+    let me = w.rules.agent_view(a.name.clone()).await.unwrap();
+    assert_eq!(me.agent.description.as_deref(), Some("héllo"));
+}
+
 // ---- Rules table: appears in list_channels ----
 
 #[tokio::test]
@@ -275,7 +339,7 @@ async fn any_member_can_add_others_to_an_open_channel() {
         .await
         .unwrap();
     assert_eq!(members.total, 3);
-    assert!(members.page.items.contains(&c.name));
+    assert!(members.page.items.iter().any(|m| m.name == c.name));
 }
 
 #[tokio::test]

@@ -94,7 +94,16 @@ impl Rules {
                     return Err(RuleError::channel_not_found(&id));
                 }
                 let channel = channel_info(store, &id, None, None, preview)?;
-                let members = store.members_by_join(&id, usize::MAX >> 1)?;
+                let members = store
+                    .members_by_join(&id, usize::MAX >> 1)?
+                    .iter()
+                    .map(|name| {
+                        store
+                            .agent(name)?
+                            .map(AgentInfo::from)
+                            .ok_or_else(|| RuleError::agent_not_found(name))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 let page = super::messages::read_channel(
                     store,
                     &ReadQuery {
@@ -216,7 +225,7 @@ impl From<ServerRunRecord> for ServerRunInfo {
 #[derive(Clone, Debug)]
 pub struct ChannelView {
     pub channel: ChannelInfo,
-    pub members: Vec<String>,
+    pub members: Vec<AgentInfo>,
     pub messages: Vec<Message>,
     /// Set when older messages exist.
     pub older_before_id: Option<i64>,

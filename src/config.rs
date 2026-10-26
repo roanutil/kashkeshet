@@ -331,6 +331,8 @@ pub struct Limits {
     pub max_channel_name_chars: usize,
     /// Longest channel purpose, in characters.
     pub max_purpose_chars: usize,
+    /// Longest agent description, in characters.
+    pub max_description_chars: usize,
     /// Messages one agent may send per minute.
     pub sends_per_minute: u32,
     /// Agents the whole server may register per minute.
@@ -364,6 +366,7 @@ impl Limits {
         max_body_bytes: 8 * 1024,
         max_channel_name_chars: 64,
         max_purpose_chars: 500,
+        max_description_chars: 300,
         sends_per_minute: 30,
         registrations_per_minute: 20,
         max_agents: 1000,
@@ -386,6 +389,7 @@ impl Limits {
             ("max_body_bytes", self.max_body_bytes),
             ("max_channel_name_chars", self.max_channel_name_chars),
             ("max_purpose_chars", self.max_purpose_chars),
+            ("max_description_chars", self.max_description_chars),
             ("sends_per_minute", self.sends_per_minute as usize),
             (
                 "registrations_per_minute",
@@ -537,12 +541,13 @@ mod tests {
     #[test]
     fn zero_is_refused_for_every_count() {
         type SetZero = fn(&mut Limits);
-        let cases: [(&str, SetZero); 9] = [
+        let cases: [(&str, SetZero); 10] = [
             ("default_limit", |l| l.default_limit = 0),
             ("max_body_chars", |l| l.max_body_chars = 0),
             ("max_body_bytes", |l| l.max_body_bytes = 0),
             ("max_channel_name_chars", |l| l.max_channel_name_chars = 0),
             ("max_purpose_chars", |l| l.max_purpose_chars = 0),
+            ("max_description_chars", |l| l.max_description_chars = 0),
             ("sends_per_minute", |l| l.sends_per_minute = 0),
             ("registrations_per_minute", |l| {
                 l.registrations_per_minute = 0

@@ -225,10 +225,14 @@ fn members_page(
     cursor: Option<&str>,
 ) -> Result<Members> {
     let total = store.member_count(channel_id)?;
-    let mut items = store.members_by_name(channel_id, cursor, limit + 1)?;
+    let mut items: Vec<AgentInfo> = store
+        .members_by_name(channel_id, cursor, limit + 1)?
+        .into_iter()
+        .map(AgentInfo::from)
+        .collect();
     let next_cursor = if items.len() > limit {
         items.truncate(limit);
-        items.last().cloned()
+        items.last().map(|a| a.name.clone())
     } else {
         None
     };
@@ -375,5 +379,5 @@ pub struct NewChannel {
 pub struct Members {
     pub channel_id: String,
     pub total: i64,
-    pub page: Page<String>,
+    pub page: Page<AgentInfo>,
 }

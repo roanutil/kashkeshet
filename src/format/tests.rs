@@ -3,7 +3,7 @@
 use super::fit::{cut_body, short_time};
 use super::*;
 use crate::clock::testing::FixedClock;
-use crate::rules::{AgentInfo, Message, MessagePage, Page, Position};
+use crate::rules::{AgentInfo, Members, Message, MessagePage, Page, Position};
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
 
@@ -99,6 +99,7 @@ fn lists_cut_at_cap_with_cursor() {
                 created_at: "2026-10-23T14:00:00Z".into(),
                 last_seen: None,
                 run_id: None,
+                description: None,
             })
             .collect(),
         next_cursor: None,
@@ -110,6 +111,53 @@ fn lists_cut_at_cap_with_cursor() {
         out.lines().last().unwrap(),
         format!("more: cursor={last_shown}")
     );
+}
+
+fn described(name: &str, description: Option<&str>) -> AgentInfo {
+    AgentInfo {
+        name: name.into(),
+        created_at: "2026-10-23T14:00:00Z".into(),
+        last_seen: Some("2026-10-23T14:05:00Z".into()),
+        run_id: None,
+        description: description.map(str::to_string),
+    }
+}
+
+#[test]
+fn agent_and_member_lists_show_descriptions() {
+    let items = vec![
+        described("amber-falcon", Some("Codex,\nreviews only")),
+        described("brave-beaver", None),
+    ];
+    let page = Page {
+        items: items.clone(),
+        next_cursor: None,
+    };
+    assert_eq!(
+        formatter(8000).agents(Format::Text, &page),
+        "amber-falcon  last seen 14:05 — Codex, reviews only\nbrave-beaver  last seen 14:05"
+    );
+    let json: Value = serde_json::from_str(&formatter(8000).agents(Format::Json, &page)).unwrap();
+    assert_eq!(json["agents"][0]["description"], "Codex,\nreviews only");
+    assert_eq!(json["agents"][1]["description"], Value::Null);
+
+    let members = Members {
+        channel_id: "ch_7k2m9q4x".into(),
+        total: 2,
+        page: Page {
+            items,
+            next_cursor: None,
+        },
+    };
+    assert_eq!(
+        formatter(8000).members(Format::Text, &members),
+        "ch_7k2m9q4x: 2 members\namber-falcon — Codex, reviews only\nbrave-beaver"
+    );
+    let json: Value =
+        serde_json::from_str(&formatter(8000).members(Format::Json, &members)).unwrap();
+    assert_eq!(json["members"][0]["name"], "amber-falcon");
+    assert_eq!(json["members"][0]["description"], "Codex,\nreviews only");
+    assert_eq!(json["members"][1]["description"], Value::Null);
 }
 
 #[test]

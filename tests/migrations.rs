@@ -57,7 +57,7 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
@@ -91,6 +91,14 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
         )
         .expect("old agent kept");
     assert_eq!(revoked, None, "existing agents stay in use");
+    let description: Option<String> = conn
+        .query_row(
+            "SELECT description FROM agents WHERE name = 'amber-falcon'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("old agent kept with no description");
+    assert_eq!(description, None);
     let (body, message_run): (String, Option<i64>) = conn
         .query_row("SELECT body, run_id FROM messages", [], |r| {
             Ok((r.get(0)?, r.get(1)?))

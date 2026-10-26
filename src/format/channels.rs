@@ -1,5 +1,6 @@
 //! Output for channels and their members.
 
+use super::agents::with_description;
 use super::fit::{Row, cut_body, one_line};
 use super::{Format, Formatter};
 use crate::rules::{ChannelInfo, Members, Page};
@@ -64,10 +65,10 @@ impl Formatter {
             .page
             .items
             .iter()
-            .map(|name| Row {
-                text: name.clone(),
-                json: json!(name),
-                resume: format!("cursor={name}"),
+            .map(|a| Row {
+                text: with_description(a.name.clone(), a),
+                json: json!({ "name": a.name, "description": a.description }),
+                resume: format!("cursor={}", a.name),
             })
             .collect();
         let tail = m.page.next_cursor.as_ref().map(|c| format!("cursor={c}"));

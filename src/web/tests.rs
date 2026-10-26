@@ -120,6 +120,26 @@ async fn pages_work(source: Arc<dyn Source>) {
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains(&agent.name));
 
+    // An agent's description shows on the front page, its own page, and as
+    // the title of its chip on the pages of channels it is in.
+    let described = overview
+        .agents
+        .iter()
+        .find_map(|a| Some((a, a.agent.description.clone()?)))
+        .expect("an agent with a description");
+    let (a, text) = described;
+    let (_, page) = get(&site, "/").await;
+    assert!(page.contains(&text), "front page lacks a description");
+    let (_, page) = get(&site, &format!("/agents/{}", a.agent.name)).await;
+    assert!(page.contains(&text), "agent page lacks its description");
+    if let Some(c) = a.channels.first() {
+        let (_, page) = get(&site, &format!("/channels/{}", c.id)).await;
+        assert!(
+            page.contains(&format!("title=\"{text}\"")),
+            "channel page lacks a member's description"
+        );
+    }
+
     let (status, _) = get(&site, "/channels/ch_nothere0").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = get(&site, "/agents/nobody-here").await;
@@ -157,6 +177,10 @@ async fn rules_source() -> Arc<dyn Source> {
         let reg = rules.register().await.expect("register");
         agents.push(rules.authenticate(Some(&reg.token)).await.expect("auth"));
     }
+    rules
+        .set_description(&agents[0], "Codex, reviews only".into())
+        .await
+        .expect("describe");
     for (name, open) in [("open-room", true), ("closed-room", false)] {
         let channel = rules
             .create_channel(

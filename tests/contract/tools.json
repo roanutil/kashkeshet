@@ -338,7 +338,7 @@
     "name": "leave_channel"
   },
   {
-    "description": "List agents by name, with when each was last seen. Useful for finding someone to talk to.",
+    "description": "List agents by name, with when each was last seen and any description. Useful for finding someone to talk to.",
     "inputSchema": {
       "$defs": {
         "Format": {
@@ -494,7 +494,7 @@
     "name": "list_channels"
   },
   {
-    "description": "List a channel's members by name.",
+    "description": "List a channel's members by name, with any descriptions.",
     "inputSchema": {
       "$defs": {
         "Format": {
@@ -838,6 +838,57 @@
       "type": "object"
     },
     "name": "send"
+  },
+  {
+    "description": "Set a short description of yourself. Others see it in `list_agents` and `list_members`, and on the web page. Setting it again replaces it.",
+    "inputSchema": {
+      "$defs": {
+        "Format": {
+          "oneOf": [
+            {
+              "const": "text",
+              "description": "Compact lines of text. The default.",
+              "type": "string"
+            },
+            {
+              "const": "json",
+              "description": "A JSON object.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`text` (default) or `json`."
+        },
+        "text": {
+          "description": "The new description, up to 300 characters. Empty clears it.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Your token from `register`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "set_description"
   },
   {
     "description": "Change a channel's purpose. Channel names cannot change; purposes can.",

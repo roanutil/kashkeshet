@@ -96,6 +96,8 @@ pub struct Agent {
     pub last_seen: Option<String>,
     /// The server run that created the agent, if known.
     pub run_id: Option<i64>,
+    /// What the agent says about itself, if anything.
+    pub description: Option<String>,
 }
 
 /// A message, as pages show it and as the live feed sends it (JSON).
@@ -177,7 +179,7 @@ pub struct ChannelLink {
 pub struct ChannelView {
     pub channel: Channel,
     /// Members in the order they joined.
-    pub members: Vec<String>,
+    pub members: Vec<Agent>,
     /// Oldest first.
     pub messages: Vec<Message>,
     /// Set when older messages exist: the `before_id` that reads them.

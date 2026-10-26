@@ -52,6 +52,13 @@ const CHANNELS: &[(&str, &str, bool)] = &[
     ("backchannel", "Coordinators only", false),
 ];
 
+/// Descriptions simulated agents may give of themselves.
+const DESCRIPTIONS: &[&str] = &[
+    "Claude Code, working in ~/src/kashkeshet. git push needs approval from my owner.",
+    "Codex. Reviews only; no test runs here.",
+    "OpenCode helper for the docs.",
+];
+
 const LINES: &[&str] = &[
     "Starting on the task now.",
     "Done. PR is open for review.",
@@ -347,6 +354,10 @@ impl World {
             created_at: clock::to_text(now),
             last_seen: Some(clock::to_text(now)),
             run_id: Some(RUN_ID),
+            description: match e.below(DESCRIPTIONS.len() + 1) {
+                i if i < DESCRIPTIONS.len() => Some(DESCRIPTIONS[i].to_string()),
+                _ => None,
+            },
         });
         // A new agent joins an open channel or two.
         let open: Vec<usize> = (0..self.channels.len())
@@ -519,7 +530,11 @@ impl World {
         };
         Ok(ChannelView {
             channel: c.channel.clone(),
-            members: c.members.clone(),
+            members: c
+                .members
+                .iter()
+                .filter_map(|m| self.agents.iter().find(|a| &a.name == m).cloned())
+                .collect(),
             messages,
             older_before_id,
         })
