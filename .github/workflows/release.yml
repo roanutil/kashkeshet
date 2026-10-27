@@ -367,6 +367,9 @@ jobs:
           images: ${{ env.IMAGE }}
           # vX.Y.Z gives X.Y.Z and latest; vX.Y.Z-rc.N gives X.Y.Z-rc.N only.
           tags: type=semver,pattern={{version}}
+          # Written out rather than left to the default: auto adds latest
+          # for a semver tag that is not a pre-release.
+          flavor: latest=auto
       - name: Join the architectures under the tags
         working-directory: ${{ runner.temp }}/digests
         run: |
