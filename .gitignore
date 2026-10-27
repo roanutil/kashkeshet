@@ -33,3 +33,6 @@ rustc-ice-*.txt
 /dist-manifest.json
 /plan-dist-manifest.json
 __pycache__/
+
+# Compose secrets
+.env

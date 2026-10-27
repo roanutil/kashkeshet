@@ -8,7 +8,8 @@
 |---|---|---|
 | `--config` | `~/.config/kkt/config.toml`, if it exists | The config file (below) |
 | `--db` | per-user data directory (below) | SQLite file, created if missing |
-| `--bind` | `127.0.0.1:7420` | Listen address; must be loopback |
+| `--bind` | `127.0.0.1:7420` | Listen address; must be loopback unless `--allow-any-bind` is given |
+| `--allow-any-bind` | off | Let `--bind` be any address, as the Docker image does. Needs an access key |
 | `--access-key-file` | `~/.config/kkt/access-key`, created if missing | The key for `/mcp` and the web page login |
 | `--no-access-key` | off | Run with no key: anyone who can reach the server can use it |
 | `--allow-host` | none | A host name the server answers to besides loopback (repeatable); see [remote access](remote-access.md) |
