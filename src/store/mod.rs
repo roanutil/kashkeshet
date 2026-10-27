@@ -235,7 +235,11 @@ pub struct MembershipRecord {
 pub trait Reads {
     // ---- agents ----
 
+    /// A non-hidden identity.
     fn agent(&self, name: &str) -> StoreResult<Option<AgentRecord>>;
+
+    /// Whether a name is reserved by any identity, including hidden ones.
+    fn agent_name_taken(&self, name: &str) -> StoreResult<bool>;
 
     fn agent_by_token_hash(&self, hash: &[u8]) -> StoreResult<Option<AgentRecord>>;
 
@@ -260,6 +264,9 @@ pub trait Reads {
     // ---- channels ----
 
     fn channel(&self, id: &str) -> StoreResult<Option<ChannelFacts>>;
+
+    /// Whether an ID is reserved, including by a hidden channel.
+    fn channel_id_taken(&self, id: &str) -> StoreResult<bool>;
 
     fn is_member(&self, channel_id: &str, agent: &str) -> StoreResult<bool>;
 
@@ -358,6 +365,14 @@ pub trait Writes: Reads {
     fn insert_channel(&self, channel: &NewChannelRecord) -> StoreResult<()>;
 
     fn set_purpose(&self, channel_id: &str, purpose: Option<&str>) -> StoreResult<()>;
+
+    fn set_channel_open(&self, channel_id: &str, open: bool) -> StoreResult<()>;
+
+    /// Hides a channel and removes its memberships, retaining its messages.
+    fn hide_channel(&self, channel_id: &str) -> StoreResult<()>;
+
+    /// Hides and revokes an identity, removing its memberships but retaining messages.
+    fn hide_agent(&self, name: &str, at: &str) -> StoreResult<()>;
 
     fn set_note(&self, channel_id: &str, text: &str, editor: &str, at: &str) -> StoreResult<()>;
 

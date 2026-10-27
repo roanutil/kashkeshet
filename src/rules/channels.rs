@@ -323,7 +323,7 @@ fn members_page(
 fn free_channel_id(store: &dyn Reads, entropy: &dyn Entropy) -> Result<String> {
     for _ in 0..MAX_CHANNEL_ID_ATTEMPTS {
         let id = names::channel_id(entropy);
-        if store.channel(&id)?.is_none() {
+        if !store.channel_id_taken(&id)? {
             return Ok(id);
         }
     }

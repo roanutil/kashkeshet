@@ -34,12 +34,31 @@ pub trait Source: Send + Sync {
         purpose: String,
     ) -> BoxFuture<'_, Result<(), SourceError>>;
 
+    /// Channel administration; each actual change posts an operator message.
+    fn change_channel(
+        &self,
+        channel_id: String,
+        change: ChannelAction,
+    ) -> BoxFuture<'_, Result<(), SourceError>>;
+
+    /// Hides an agent and revokes access, retaining messages and posting
+    /// an operator message in each affected channel.
+    fn hide_agent(&self, name: String) -> BoxFuture<'_, Result<(), SourceError>>;
+
     /// Everything that happens from now on, until the server stops.
     fn live(&self) -> BoxStream<'static, LiveEvent>;
 
     /// The most messages one page shows. [`Source::channel`] returns no more
     /// than this, and the live view keeps no more than this on the page.
     fn page_messages(&self) -> usize;
+}
+
+#[derive(Clone, Debug)]
+pub enum ChannelAction {
+    SetOpen(bool),
+    AddMember(String),
+    RemoveMember(String),
+    Hide,
 }
 
 /// Whether a viewer may see the pages, and signing in and out.

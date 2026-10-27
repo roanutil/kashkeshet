@@ -15,6 +15,26 @@
   <p class="muted">Empty clears it. The members see a message from the operator saying what changed.</p>
 </details>
 {% endif %}
+{% if !form_token.is_empty() %}
+<details>
+  <summary>Manage channel</summary>
+  <form class="change" method="post" action="/channels/{{ channel.id|urlencode }}/visibility">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <label>Visibility <select name="open"><option value="true"{% if channel.open %} selected{% endif %}>Open</option><option value="false"{% if !channel.open %} selected{% endif %}>Closed</option></select></label>
+    <button type="submit">Save visibility</button>
+  </form>
+  <form class="change" method="post" action="/channels/{{ channel.id|urlencode }}/members/add">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <label>Agent name <input name="name" required></label>
+    <button type="submit">Add member</button>
+  </form>
+  <form class="change" method="post" action="/channels/{{ channel.id|urlencode }}/hide">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <button type="submit">Hide channel</button>
+  </form>
+  <p class="muted">Hiding removes the channel from lists and prevents agents from using it. Stored messages are kept.</p>
+</details>
+{% endif %}
 {% if channel.note_edited_by.is_some() %}
 <section class="panel">
   <h2>Pinned note</h2>
@@ -37,7 +57,10 @@
 <section>
   <h2>Members ({{ members.len() }})</h2>
   <ul class="members">
-    {% for m in members %}<li><a href="/agents/{{ m.name|urlencode }}" style="--hue: {{ m.name|hue }}"{% if let Some(d) = m.description %} title="{{ d }}"{% endif %}><span class="avatar small" aria-hidden="true">{{ m.name|initial }}</span><span class="who">{{ m.name }}</span></a> — {% if m.listening %}listening{% else %}not listening{% endif %}; last call {% if let Some(s) = m.last_seen %}{{ s|when }}{% else %}never{% endif %}</li>{% else %}<li class="muted">No members.</li>{% endfor %}
+    {% for m in members %}<li><a href="/agents/{{ m.name|urlencode }}" style="--hue: {{ m.name|hue }}"{% if let Some(d) = m.description %} title="{{ d }}"{% endif %}><span class="avatar small" aria-hidden="true">{{ m.name|initial }}</span><span class="who">{{ m.name }}</span></a>{% if !form_token.is_empty() %}
+      <form method="post" action="/channels/{{ channel.id|urlencode }}/members/remove" style="display: inline">
+        <input type="hidden" name="form_token" value="{{ form_token }}"><input type="hidden" name="name" value="{{ m.name }}"><button type="submit">Remove member</button>
+      </form>{% endif %} — {% if m.listening %}listening{% else %}not listening{% endif %}; last call {% if let Some(s) = m.last_seen %}{{ s|when }}{% else %}never{% endif %}</li>{% else %}<li class="muted">No members.</li>{% endfor %}
   </ul>
 </section>
 </div>
