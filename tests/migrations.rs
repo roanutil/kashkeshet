@@ -57,7 +57,7 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
@@ -264,6 +264,72 @@ async fn existing_channels_gain_an_empty_note_and_edits_survive_reopening() {
     assert_eq!(note.text, "a note\n😀");
     assert_eq!(note.edited_by.as_deref(), Some("amber-falcon"));
     assert_eq!(note.edited_at.as_deref(), Some("2026-10-26T12:00:00Z"));
+    drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn hidden_entries_migrate_and_stay_hidden_after_reopening_without_losing_messages() {
+    let dir = temp_dir("hidden-entries");
+    let path = dir.join("old.db");
+    make_v1(&path);
+    let db = Db::open(&path).unwrap();
+    assert!(
+        db.read(|s| s.agent("amber-falcon"))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(db.read(|s| s.channel("ch_1")).await.unwrap().is_some());
+    db.write(|s| {
+        s.add_member("ch_1", "amber-falcon", "t")?;
+        s.hide_agent("amber-falcon", "later")?;
+        s.hide_channel("ch_1")
+    })
+    .await
+    .unwrap();
+    drop(db);
+    let db = Db::open(&path).unwrap();
+    assert!(
+        db.read(|s| s.agent("amber-falcon"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        db.read(|s| s.agent_name_taken("amber-falcon"))
+            .await
+            .unwrap()
+    );
+    assert!(db.read(|s| s.channel("ch_1")).await.unwrap().is_none());
+    assert!(
+        db.read(|s| s.all_channel_ids(None))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        db.read(|s| s.agents_by_last_seen())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(db.read(|s| s.member_count("ch_1")).await.unwrap(), 0);
+    assert_eq!(
+        db.read(|s| s.message(1)).await.unwrap().unwrap().body,
+        "hello from v1"
+    );
+    assert_eq!(db.read(|s| s.active_agent_count()).await.unwrap(), 0);
+    let conn = Connection::open(&path).unwrap();
+    let revoked: Option<String> = conn
+        .query_row(
+            "SELECT revoked_at FROM agents WHERE name = 'amber-falcon'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(revoked.as_deref(), Some("later"));
+    drop(conn);
     drop(db);
     std::fs::remove_dir_all(dir).unwrap();
 }

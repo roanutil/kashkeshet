@@ -187,12 +187,12 @@ pub(super) fn handoff_note(store: &dyn Reads, name: &str) -> Result<HandoffNote>
 
 /// `base` if no agent has it, else the first free numbered form of it.
 fn free_name(store: &dyn Reads, base: &str) -> Result<String> {
-    if !agent_exists(store, base)? {
+    if !store.agent_name_taken(base)? {
         return Ok(base.to_string());
     }
     for attempt in 1..=MAX_NAME_ATTEMPTS {
         let candidate = names::numbered_name(base, attempt);
-        if !agent_exists(store, &candidate)? {
+        if !store.agent_name_taken(&candidate)? {
             return Ok(candidate);
         }
     }

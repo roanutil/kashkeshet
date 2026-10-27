@@ -19,9 +19,9 @@ mod source;
 pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
-    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel, Overview, ServerRun,
-    SignIn, Source, SourceError,
+    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelAction, ChannelLink,
+    ChannelSummary, ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel,
+    Overview, ServerRun, SignIn, Source, SourceError,
 };
 
 use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
@@ -77,7 +77,12 @@ pub fn router(source: Arc<dyn Source>, hosts: AllowedHosts, gate: Arc<dyn Gate>)
         .route("/", get(index))
         .route("/channels/{id}", get(channel))
         .route("/channels/{id}/purpose", post(set_purpose))
+        .route("/channels/{id}/visibility", post(set_visibility))
+        .route("/channels/{id}/members/add", post(add_member))
+        .route("/channels/{id}/members/remove", post(remove_member))
+        .route("/channels/{id}/hide", post(hide_channel))
         .route("/agents/{name}", get(agent))
+        .route("/agents/{name}/hide", post(hide_agent))
         .route("/agents/{name}/recovery-code", post(new_recovery_code))
         .route("/events", get(events))
         .with_state(Pages {
@@ -255,6 +260,95 @@ async fn set_purpose(
 ) -> Response {
     match pages.source.set_purpose(id.clone(), form.purpose).await {
         Ok(()) => Redirect::to(&format!("/channels/{}", url_path(&id))).into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
+#[derive(Deserialize)]
+struct VisibilityForm {
+    open: String,
+}
+
+#[derive(Deserialize)]
+struct MemberForm {
+    name: String,
+}
+
+async fn channel_change(
+    pages: Pages,
+    id: String,
+    headers: HeaderMap,
+    change: ChannelAction,
+) -> Response {
+    let hidden = matches!(change, ChannelAction::Hide);
+    match pages.source.change_channel(id.clone(), change).await {
+        Ok(()) => Redirect::to(
+            if hidden {
+                "/".to_string()
+            } else {
+                format!("/channels/{}", url_path(&id))
+            }
+            .as_str(),
+        )
+        .into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
+async fn set_visibility(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<VisibilityForm>,
+) -> Response {
+    let open = match form.open.as_str() {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return pages.error(
+                SourceError::Invalid("open must be true or false".into()),
+                &headers,
+            );
+        }
+    };
+    channel_change(pages, id, headers, ChannelAction::SetOpen(open)).await
+}
+
+async fn add_member(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<MemberForm>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::AddMember(form.name)).await
+}
+
+async fn remove_member(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<MemberForm>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::RemoveMember(form.name)).await
+}
+
+async fn hide_channel(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(_): Change<change::NoFields>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::Hide).await
+}
+
+async fn hide_agent(
+    State(pages): State<Pages>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Change(_): Change<change::NoFields>,
+) -> Response {
+    match pages.source.hide_agent(name).await {
+        Ok(()) => Redirect::to("/").into_response(),
         Err(e) => pages.error(e, &headers),
     }
 }

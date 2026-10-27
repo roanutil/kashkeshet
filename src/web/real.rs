@@ -4,8 +4,9 @@
 
 use super::notice::live_event;
 use super::source::{
-    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
+    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelAction, ChannelLink,
+    ChannelSummary, ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source,
+    SourceError,
 };
 use crate::admission::{self, Credentials, Decision, WebAdmission};
 use crate::names;
@@ -123,6 +124,34 @@ impl Source for RulesSource {
                 .set_purpose(Actor::Human, channel_id, purpose)
                 .await
                 .map(|_| ())
+                .map_err(source_error)
+        })
+    }
+
+    fn change_channel(
+        &self,
+        channel_id: String,
+        change: ChannelAction,
+    ) -> BoxFuture<'_, Result<(), SourceError>> {
+        let change = match change {
+            ChannelAction::SetOpen(open) => crate::rules::ChannelChange::SetOpen(open),
+            ChannelAction::AddMember(name) => crate::rules::ChannelChange::AddMember(name),
+            ChannelAction::RemoveMember(name) => crate::rules::ChannelChange::RemoveMember(name),
+            ChannelAction::Hide => crate::rules::ChannelChange::Hide,
+        };
+        Box::pin(async move {
+            self.rules
+                .change_channel(Actor::Human, channel_id, change)
+                .await
+                .map_err(source_error)
+        })
+    }
+
+    fn hide_agent(&self, name: String) -> BoxFuture<'_, Result<(), SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .hide_agent(Actor::Human, name)
+                .await
                 .map_err(source_error)
         })
     }

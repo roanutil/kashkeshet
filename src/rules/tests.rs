@@ -2006,6 +2006,332 @@ async fn a_new_wait_supersedes_grace_and_disconnect_clears_it() {
     assert!(!observed(&w, &a, &a.name).await.listening);
 }
 
+#[tokio::test]
+async fn only_the_human_administers_channels_and_every_change_is_announced() {
+    let w = world().await;
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let id = w.channel(&a, "admin", false, &[]).await;
+    assert_eq!(
+        code(
+            w.rules
+                .change_channel(Actor::from(&a), id.clone(), ChannelChange::SetOpen(true))
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    assert_eq!(
+        code(
+            w.rules
+                .change_channel(Actor::from(&b), id.clone(), ChannelChange::SetOpen(true))
+                .await
+        ),
+        Code::NotFound
+    );
+    w.rules
+        .change_channel(Actor::Human, id.clone(), ChannelChange::SetOpen(true))
+        .await
+        .unwrap();
+    assert!(w.visible_ids(&b).await.contains(&id));
+    w.rules
+        .change_channel(
+            Actor::Human,
+            id.clone(),
+            ChannelChange::AddMember(b.name.clone()),
+        )
+        .await
+        .unwrap();
+    w.rules
+        .change_channel(Actor::Human, id.clone(), ChannelChange::SetOpen(false))
+        .await
+        .unwrap();
+    assert!(w.rules.get_note(&b, id.clone()).await.is_ok());
+    w.rules
+        .change_channel(
+            Actor::Human,
+            id.clone(),
+            ChannelChange::RemoveMember(b.name.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(code(w.read_latest(&b, &id).await), Code::NotFound);
+    let messages = w.read_latest(&a, &id).await.unwrap().messages;
+    assert_eq!(messages.len(), 4);
+    assert!(
+        messages
+            .iter()
+            .all(|m| m.agent == names::OPERATOR && m.run_id == Some(w.run_id))
+    );
+    assert!(messages.last().unwrap().body.contains(&b.name));
+    // A no-op emits nothing, and an invalid member changes nothing.
+    w.rules
+        .change_channel(Actor::Human, id.clone(), ChannelChange::SetOpen(false))
+        .await
+        .unwrap();
+    w.rules
+        .change_channel(
+            Actor::Human,
+            id.clone(),
+            ChannelChange::RemoveMember(b.name.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        code(
+            w.rules
+                .change_channel(
+                    Actor::Human,
+                    id.clone(),
+                    ChannelChange::AddMember("missing".into())
+                )
+                .await
+        ),
+        Code::NotFound
+    );
+    assert_eq!(w.read_latest(&a, &id).await.unwrap().messages.len(), 4);
+}
+
+#[tokio::test]
+async fn hiding_a_channel_prevents_all_agent_reads_and_keeps_stored_messages() {
+    let w = world().await;
+    let a = w.agent().await;
+    let id = w.channel(&a, "hidden", true, &[]).await;
+    let sent = w
+        .rules
+        .send(&a, id.clone(), "searchable history".into())
+        .await
+        .unwrap();
+    w.rules
+        .change_channel(Actor::Human, id.clone(), ChannelChange::Hide)
+        .await
+        .unwrap();
+    assert!(!w.visible_ids(&a).await.contains(&id));
+    assert_eq!(code(w.read_latest(&a, &id).await), Code::NotFound);
+    assert_eq!(code(w.rules.get_message(&a, sent.id).await), Code::NotFound);
+    assert_eq!(code(w.rules.get_note(&a, id.clone()).await), Code::NotFound);
+    assert_eq!(
+        code(w.rules.join_channel(&a, id.clone()).await),
+        Code::NotFound
+    );
+    assert_eq!(
+        code(w.rules.send(&a, id.clone(), "later".into()).await),
+        Code::NotFound
+    );
+    assert_eq!(
+        code(
+            w.rules
+                .change_channel(Actor::Human, id.clone(), ChannelChange::SetOpen(true))
+                .await
+        ),
+        Code::NotFound
+    );
+    assert!(
+        w.rules
+            .search(
+                &a,
+                SearchQuery {
+                    query: "searchable".into(),
+                    channel_id: None,
+                    from_agent: None,
+                    limit: 20
+                }
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(w.rules.activity(&a, 0).await.unwrap().is_empty());
+    assert!(
+        w.rules
+            .wait_for_messages(
+                &a,
+                WaitQuery {
+                    after_id: 0,
+                    channel_ids: None,
+                    timeout: Duration::ZERO,
+                    limit: 20
+                }
+            )
+            .await
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+    assert!(w.rules.overview().await.unwrap().channels.is_empty());
+    let stored_id = id.clone();
+    let stored = w
+        .rules
+        .db()
+        .read(move |s| s.channel_messages(&stored_id, None, MessageRange::Latest, 100))
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored.iter().any(|m| m.body == "searchable history"));
+    assert!(
+        stored
+            .iter()
+            .any(|m| m.agent == names::OPERATOR && m.body.contains("hid the channel"))
+    );
+}
+
+#[tokio::test]
+async fn hiding_an_agent_revokes_it_announces_each_membership_and_keeps_its_name_reserved() {
+    let w = world_with(
+        Limits::DEFAULT,
+        Arc::new(SameNameEntropy(SeqEntropy::new(5))),
+    )
+    .await;
+    let registration = w.rules.register().await.unwrap();
+    let a = w
+        .rules
+        .authenticate(Some(&registration.token))
+        .await
+        .unwrap();
+    let b = w.agent().await;
+    let first = w.channel(&b, "first", false, &[&a]).await;
+    let second = w.channel(&b, "second", true, &[&a]).await;
+    let sent = w
+        .rules
+        .send(&a, first.clone(), "kept agent message".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        code(w.rules.hide_agent(Actor::from(&a), b.name.clone()).await),
+        Code::Unauthenticated
+    );
+    w.rules
+        .hide_agent(Actor::Human, a.name.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        code(w.rules.authenticate(Some(&registration.token)).await),
+        Code::Unauthenticated
+    );
+    assert_eq!(
+        code(
+            w.rules
+                .reclaim(a.name.clone(), registration.recovery_code)
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    assert_eq!(
+        code(w.rules.agent_view(a.name.clone()).await),
+        Code::NotFound
+    );
+    assert_eq!(
+        code(w.rules.new_recovery_code(a.name.clone()).await),
+        Code::NotFound
+    );
+    assert!(
+        !w.rules
+            .list_agents(&b, None, 100, None)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|x| x.name == a.name)
+    );
+    for id in [first, second] {
+        let view = w.rules.channel_view(id.clone(), None).await.unwrap();
+        assert!(!view.members.iter().any(|m| m.name == a.name));
+        let last = view.messages.last().unwrap();
+        assert_eq!(last.agent, names::OPERATOR);
+        assert!(last.body.contains(&a.name));
+        assert_eq!(
+            code(w.rules.add_to_channel(&b, id, vec![a.name.clone()]).await),
+            Code::NotFound
+        );
+    }
+    assert_eq!(
+        w.rules.get_message(&b, sent.id).await.unwrap().body,
+        "kept agent message"
+    );
+    let name = a.name.clone();
+    assert!(
+        w.rules
+            .db()
+            .read(move |s| s.agent_name_taken(&name))
+            .await
+            .unwrap()
+    );
+    let new = w.agent().await;
+    assert_ne!(new.name, a.name);
+    assert!(new.name.starts_with(&a.name));
+}
+
+#[tokio::test]
+async fn administration_rolls_back_when_the_operator_message_cannot_be_saved() {
+    let w = world().await;
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let id = w.channel(&a, "atomic-admin", true, &[]).await;
+    let limits = Limits::DEFAULT;
+    let broken = Rules::new(Deps {
+        db: w.rules.db().clone(),
+        events: Events::new(),
+        clock: w.clock.clone(),
+        entropy: Arc::new(SeqEntropy::new(15)),
+        sends: SendLimiter::new(limits.sends_per_minute),
+        registrations: RegisterLimiter::new(limits.registrations_per_minute),
+        waiting: Waiting::default(),
+        run_id: i64::MAX,
+        limits,
+    });
+    for change in [
+        ChannelChange::SetOpen(false),
+        ChannelChange::AddMember(b.name.clone()),
+        ChannelChange::Hide,
+    ] {
+        assert_eq!(
+            code(
+                broken
+                    .change_channel(Actor::Human, id.clone(), change)
+                    .await
+            ),
+            Code::Internal
+        );
+        let view = w.rules.channel_view(id.clone(), None).await.unwrap();
+        assert!(view.channel.open);
+        assert_eq!(view.members.len(), 1);
+        assert!(view.messages.is_empty());
+    }
+    assert_eq!(
+        code(broken.hide_agent(Actor::Human, a.name.clone()).await),
+        Code::Internal
+    );
+    assert!(w.rules.agent_view(a.name.clone()).await.is_ok());
+    assert_eq!(
+        w.rules.channel_view(id, None).await.unwrap().members.len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_hidden_channel_id_is_skipped_when_entropy_draws_it_again() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct RepeatFirstId(AtomicUsize);
+    impl Entropy for RepeatFirstId {
+        fn below(&self, n: usize) -> usize {
+            usize::from(self.0.fetch_add(1, Ordering::SeqCst) >= names::CHANNEL_RANDOM_LEN) % n
+        }
+    }
+    let entropy = Arc::new(RepeatFirstId(AtomicUsize::new(0)));
+    let w = world_with(Limits::DEFAULT, entropy.clone()).await;
+    let a = w.agent().await;
+    entropy.0.store(0, Ordering::SeqCst);
+    let first = w.channel(&a, "first", true, &[]).await;
+    w.rules
+        .change_channel(Actor::Human, first.clone(), ChannelChange::Hide)
+        .await
+        .unwrap();
+    entropy.0.store(0, Ordering::SeqCst);
+    let second = w.channel(&a, "second", true, &[]).await;
+    assert_ne!(first, second);
+    assert_eq!(first, "ch_aaaaaaaa");
+    assert_eq!(second, "ch_bbbbbbbb");
+}
+
 // ---- Handoff: notes and new recovery codes ----
 
 #[tokio::test]

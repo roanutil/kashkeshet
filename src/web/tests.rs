@@ -740,3 +740,170 @@ async fn channel_page_shows_the_pinned_note_and_editor_as_escaped_text() {
     assert!(page.contains(ch.note_edited_by.as_deref().unwrap()));
     assert!(page.contains("2026-10-25"));
 }
+
+async fn administration_works(source: Arc<dyn Source>) {
+    let overview = source.overview().await.unwrap();
+    let id = overview.channels[0].channel.id.clone();
+    let current = source.channel(id.clone(), None).await.unwrap();
+    let name = current.members[0].name.clone();
+    let count = current.members.len();
+    let app = site(source.clone());
+    let (_, page) = get(&app, &format!("/channels/{id}")).await;
+    let token = form_token_in(&page);
+    let routes = [
+        (
+            format!("/channels/{id}/visibility"),
+            "open=false".to_string(),
+        ),
+        (
+            format!("/channels/{id}/members/add"),
+            format!("name={name}"),
+        ),
+        (
+            format!("/channels/{id}/members/remove"),
+            format!("name={name}"),
+        ),
+        (format!("/channels/{id}/hide"), String::new()),
+        (format!("/agents/{name}/hide"), String::new()),
+    ];
+    for (path, fields) in &routes {
+        assert_eq!(post(&app, path, fields).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            post(&app, path, &format!("{fields}&form_token=invalid"))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(get(&app, path).await.0, StatusCode::METHOD_NOT_ALLOWED);
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri(path)
+            .header("Host", "localhost")
+            .header("Origin", "http://other.example")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(Body::from(format!("{fields}&form_token={token}")))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    // The forged requests made no changes.
+    assert_eq!(
+        source
+            .channel(id.clone(), None)
+            .await
+            .unwrap()
+            .members
+            .len(),
+        count
+    );
+    assert!(source.agent(name.clone()).await.is_ok());
+    let open = !current.channel.open;
+    assert_eq!(
+        post(
+            &app,
+            &routes[0].0,
+            &format!("open={open}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        source.channel(id.clone(), None).await.unwrap().channel.open,
+        open
+    );
+    assert_eq!(
+        post(
+            &app,
+            &routes[2].0,
+            &format!("name={name}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        source
+            .channel(id.clone(), None)
+            .await
+            .unwrap()
+            .members
+            .len(),
+        count - 1
+    );
+    assert_eq!(
+        post(
+            &app,
+            &routes[1].0,
+            &format!("name={name}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    let view = source.channel(id.clone(), None).await.unwrap();
+    assert_eq!(view.members.len(), count);
+    assert!(view.messages.last().unwrap().from_operator);
+    assert!(view.messages.last().unwrap().body.contains("added"));
+    assert_eq!(
+        post(&app, &routes[4].0, &format!("form_token={token}"))
+            .await
+            .0,
+        StatusCode::SEE_OTHER
+    );
+    assert!(matches!(
+        source.agent(name.clone()).await,
+        Err(SourceError::NotFound(_))
+    ));
+    let view = source.channel(id.clone(), None).await.unwrap();
+    assert!(!view.members.iter().any(|m| m.name == name));
+    assert!(view.messages.last().unwrap().from_operator);
+    assert!(view.messages.last().unwrap().body.contains("hid"));
+    assert_eq!(
+        post(&app, &routes[3].0, &format!("form_token={token}")).await,
+        (StatusCode::SEE_OTHER, Some("/".into()))
+    );
+    assert!(matches!(
+        source.channel(id.clone(), None).await,
+        Err(SourceError::NotFound(_))
+    ));
+    let overview = source.overview().await.unwrap();
+    assert!(!overview.channels.iter().any(|c| c.channel.id == id));
+    assert!(!overview.agents.iter().any(|a| a.agent.name == name));
+}
+
+#[tokio::test]
+async fn administration_works_through_the_rules() {
+    administration_works(rules_source().await).await;
+}
+
+#[tokio::test]
+async fn administration_works_through_the_preview() {
+    administration_works(preview(
+        1,
+        Arc::new(FixedClock::new(start_time())),
+        &Shutdown::new(),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn preview_feed_survives_empty_channels_and_hiding_every_entry() {
+    let p = preview(1, Arc::new(FixedClock::new(start_time())), &Shutdown::new());
+    let overview = p.overview().await.unwrap();
+    for agent in overview.agents {
+        p.hide_agent(agent.agent.name).await.unwrap();
+    }
+    // No remaining channel members must not cause an entropy-index panic.
+    p.step();
+    for channel in p.overview().await.unwrap().channels {
+        p.change_channel(channel.channel.id, ChannelAction::Hide)
+            .await
+            .unwrap();
+    }
+    assert!(p.overview().await.unwrap().channels.is_empty());
+    p.step();
+    assert!(!p.overview().await.unwrap().channels.is_empty());
+}
