@@ -154,6 +154,9 @@ fn source_error(e: RuleError) -> SourceError {
 
 fn channel(c: ChannelInfo) -> Channel {
     Channel {
+        note: c.note.text,
+        note_edited_by: c.note.edited_by,
+        note_edited_at: c.note.edited_at,
         id: c.id,
         name: c.name,
         purpose: c.purpose,

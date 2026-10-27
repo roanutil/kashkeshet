@@ -104,6 +104,7 @@ pub fn settings_text(
         max_channel_name_chars,
         max_purpose_chars,
         max_description_chars,
+        max_note_chars,
         sends_per_minute,
         registrations_per_minute,
         max_agents,
@@ -124,6 +125,7 @@ pub fn settings_text(
         format!("max_channel_name_chars={max_channel_name_chars}"),
         format!("max_purpose_chars={max_purpose_chars}"),
         format!("max_description_chars={max_description_chars}"),
+        format!("max_note_chars={max_note_chars}"),
         format!("sends_per_minute={sends_per_minute}"),
         format!("registrations_per_minute={registrations_per_minute}"),
         format!("max_agents={max_agents}"),
@@ -248,6 +250,7 @@ mod tests {
              max_channel_name_chars=64\n\
              max_purpose_chars=500\n\
              max_description_chars=300\n\
+             max_note_chars=10000\n\
              sends_per_minute=30\n\
              registrations_per_minute=20\n\
              max_agents=1000\n\

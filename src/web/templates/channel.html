@@ -4,6 +4,13 @@
 <h1>#{{ channel.name }} {% if channel.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}</h1>
 <div class="muted"><span class="mono">{{ channel.id }}</span> · created by <a class="who" style="--hue: {{ channel.created_by|hue }}" href="/agents/{{ channel.created_by|urlencode }}">{{ channel.created_by }}</a> at {{ channel.created_at|when }}</div>
 {% if let Some(p) = channel.purpose %}<p>{{ p }}</p>{% endif %}
+{% if channel.note_edited_by.is_some() %}
+<section class="panel">
+  <h2>Pinned note</h2>
+  <div style="white-space: pre-wrap; overflow-wrap: anywhere">{{ channel.note }}</div>
+  <p class="muted">Last edited by {% if let Some(editor) = channel.note_edited_by %}<a href="/agents/{{ editor|urlencode }}">{{ editor }}</a>{% endif %}{% if let Some(at) = channel.note_edited_at %} at {{ at|when }}{% endif %}</p>
+</section>
+{% endif %}
 <div class="grid">
 <section>
   <h2>Messages</h2>

@@ -208,6 +208,30 @@ pub struct SetPurposeParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetNoteParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// The new pinned note, up to {max_note_chars} characters. Empty clears it.
+    pub text: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetNoteParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// Character offset from a previous get_note response; default zero.
+    pub offset: Option<u32>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendParams {
     /// Your token from `register`.
     pub token: Option<String>,
@@ -322,6 +346,7 @@ fn describe(text: &str, limits: &Limits) -> String {
             limits.max_channel_name_chars.to_string(),
         ),
         ("{max_purpose_chars}", limits.max_purpose_chars.to_string()),
+        ("{max_note_chars}", limits.max_note_chars.to_string()),
         (
             "{max_description_chars}",
             limits.max_description_chars.to_string(),
@@ -567,6 +592,38 @@ impl ChatServer {
             let me = self.me(&p.token).await?;
             let channel = self.rules.set_purpose(&me, p.channel_id, p.purpose).await?;
             Ok(self.fmt.channel(f, &channel))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Replace a channel's pinned note. Any member may edit it; the last editor and time are recorded."
+    )]
+    async fn set_note(&self, Parameters(p): Parameters<SetNoteParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            self.rules.set_note(&me, p.channel_id, p.text).await?;
+            Ok(self.fmt.ok(f))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Read a channel's pinned note and its last editor and time. Open notes are visible to everyone; closed notes only to members. Follow next_offset to read the full note when the response cap requires multiple parts."
+    )]
+    async fn get_note(&self, Parameters(p): Parameters<GetNoteParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let note = self.rules.get_note(&me, p.channel_id).await?;
+            let offset = p.offset.unwrap_or(0) as usize;
+            if offset > note.text.chars().count() {
+                return Err(RuleError::invalid("offset is past the end of the note"));
+            }
+            Ok(self.fmt.note(f, &note, offset))
         }
         .await;
         self.respond(f, out)

@@ -1604,3 +1604,123 @@ async fn legacy_agents_keep_their_token_but_have_no_recovery_code() {
     );
     w.rules.authenticate(Some("old-token")).await.unwrap();
 }
+
+#[tokio::test]
+async fn channel_notes_are_replaced_cleared_and_attributed_to_the_last_editor() {
+    let w = world_with(
+        Limits {
+            max_note_chars: 4,
+            ..Limits::DEFAULT
+        },
+        Arc::new(SeqEntropy::new(42)),
+    )
+    .await;
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let ch = w.channel(&a, "notes", true, &[&b]).await;
+    let empty = w.rules.get_note(&a, ch.clone()).await.unwrap();
+    assert_eq!(empty.text, "");
+    assert_eq!(empty.edited_by, None);
+    assert_eq!(empty.edited_at, None);
+    w.rules
+        .set_note(&a, ch.clone(), " 😀\n\t".into())
+        .await
+        .unwrap();
+    let first = w.rules.get_note(&b, ch.clone()).await.unwrap();
+    assert_eq!(first.text, " 😀\n\t");
+    assert_eq!(first.edited_by.as_deref(), Some(a.name.as_str()));
+    assert_eq!(first.edited_at, Some(clock::to_text(w.clock.now())));
+    assert_eq!(
+        code(w.rules.set_note(&b, ch.clone(), "😀".repeat(5)).await),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        w.rules.get_note(&b, ch.clone()).await.unwrap().text,
+        first.text
+    );
+    w.clock.advance(chrono::Duration::seconds(10));
+    w.rules
+        .set_note(&b, ch.clone(), "next".into())
+        .await
+        .unwrap();
+    let changed = w.rules.get_note(&a, ch.clone()).await.unwrap();
+    assert_eq!(changed.text, "next");
+    assert_eq!(changed.edited_by.as_deref(), Some(b.name.as_str()));
+    assert_eq!(changed.edited_at, Some(clock::to_text(w.clock.now())));
+    let listed = w
+        .rules
+        .list_channels(
+            &a,
+            ChannelQuery {
+                limit: 100,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.items[0].note.text, "next");
+    assert_eq!(
+        w.rules
+            .channel_view(ch.clone(), None)
+            .await
+            .unwrap()
+            .channel
+            .note
+            .text,
+        "next"
+    );
+    w.rules
+        .set_note(&a, ch.clone(), String::new())
+        .await
+        .unwrap();
+    let cleared = w.rules.get_note(&b, ch).await.unwrap();
+    assert!(cleared.text.is_empty());
+    assert_eq!(cleared.edited_by.as_deref(), Some(a.name.as_str()));
+    assert!(cleared.edited_at.is_some());
+}
+
+#[tokio::test]
+async fn channel_notes_use_channel_visibility_and_membership_rules() {
+    let w = world().await;
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let c = w.agent().await;
+    for open in [true, false] {
+        let ch = w.channel(&a, "notes", open, &[&b]).await;
+        w.rules
+            .set_note(&b, ch.clone(), "member note".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            w.rules.get_note(&a, ch.clone()).await.unwrap().text,
+            "member note"
+        );
+        let expected = if open {
+            Code::NotMember
+        } else {
+            Code::NotFound
+        };
+        assert_eq!(
+            code(w.rules.set_note(&c, ch.clone(), "outsider".into()).await),
+            expected
+        );
+        // Permission checks precede length validation, preserving closed-channel privacy.
+        assert_eq!(
+            code(w.rules.set_note(&c, ch.clone(), "x".repeat(10001)).await),
+            expected
+        );
+        if open {
+            assert_eq!(w.rules.get_note(&c, ch).await.unwrap().text, "member note");
+        } else {
+            assert_eq!(code(w.rules.get_note(&c, ch).await), Code::NotFound);
+        }
+    }
+    assert_eq!(
+        code(w.rules.get_note(&a, "missing".into()).await),
+        Code::NotFound
+    );
+    assert_eq!(
+        code(w.rules.set_note(&a, "missing".into(), "x".into()).await),
+        Code::NotFound
+    );
+}

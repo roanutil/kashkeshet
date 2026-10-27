@@ -265,3 +265,120 @@ fn cut_counts_characters() {
     assert_eq!(cut_body("héllo", 2), ("hé…".to_string(), true));
     assert_eq!(cut_body("hi", 2), ("hi".to_string(), false));
 }
+
+#[test]
+fn pinned_notes_are_lossless_and_paginated_after_json_escaping() {
+    let fmt = formatter(1024);
+    for text in [
+        "hello\nworld".to_string(),
+        "😀\n\t\"\\\0".repeat(1500),
+        String::new(),
+    ] {
+        let note = crate::rules::ChannelNote {
+            channel_id: "ch_notes".into(),
+            text: text.clone(),
+            edited_by: Some("amber-falcon".into()),
+            edited_at: Some("2026-10-23T14:00:00Z".into()),
+        };
+        let mut offset = 0;
+        let mut recovered = String::new();
+        loop {
+            let out = fmt.note(Format::Json, &note, offset);
+            assert!(out.len() <= 1024);
+            let v: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(v["edited_by"], "amber-falcon");
+            assert_eq!(v["edited_at"], "2026-10-23T14:00:00Z");
+            assert_eq!(v["offset"], offset);
+            recovered.push_str(v["text"].as_str().unwrap());
+            let Some(next) = v["next_offset"].as_u64() else {
+                break;
+            };
+            assert!(next as usize > offset);
+            offset = next as usize;
+        }
+        assert_eq!(recovered, text);
+        let out = fmt.note(Format::Text, &note, 0);
+        assert!(out.len() <= 1024);
+        assert!(out.contains("last edited by amber-falcon at 2026-10-23T14:00:00Z"));
+        if text.len() > 1024 {
+            assert!(out.contains("next_offset:"));
+        } else {
+            assert!(out.ends_with(&text));
+        }
+    }
+}
+
+#[test]
+fn channel_lists_preview_notes_and_show_edit_attribution() {
+    let note = crate::rules::ChannelNote {
+        channel_id: "ch_notes".into(),
+        text: "A".repeat(1000),
+        edited_by: Some("amber-falcon".into()),
+        edited_at: Some("2026-10-23T14:00:00Z".into()),
+    };
+    let ch = crate::rules::ChannelInfo {
+        id: "ch_notes".into(),
+        name: "notes".into(),
+        purpose: None,
+        note,
+        open: true,
+        created_by: "amber-falcon".into(),
+        created_at: "2026-10-23T14:00:00Z".into(),
+        member_count: 1,
+        members_preview: vec!["amber-falcon".into()],
+        is_member: true,
+        new_messages: None,
+    };
+    let fmt = formatter(1024);
+    let page = Page {
+        items: vec![ch],
+        next_cursor: None,
+    };
+    let out = fmt.channels(Format::Text, &page, 120);
+    assert!(out.contains("note: "));
+    assert!(out.contains("amber-falcon at 2026-10-23T14:00:00Z"));
+    assert!(!out.contains(&"A".repeat(121)));
+    let out = fmt.channels(Format::Json, &page, 120);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["channels"][0]["note"], format!("{}…", "A".repeat(120)));
+    assert_eq!(v["channels"][0]["note_cut"], true);
+    assert_eq!(v["channels"][0]["note_edited_by"], "amber-falcon");
+    assert_eq!(v["channels"][0]["note_edited_at"], "2026-10-23T14:00:00Z");
+}
+
+#[test]
+fn escaped_note_previews_do_not_hide_a_channel_at_the_minimum_cap() {
+    let note = crate::rules::ChannelNote {
+        channel_id: "ch_notes".into(),
+        text: "\0".repeat(1000),
+        edited_by: Some("amber-falcon".into()),
+        edited_at: Some("2026-10-23T14:00:00Z".into()),
+    };
+    let ch = crate::rules::ChannelInfo {
+        id: "ch_notes".into(),
+        name: "a".repeat(64),
+        purpose: Some("p".repeat(120)),
+        note,
+        open: true,
+        created_by: "amber-falcon".into(),
+        created_at: "2026-10-23T14:00:00Z".into(),
+        member_count: 3,
+        members_preview: vec![
+            "amber-falcon".into(),
+            "silver-ferret".into(),
+            "brave-beaver".into(),
+        ],
+        is_member: true,
+        new_messages: None,
+    };
+    let page = Page {
+        items: vec![ch],
+        next_cursor: None,
+    };
+    let out = formatter(1024).channels(Format::Json, &page, 120);
+    assert!(out.len() <= 1024);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["channels"].as_array().unwrap().len(), 1);
+    assert_eq!(v["channels"][0]["note_cut"], true);
+    assert!(v["channels"][0]["note"].as_str().unwrap().starts_with('\0'));
+}
