@@ -16,6 +16,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0003_revoked_agents.sql"),
     include_str!("../../migrations/0004_identity_recovery.sql"),
     include_str!("../../migrations/0005_messages_by_time.sql"),
+    include_str!("../../migrations/0006_agent_descriptions.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -161,7 +162,7 @@ fn migrate(conn: &mut Connection) -> StoreResult<()> {
 /// [`Db::write`] the connection is a transaction.
 struct Sql<'a>(&'a Connection);
 
-const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id, revoked_at";
+const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id, revoked_at, description";
 
 fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
     Ok(AgentRecord {
@@ -170,6 +171,7 @@ fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
         last_seen: r.get(2)?,
         run_id: r.get(3)?,
         revoked_at: r.get(4)?,
+        description: r.get(5)?,
     })
 }
 
@@ -415,19 +417,20 @@ impl Reads for Sql<'_> {
         channel_id: &str,
         after_name: Option<&str>,
         limit: usize,
-    ) -> StoreResult<Vec<String>> {
-        let mut stmt = self.0.prepare_cached(
-            "SELECT agent FROM memberships
-             WHERE channel_id = :id AND (:cursor IS NULL OR agent > :cursor)
-             ORDER BY agent LIMIT :limit",
-        )?;
-        let names = stmt
+    ) -> StoreResult<Vec<AgentRecord>> {
+        let mut stmt = self.0.prepare_cached(&format!(
+            "SELECT {AGENT_COLUMNS} FROM agents
+             WHERE name IN (SELECT agent FROM memberships WHERE channel_id = :id)
+               AND (:cursor IS NULL OR name > :cursor)
+             ORDER BY name LIMIT :limit"
+        ))?;
+        let members = stmt
             .query_map(
                 named_params! { ":id": channel_id, ":cursor": after_name, ":limit": limit as i64 },
-                |r| r.get::<_, String>(0),
+                agent_from_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(names)
+        Ok(members)
     }
 
     fn message(&self, id: i64) -> StoreResult<Option<MessageRecord>> {
@@ -694,6 +697,14 @@ impl Writes for Sql<'_> {
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()> {
         self.0
             .execute("UPDATE agents SET last_seen = ? WHERE name = ?", [at, name])?;
+        Ok(())
+    }
+
+    fn set_description(&self, name: &str, description: Option<&str>) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET description = ? WHERE name = ?",
+            rusqlite::params![description, name],
+        )?;
         Ok(())
     }
 

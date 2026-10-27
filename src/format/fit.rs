@@ -37,36 +37,66 @@ impl Formatter {
             } else {
                 tail.clone()
             };
-            match f {
-                Format::Text => {
-                    let mut lines = Vec::new();
-                    if let Some((h, _)) = &header {
-                        lines.push(h.clone());
-                    }
-                    if rows.is_empty() {
-                        lines.push("(none)".into());
-                    }
-                    lines.extend(rows[..k].iter().map(|r| r.text.clone()));
-                    if let Some(m) = more {
-                        lines.push(format!("more: {m}"));
-                    }
-                    lines.join("\n")
-                }
-                Format::Json => {
-                    let mut obj = match &header {
-                        Some((_, Value::Object(map))) => map.clone(),
-                        _ => serde_json::Map::new(),
-                    };
-                    obj.insert(
-                        key.into(),
-                        Value::Array(rows[..k].iter().map(|r| r.json.clone()).collect()),
-                    );
-                    obj.insert("more".into(), more.map_or(Value::Null, Value::String));
-                    Value::Object(obj).to_string()
-                }
-            }
+            self.list_page(f, header.as_ref(), key, &rows[..k], more)
         };
         fit(rows.len(), self.max_bytes, render)
+    }
+
+    /// Whether `row` alone, with a `more:` line after it, fits in a response.
+    pub(super) fn row_fits(
+        &self,
+        f: Format,
+        header: Option<&(String, Value)>,
+        key: &str,
+        row: &Row,
+    ) -> bool {
+        let page = self.list_page(
+            f,
+            header,
+            key,
+            std::slice::from_ref(row),
+            Some(row.resume.clone()),
+        );
+        page.len() <= self.max_bytes
+    }
+
+    /// Renders all of `rows`, whatever their size.
+    fn list_page(
+        &self,
+        f: Format,
+        header: Option<&(String, Value)>,
+        key: &str,
+        rows: &[Row],
+        more: Option<String>,
+    ) -> String {
+        match f {
+            Format::Text => {
+                let mut lines = Vec::new();
+                if let Some((h, _)) = header {
+                    lines.push(h.clone());
+                }
+                if rows.is_empty() {
+                    lines.push("(none)".into());
+                }
+                lines.extend(rows.iter().map(|r| r.text.clone()));
+                if let Some(m) = more {
+                    lines.push(format!("more: {m}"));
+                }
+                lines.join("\n")
+            }
+            Format::Json => {
+                let mut obj = match header {
+                    Some((_, Value::Object(map))) => map.clone(),
+                    _ => serde_json::Map::new(),
+                };
+                obj.insert(
+                    key.into(),
+                    Value::Array(rows.iter().map(|r| r.json.clone()).collect()),
+                );
+                obj.insert("more".into(), more.map_or(Value::Null, Value::String));
+                Value::Object(obj).to_string()
+            }
+        }
     }
 
     pub(super) fn messages(
@@ -193,6 +223,19 @@ pub(super) fn cut_body(body: &str, max_chars: usize) -> (String, bool) {
         Some((end, _)) => (format!("{}…", &body[..end]), true),
         None => (body.to_string(), false),
     }
+}
+
+/// `text` cut at a character boundary to at most `max_bytes` bytes, ending
+/// in `…` if anything was cut.
+pub(super) fn cut_bytes(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = max_bytes.saturating_sub('…'.len_utf8());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 pub(super) fn one_line(text: &str) -> String {

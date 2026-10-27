@@ -82,7 +82,7 @@ impl Source for RulesSource {
                 .map_err(source_error)?;
             Ok(ChannelView {
                 channel: channel(v.channel),
-                members: v.members,
+                members: v.members.into_iter().map(agent).collect(),
                 messages: v.messages.into_iter().map(message).collect(),
                 older_before_id: v.older_before_id,
             })
@@ -170,6 +170,7 @@ fn agent(a: AgentInfo) -> Agent {
         created_at: a.created_at,
         last_seen: a.last_seen,
         run_id: a.run_id,
+        description: a.description,
     }
 }
 

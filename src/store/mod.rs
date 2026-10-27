@@ -38,6 +38,8 @@ pub struct AgentRecord {
     pub run_id: Option<i64>,
     /// When the operator revoked the agent's token, if it has.
     pub revoked_at: Option<String>,
+    /// What the agent says about itself, if it has said anything.
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -271,13 +273,13 @@ pub trait Reads {
 
     fn member_count(&self, channel_id: &str) -> StoreResult<i64>;
 
-    /// Up to `limit` member names in name order, after `after_name` if given.
+    /// Up to `limit` members in name order, after `after_name` if given.
     fn members_by_name(
         &self,
         channel_id: &str,
         after_name: Option<&str>,
         limit: usize,
-    ) -> StoreResult<Vec<String>>;
+    ) -> StoreResult<Vec<AgentRecord>>;
 
     // ---- messages ----
 
@@ -337,6 +339,9 @@ pub trait Writes: Reads {
     fn set_token_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()>;
 
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()>;
+
+    /// Replaces the agent's description. `None` clears it.
+    fn set_description(&self, name: &str, description: Option<&str>) -> StoreResult<()>;
 
     /// Marks the agent's token as revoked at `at`.
     fn set_revoked(&self, name: &str, at: &str) -> StoreResult<()>;

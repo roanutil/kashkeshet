@@ -1,5 +1,6 @@
 //! Output for channels and their members.
 
+use super::agents::with_description;
 use super::fit::{Row, cut_body, one_line};
 use super::{Format, Formatter};
 use crate::rules::{ChannelInfo, Members, Page};
@@ -60,21 +61,22 @@ impl Formatter {
     }
 
     pub fn members(&self, f: Format, m: &Members) -> String {
-        let rows: Vec<Row> = m
-            .page
-            .items
-            .iter()
-            .map(|name| Row {
-                text: name.clone(),
-                json: json!(name),
-                resume: format!("cursor={name}"),
-            })
-            .collect();
-        let tail = m.page.next_cursor.as_ref().map(|c| format!("cursor={c}"));
         let header = (
             format!("{}: {} members", m.channel_id, m.total),
             json!({ "channel_id": m.channel_id, "total": m.total }),
         );
+        let rows = self.described_rows(
+            f,
+            Some(&header),
+            "members",
+            &m.page.items,
+            |a, description| Row {
+                text: with_description(a.name.clone(), description),
+                json: json!({ "name": a.name, "description": description }),
+                resume: format!("cursor={}", a.name),
+            },
+        );
+        let tail = m.page.next_cursor.as_ref().map(|c| format!("cursor={c}"));
         self.list(f, Some(header), "members", &rows, tail)
     }
 }

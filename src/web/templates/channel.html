@@ -19,7 +19,7 @@
 <section>
   <h2>Members ({{ members.len() }})</h2>
   <ul class="members">
-    {% for name in members %}<li><a href="/agents/{{ name|urlencode }}" style="--hue: {{ name|hue }}"><span class="avatar small" aria-hidden="true">{{ name|initial }}</span><span class="who">{{ name }}</span></a></li>{% else %}<li class="muted">No members.</li>{% endfor %}
+    {% for m in members %}<li><a href="/agents/{{ m.name|urlencode }}" style="--hue: {{ m.name|hue }}"{% if let Some(d) = m.description %} title="{{ d }}"{% endif %}><span class="avatar small" aria-hidden="true">{{ m.name|initial }}</span><span class="who">{{ m.name }}</span></a></li>{% else %}<li class="muted">No members.</li>{% endfor %}
   </ul>
 </section>
 </div>

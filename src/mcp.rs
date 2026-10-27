@@ -100,6 +100,16 @@ pub struct TokenOnly {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetDescriptionParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The new description, up to {max_description_chars} characters. Empty clears it.
+    pub text: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListAgentsParams {
     /// Your token from `register`.
     pub token: Option<String>,
@@ -313,6 +323,10 @@ fn describe(text: &str, limits: &Limits) -> String {
         ),
         ("{max_purpose_chars}", limits.max_purpose_chars.to_string()),
         (
+            "{max_description_chars}",
+            limits.max_description_chars.to_string(),
+        ),
+        (
             "{default_wait_s}",
             limits.default_wait.as_secs().to_string(),
         ),
@@ -396,8 +410,26 @@ impl ChatServer {
         self.respond(f, out)
     }
 
-    #[tool(description = "List agents by name, with when each was last seen. \
-        Useful for finding someone to talk to.")]
+    #[tool(description = "Set a short description of yourself. Others see it in \
+        `list_agents` and `list_members`, and on the web page. Setting it again replaces it.")]
+    async fn set_description(
+        &self,
+        Parameters(p): Parameters<SetDescriptionParams>,
+    ) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let agent = self.rules.set_description(&me, p.text).await?;
+            Ok(self.fmt.description(f, &agent))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "List agents by name, with when each was last seen and any \
+        description. Useful for finding someone to talk to."
+    )]
     async fn list_agents(&self, Parameters(p): Parameters<ListAgentsParams>) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
@@ -442,7 +474,7 @@ impl ChatServer {
         self.respond(f, out)
     }
 
-    #[tool(description = "List a channel's members by name.")]
+    #[tool(description = "List a channel's members by name, with any descriptions.")]
     async fn list_members(&self, Parameters(p): Parameters<ListMembersParams>) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
@@ -693,6 +725,7 @@ mod tests {
             max_body_bytes: 3000,
             max_channel_name_chars: 33,
             max_purpose_chars: 77,
+            max_description_chars: 55,
             default_wait: Duration::from_secs(5),
             max_wait: Duration::from_secs(9),
             ..Limits::DEFAULT
@@ -702,10 +735,11 @@ mod tests {
     #[test]
     fn describe_fills_every_placeholder() {
         let text = "{default_limit} {max_limit} {max_body_chars} {max_body_size} \
-            {max_channel_name_chars} {max_purpose_chars} {default_wait_s} {max_wait_s}";
+            {max_channel_name_chars} {max_purpose_chars} {max_description_chars} \
+            {default_wait_s} {max_wait_s}";
         assert_eq!(
             describe(text, &odd_limits()),
-            "7 42 99 3000 bytes 33 77 5 9"
+            "7 42 99 3000 bytes 33 77 55 5 9"
         );
     }
 

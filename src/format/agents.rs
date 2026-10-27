@@ -1,9 +1,9 @@
 //! Output for registration and agent lists.
 
-use super::fit::{Row, short_time};
+use super::fit::{Row, cut_bytes, one_line, short_time};
 use super::{Format, Formatter};
 use crate::rules::{AgentInfo, Page, Reclaimed, Registration};
-use serde_json::json;
+use serde_json::{Value, json};
 
 impl Formatter {
     pub fn registration(&self, f: Format, r: &Registration) -> String {
@@ -39,21 +39,80 @@ impl Formatter {
         }
     }
 
+    /// Acknowledges a new description by its length, without repeating it,
+    /// so the reply is short whatever the description holds.
+    pub fn description(&self, f: Format, a: &AgentInfo) -> String {
+        let chars = a.description.as_deref().map_or(0, |d| d.chars().count());
+        match f {
+            Format::Text => match chars {
+                0 => format!("name: {}\ndescription cleared", a.name),
+                n => format!("name: {}\ndescription set ({n} characters)", a.name),
+            },
+            Format::Json => json!({ "name": a.name, "description_chars": chars }).to_string(),
+        }
+    }
+
+    /// One row per agent, built by `build` from the agent and the description
+    /// to show. Descriptions are shown whole unless one row alone would not
+    /// fit in a response; then that row's description is cut to fit.
+    pub(super) fn described_rows(
+        &self,
+        f: Format,
+        header: Option<&(String, Value)>,
+        key: &str,
+        agents: &[AgentInfo],
+        build: impl Fn(&AgentInfo, Option<&str>) -> Row,
+    ) -> Vec<Row> {
+        let fits = |row: &Row| self.row_fits(f, header, key, row);
+        agents
+            .iter()
+            .map(|a| {
+                let whole = build(a, a.description.as_deref());
+                let Some(d) = a.description.as_deref().filter(|_| !fits(&whole)) else {
+                    return whole;
+                };
+                // The most bytes of the description that still fit.
+                let (mut lo, mut hi) = (0, d.len());
+                while lo < hi {
+                    let mid = (lo + hi).div_ceil(2);
+                    if fits(&build(a, Some(&cut_bytes(d, mid)))) {
+                        lo = mid;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+                build(a, Some(&cut_bytes(d, lo)))
+            })
+            .collect()
+    }
+
     pub fn agents(&self, f: Format, page: &Page<AgentInfo>) -> String {
         let now = self.clock.now();
-        let rows: Vec<Row> = page
-            .items
-            .iter()
-            .map(|a| Row {
-                text: match &a.last_seen {
+        let rows = self.described_rows(f, None, "agents", &page.items, |a, description| Row {
+            text: with_description(
+                match &a.last_seen {
                     Some(seen) => format!("{}  last seen {}", a.name, short_time(seen, now)),
                     None => a.name.clone(),
                 },
-                json: json!({ "name": a.name, "last_seen": a.last_seen }),
-                resume: format!("cursor={}", a.name),
-            })
-            .collect();
+                description,
+            ),
+            json: json!({
+                "name": a.name,
+                "last_seen": a.last_seen,
+                "description": description,
+            }),
+            resume: format!("cursor={}", a.name),
+        });
         let tail = page.next_cursor.as_ref().map(|c| format!("cursor={c}"));
         self.list(f, None, "agents", &rows, tail)
     }
+}
+
+/// `line`, followed by `description` on the same line if there is one.
+pub(super) fn with_description(mut line: String, description: Option<&str>) -> String {
+    if let Some(d) = description {
+        line.push_str(" — ");
+        line.push_str(&one_line(d));
+    }
+    line
 }
