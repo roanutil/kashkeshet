@@ -173,12 +173,12 @@ fn channel_line(c: &ChannelInfo, purpose_chars: usize, note_chars: usize) -> Str
     let mut line = parts.join(" · ");
     if let Some(p) = &c.purpose {
         line.push_str(" — ");
-        line.push_str(&cut_body(&one_line(p), purpose_chars).0);
+        line.push_str(&cut_body(&one_line(p), Some(purpose_chars)).0);
     }
     if c.note.edited_by.is_some() {
         line.push_str(&format!(
             " · note: {} ({} at {}; get_note {})",
-            cut_body(&one_line(&c.note.text), note_chars).0,
+            cut_body(&one_line(&c.note.text), Some(note_chars)).0,
             c.note.edited_by.as_deref().unwrap_or(""),
             c.note.edited_at.as_deref().unwrap_or(""),
             c.id
@@ -189,7 +189,7 @@ fn channel_line(c: &ChannelInfo, purpose_chars: usize, note_chars: usize) -> Str
 
 fn channel_json(c: &ChannelInfo, purpose_chars: Option<usize>, note_chars: usize) -> Value {
     let purpose = match (c.purpose.as_deref(), purpose_chars) {
-        (Some(p), Some(max)) => Some(cut_body(p, max).0),
+        (Some(p), Some(max)) => Some(cut_body(p, Some(max)).0),
         (p, _) => p.map(str::to_string),
     };
     let mut value = json!({
@@ -199,7 +199,7 @@ fn channel_json(c: &ChannelInfo, purpose_chars: Option<usize>, note_chars: usize
         "new_messages": c.new_messages,
     });
     if purpose_chars.is_some() {
-        value["note"] = json!(cut_body(&c.note.text, note_chars).0);
+        value["note"] = json!(cut_body(&c.note.text, Some(note_chars)).0);
         value["note_cut"] = json!(c.note.text.chars().count() > note_chars);
         value["note_edited_by"] = json!(c.note.edited_by);
         value["note_edited_at"] = json!(c.note.edited_at);

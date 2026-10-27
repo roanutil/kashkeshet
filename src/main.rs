@@ -219,11 +219,6 @@ struct ServeFlags {
     ))]
     max_limit: Option<usize>,
     #[arg(long, help = format!(
-        "Message bodies longer than this many characters are cut in listings [default: {}]",
-        Limits::DEFAULT.max_body_chars
-    ))]
-    max_body_chars: Option<usize>,
-    #[arg(long, help = format!(
         "Messages one agent may send per minute [default: {}]",
         Limits::DEFAULT.sends_per_minute
     ))]
@@ -277,7 +272,6 @@ impl ServeFlags {
             max_response_bytes: self.max_response_bytes,
             default_limit: self.default_limit,
             max_limit: self.max_limit,
-            max_body_chars: self.max_body_chars,
             sends_per_minute: self.sends_per_minute,
             allow_origins: list(self.allow_origins),
             allow_hosts: list(self.allow_hosts),
