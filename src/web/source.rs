@@ -80,6 +80,9 @@ pub enum SourceError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Channel {
+    pub note: String,
+    pub note_edited_by: Option<String>,
+    pub note_edited_at: Option<String>,
     pub id: String,
     pub name: String,
     pub purpose: Option<String>,

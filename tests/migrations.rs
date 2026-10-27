@@ -57,7 +57,7 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
@@ -175,4 +175,37 @@ fn an_older_database_gains_the_message_time_index() {
         .expect("count");
     assert_eq!(kept, 1);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn existing_channels_gain_an_empty_note_and_edits_survive_reopening() {
+    let dir = temp_dir("channel-notes");
+    let path = dir.join("old.db");
+    make_v1(&path);
+    let db = Db::open(&path).unwrap();
+    let note = db
+        .read(|s| s.channel_summary("ch_1", None, None))
+        .await
+        .unwrap()
+        .unwrap()
+        .note;
+    assert_eq!(note.text, "");
+    assert_eq!(note.edited_by, None);
+    assert_eq!(note.edited_at, None);
+    db.write(|s| s.set_note("ch_1", "a note\n😀", "amber-falcon", "2026-10-26T12:00:00Z"))
+        .await
+        .unwrap();
+    drop(db);
+    let db = Db::open(&path).unwrap();
+    let note = db
+        .read(|s| s.channel_summary("ch_1", None, None))
+        .await
+        .unwrap()
+        .unwrap()
+        .note;
+    assert_eq!(note.text, "a note\n😀");
+    assert_eq!(note.edited_by.as_deref(), Some("amber-falcon"));
+    assert_eq!(note.edited_at.as_deref(), Some("2026-10-26T12:00:00Z"));
+    drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
 }

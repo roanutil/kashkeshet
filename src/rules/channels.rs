@@ -199,6 +199,36 @@ impl Rules {
         Ok(page)
     }
 
+    /// Reads a visible channel's pinned note in full.
+    pub async fn get_note(&self, me: &Agent, channel_id: String) -> Result<ChannelNote> {
+        let me = me.name.clone();
+        self.db()
+            .read(move |store| {
+                visible_channel(store, &me, &channel_id)?;
+                note(store, &channel_id)
+            })
+            .await
+    }
+
+    /// Replaces the note and its attribution in one transaction. Empty text clears it.
+    pub async fn set_note(&self, me: &Agent, channel_id: String, text: String) -> Result<()> {
+        let me = me.name.clone();
+        let now = self.now_text();
+        let max = self.limits().max_note_chars;
+        self.db()
+            .write(move |store| {
+                member_channel(store, &me, &channel_id)?;
+                if text.chars().count() > max {
+                    return Err(RuleError::invalid(format!(
+                        "note must be at most {max} characters"
+                    )));
+                }
+                store.set_note(&channel_id, &text, &me, &now)?;
+                Ok(())
+            })
+            .await
+    }
+
     pub async fn set_purpose(
         &self,
         me: &Agent,
@@ -216,6 +246,26 @@ impl Rules {
             })
             .await
     }
+}
+
+fn note(store: &dyn Reads, channel_id: &str) -> Result<ChannelNote> {
+    let summary = store
+        .channel_summary(channel_id, None, None)?
+        .ok_or_else(|| RuleError::channel_not_found(channel_id))?;
+    Ok(ChannelNote {
+        channel_id: channel_id.to_string(),
+        text: summary.note.text,
+        edited_by: summary.note.edited_by,
+        edited_at: summary.note.edited_at,
+    })
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ChannelNote {
+    pub channel_id: String,
+    pub text: String,
+    pub edited_by: Option<String>,
+    pub edited_at: Option<String>,
 }
 
 fn members_page(
@@ -343,6 +393,7 @@ mod tests {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ChannelInfo {
+    pub note: ChannelNote,
     pub id: String,
     pub name: String,
     pub purpose: Option<String>,

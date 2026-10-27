@@ -387,6 +387,9 @@ impl World {
         let id = names::channel_id(e);
         self.channels.push(SimChannel {
             channel: Channel {
+                note: String::new(),
+                note_edited_by: None,
+                note_edited_at: None,
                 id: id.clone(),
                 name,
                 purpose: Some(purpose),

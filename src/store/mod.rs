@@ -60,9 +60,18 @@ pub struct ChannelFacts {
     pub open: bool,
 }
 
+/// A pinned channel note, including the most recent edit (also when cleared).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelNoteRecord {
+    pub text: String,
+    pub edited_by: Option<String>,
+    pub edited_at: Option<String>,
+}
+
 /// A channel's stored fields and counts, as one viewer sees them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelSummary {
+    pub note: ChannelNoteRecord,
     pub id: String,
     pub name: String,
     pub purpose: Option<String>,
@@ -349,6 +358,8 @@ pub trait Writes: Reads {
     fn insert_channel(&self, channel: &NewChannelRecord) -> StoreResult<()>;
 
     fn set_purpose(&self, channel_id: &str, purpose: Option<&str>) -> StoreResult<()>;
+
+    fn set_note(&self, channel_id: &str, text: &str, editor: &str, at: &str) -> StoreResult<()>;
 
     /// Adds a member. Adding one already there does nothing.
     fn add_member(&self, channel_id: &str, agent: &str, joined_at: &str) -> StoreResult<()>;
