@@ -132,6 +132,8 @@ fn lists_cut_at_cap_with_cursor() {
                 name: format!("agent-{i:03}"),
                 created_at: "2026-10-23T14:00:00Z".into(),
                 last_seen: None,
+                listening: false,
+                waiting_channels: Vec::new(),
                 run_id: None,
                 description: None,
             })
@@ -143,7 +145,7 @@ fn lists_cut_at_cap_with_cursor() {
     let last_shown = out.lines().rev().nth(1).unwrap();
     assert_eq!(
         out.lines().last().unwrap(),
-        format!("more: cursor={last_shown}")
+        format!("more: cursor={}", last_shown.split(';').next().unwrap())
     );
 }
 
@@ -152,6 +154,8 @@ fn described(name: &str, description: Option<&str>) -> AgentInfo {
         name: name.into(),
         created_at: "2026-10-23T14:00:00Z".into(),
         last_seen: Some("2026-10-23T14:05:00Z".into()),
+        listening: false,
+        waiting_channels: Vec::new(),
         run_id: None,
         description: description.map(str::to_string),
     }
@@ -169,7 +173,7 @@ fn agent_and_member_lists_show_descriptions() {
     };
     assert_eq!(
         formatter(8000).agents(Format::Text, &page),
-        "amber-falcon  last seen 14:05 — Codex, reviews only\nbrave-beaver  last seen 14:05"
+        "amber-falcon  last call 14:05; not listening — Codex, reviews only\nbrave-beaver  last call 14:05; not listening"
     );
     let json: Value = serde_json::from_str(&formatter(8000).agents(Format::Json, &page)).unwrap();
     assert_eq!(json["agents"][0]["description"], "Codex, reviews only");
@@ -185,7 +189,7 @@ fn agent_and_member_lists_show_descriptions() {
     };
     assert_eq!(
         formatter(8000).members(Format::Text, &members),
-        "ch_7k2m9q4x: 2 members\namber-falcon — Codex, reviews only\nbrave-beaver"
+        "ch_7k2m9q4x: 2 members\namber-falcon; not listening; last call 2026-10-23T14:05:00Z — Codex, reviews only\nbrave-beaver; not listening; last call 2026-10-23T14:05:00Z"
     );
     let json: Value =
         serde_json::from_str(&formatter(8000).members(Format::Json, &members)).unwrap();
@@ -441,4 +445,48 @@ fn escaped_note_previews_do_not_hide_a_channel_at_the_minimum_cap() {
     assert_eq!(v["channels"].as_array().unwrap().len(), 1);
     assert_eq!(v["channels"][0]["note_cut"], true);
     assert!(v["channels"][0]["note"].as_str().unwrap().starts_with('\0'));
+}
+
+#[test]
+fn many_waiting_channels_keep_paginated_agents_and_members_visible() {
+    let fmt = formatter(crate::config::MIN_RESPONSE_BYTES);
+    for description in ["reviewer".into(), "😀".repeat(300), "\u{1}\n".repeat(150)] {
+        let mut a = described("amber-falcon", Some(&description));
+        a.listening = true;
+        a.waiting_channels = (0..500).map(|i| format!("ch_{i:08}")).collect();
+        let members = Members {
+            channel_id: "ch_public".into(),
+            total: 2,
+            page: Page {
+                items: vec![a],
+                next_cursor: Some("amber-falcon".into()),
+            },
+        };
+        for format in [Format::Text, Format::Json] {
+            for out in [
+                fmt.agents(format, &members.page),
+                fmt.members(format, &members),
+            ] {
+                assert!(out.len() <= crate::config::MIN_RESPONSE_BYTES);
+                assert!(!out.contains("larger than"), "{out}");
+                if matches!(format, Format::Json) {
+                    let json: Value = serde_json::from_str(&out).unwrap();
+                    let key = if json.get("agents").is_some() {
+                        "agents"
+                    } else {
+                        "members"
+                    };
+                    assert_eq!(json[key].as_array().unwrap().len(), 1);
+                    assert_eq!(json[key][0]["name"], "amber-falcon");
+                    assert!(json[key][0]["waiting_channels_more"].as_u64().unwrap() > 0);
+                    assert_eq!(json[key][0]["listening"], true);
+                    assert_eq!(json["more"], "cursor=amber-falcon");
+                } else {
+                    assert!(out.contains("amber-falcon"));
+                    assert!(out.contains("more waiting channels"));
+                    assert!(out.ends_with("more: cursor=amber-falcon"));
+                }
+            }
+        }
+    }
 }

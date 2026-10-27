@@ -638,3 +638,83 @@ async fn reconnect_and_reclaim_keeps_closed_channel_access() {
     assert!(!text_recovery.contains(&recovery_code));
     second.cancel().await.unwrap();
 }
+
+/// A dropped response is a dropped wait, even with a long completion grace.
+#[tokio::test]
+async fn disconnect_clears_listening_without_completion_grace() {
+    let mut config = test_config();
+    config.limits.waiting_grace = Duration::from_secs(30);
+    let server = start_with(config).await;
+    let observer = connect_new(&server).await;
+    let (name, token) = register(&observer).await;
+    let channel = json_of(
+        &ok(
+            &observer,
+            "create_channel",
+            json!({"token": token, "name": "waiting", "open": true, "format": "json"}),
+        )
+        .await,
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let http = reqwest::Client::new();
+    use tokio::io::AsyncWriteExt;
+    let address = server.base.strip_prefix("http://").unwrap();
+    let mut connection = tokio::net::TcpStream::connect(address).await.unwrap();
+    let body = json!({"jsonrpc":"2.0", "id":55, "method":"tools/call", "params": {
+        "name":"wait_for_messages", "arguments":{"token":token,"after_id":0,"timeout_s":50},
+        "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28", "io.modelcontextprotocol/clientCapabilities":{}}
+    }}).to_string();
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nMCP-Protocol-Version: 2026-07-28\r\nMcp-Method: tools/call\r\nMcp-Name: wait_for_messages\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    connection.write_all(request.as_bytes()).await.unwrap();
+    let listening = || async {
+        let agents = json_of(
+            &ok(
+                &observer,
+                "list_agents",
+                json!({"token":token,"query":name,"format":"json"}),
+            )
+            .await,
+        );
+        agents["agents"][0]["listening"].as_bool().unwrap()
+    };
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !listening().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("open HTTP wait becomes listening");
+    let members = json_of(
+        &ok(
+            &observer,
+            "list_members",
+            json!({"token":token,"channel_id":channel,"format":"json"}),
+        )
+        .await,
+    );
+    assert_eq!(members["members"][0]["waiting_channels"], json!([channel]));
+    let page = http
+        .get(format!("{}/", server.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("listening on"));
+    connection.shutdown().await.unwrap();
+    drop(connection);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while listening().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("disconnect clears listening immediately, without the 30-second grace");
+    observer.cancel().await.unwrap();
+}

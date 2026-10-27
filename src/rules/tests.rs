@@ -39,6 +39,7 @@ async fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
         .expect("record run");
     let operator = Operator::new(db.clone(), clock.clone());
     let rules = Rules::new(Deps {
+        waiting: crate::rules::Waiting::default(),
         db,
         events: Events::new(),
         clock: clock.clone(),
@@ -159,7 +160,7 @@ async fn name_clashes_get_a_number() {
 }
 
 #[tokio::test]
-async fn last_seen_is_written_at_most_once_a_minute() {
+async fn last_seen_records_every_authenticated_call() {
     let w = world().await;
     let reg = w.rules.register().await.unwrap();
     let seen = |w: &World| {
@@ -176,7 +177,7 @@ async fn last_seen_is_written_at_most_once_a_minute() {
     let first = seen(&w).await;
     w.clock.advance(chrono::Duration::seconds(30));
     w.rules.authenticate(Some(&reg.token)).await.unwrap();
-    assert_eq!(seen(&w).await, first);
+    assert_ne!(seen(&w).await, first);
     w.clock.advance(chrono::Duration::seconds(31));
     w.rules.authenticate(Some(&reg.token)).await.unwrap();
     assert_ne!(seen(&w).await, first);
@@ -1723,4 +1724,148 @@ async fn channel_notes_use_channel_visibility_and_membership_rules() {
         code(w.rules.set_note(&a, "missing".into(), "x".into()).await),
         Code::NotFound
     );
+}
+
+async fn observed(w: &World, viewer: &Agent, name: &str) -> AgentInfo {
+    w.rules
+        .list_agents(viewer, Some(name.into()), 10, None)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|a| a.name == name)
+        .unwrap()
+}
+fn open_wait(
+    w: &World,
+    agent: &Agent,
+    channels: Option<Vec<String>>,
+) -> tokio::task::JoinHandle<Result<WaitResult>> {
+    let rules = w.rules.clone();
+    let agent = agent.clone();
+    tokio::spawn(async move {
+        rules
+            .wait_for_messages(
+                &agent,
+                WaitQuery {
+                    after_id: 0,
+                    channel_ids: channels,
+                    timeout: Duration::from_secs(10),
+                    limit: 10,
+                },
+            )
+            .await
+    })
+}
+#[tokio::test]
+async fn listening_covers_selected_channels_and_hides_closed_channels() {
+    let w = world().await;
+    let a = w.agent().await;
+    let viewer = w.agent().await;
+    let public = w.channel(&a, "public", true, &[]).await;
+    let secret = w.channel(&a, "secret", false, &[]).await;
+    let other = w.channel(&a, "other", true, &[]).await;
+    let waiter = open_wait(&w, &a, Some(vec![public.clone(), secret.clone()]));
+    until_sleeping(&w.clock).await;
+    assert_eq!(
+        observed(&w, &viewer, &a.name).await.waiting_channels,
+        vec![public.clone()]
+    );
+    assert_eq!(observed(&w, &a, &a.name).await.waiting_channels.len(), 2);
+    let members = w
+        .rules
+        .list_members(&viewer, other, 10, None)
+        .await
+        .unwrap();
+    assert!(!members.page.items[0].listening);
+    let members = w
+        .rules
+        .list_members(&viewer, public, 10, None)
+        .await
+        .unwrap();
+    assert!(members.page.items[0].listening);
+    let human = w.rules.agent_view(a.name.clone()).await.unwrap();
+    assert_eq!(human.agent.waiting_channels.len(), 2);
+    assert!(
+        w.rules
+            .overview()
+            .await
+            .unwrap()
+            .agents
+            .iter()
+            .any(|x| x.info.listening)
+    );
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(!observed(&w, &a, &a.name).await.listening);
+}
+#[tokio::test]
+async fn normal_wait_completion_has_grace_but_aborted_wait_does_not() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    let first = open_wait(&w, &a, None);
+    until_sleeping(&w.clock).await;
+    w.clock.advance(chrono::Duration::seconds(10));
+    first.await.unwrap().unwrap();
+    assert!(observed(&w, &a, &a.name).await.listening);
+    w.clock.advance(chrono::Duration::seconds(2));
+    assert!(observed(&w, &a, &a.name).await.listening);
+    let second = open_wait(&w, &a, Some(vec![ch]));
+    until_sleeping(&w.clock).await;
+    w.clock.advance(chrono::Duration::seconds(1));
+    assert!(observed(&w, &a, &a.name).await.listening);
+    second.abort();
+    assert!(second.await.unwrap_err().is_cancelled());
+    assert!(!observed(&w, &a, &a.name).await.listening);
+}
+#[tokio::test]
+async fn overlapping_waits_and_current_memberships_are_independent() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    let first = open_wait(&w, &a, Some(vec![ch.clone()]));
+    until_sleeping(&w.clock).await;
+    let second = open_wait(&w, &a, None);
+    while w.clock.sleepers() < 2 {
+        tokio::task::yield_now().await;
+    }
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(observed(&w, &a, &a.name).await.listening);
+    let joined = w.channel(&a, "joined", true, &[]).await;
+    assert_eq!(observed(&w, &a, &a.name).await.waiting_channels.len(), 2);
+    w.rules.leave_channel(&a, ch).await.unwrap();
+    assert_eq!(
+        observed(&w, &a, &a.name).await.waiting_channels,
+        vec![joined]
+    );
+    second.abort();
+    assert!(second.await.unwrap_err().is_cancelled());
+    assert!(!observed(&w, &a, &a.name).await.listening);
+}
+
+#[tokio::test]
+async fn a_new_wait_supersedes_grace_and_disconnect_clears_it() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    w.rules
+        .wait_for_messages(
+            &a,
+            WaitQuery {
+                after_id: 0,
+                channel_ids: None,
+                timeout: Duration::ZERO,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(observed(&w, &a, &a.name).await.listening);
+    let next = open_wait(&w, &a, Some(vec![ch]));
+    until_sleeping(&w.clock).await;
+    next.abort();
+    assert!(next.await.unwrap_err().is_cancelled());
+    assert!(!observed(&w, &a, &a.name).await.listening);
 }

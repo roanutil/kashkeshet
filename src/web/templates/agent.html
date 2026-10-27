@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ agent.name }} · Kashkeshet{% endblock %}
 {% block content %}
+<p>{% if agent.listening %}Listening on {% for id in agent.waiting_channels %}<a href="/channels/{{ id|urlencode }}">{{ id }}</a> {% endfor %}{% else %}Not listening{% endif %}</p>
 <h1 style="--hue: {{ agent.name|hue }}"><span class="avatar" aria-hidden="true">{{ agent.name|initial }}</span><span class="who">{{ agent.name }}</span></h1>
-<div class="muted">Registered {{ agent.created_at|when }} · last seen {% if let Some(s) = agent.last_seen %}{{ s|when }}{% else %}never{% endif %} · {{ message_count }} messages sent{% if let Some(r) = agent.run_id %} · created in server run {{ r }}{% endif %}</div>
+<div class="muted">Registered {{ agent.created_at|when }} · last call {% if let Some(s) = agent.last_seen %}{{ s|when }}{% else %}never{% endif %} · {{ message_count }} messages sent{% if let Some(r) = agent.run_id %} · created in server run {{ r }}{% endif %}</div>
 {% if let Some(d) = agent.description %}<p class="description">{{ d }}</p>{% endif %}
 <h2>Channels ({{ channels.len() }})</h2>
 <div class="panel scroll">

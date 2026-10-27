@@ -9,6 +9,7 @@ impl Rules {
     /// The front page: every channel with how much it is used, every agent
     /// with the channels it is in, and the server runs.
     pub async fn overview(&self) -> Result<Overview> {
+        let rules = self.clone();
         let preview = self.limits().member_preview;
         let now = self.inner.deps.clock.now();
         let window = chrono::Duration::from_std(WEB_ACTIVITY_WINDOW)
@@ -65,11 +66,13 @@ impl Rules {
                 let agents = store
                     .agents_by_last_seen()?
                     .into_iter()
-                    .map(|a| AgentActivity {
-                        channels: member_of.remove(&a.name).unwrap_or_default(),
-                        info: AgentInfo::from(a),
+                    .map(|a| {
+                        Ok(AgentActivity {
+                            channels: member_of.remove(&a.name).unwrap_or_default(),
+                            info: rules.observed_agent(store, a, None, None)?,
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>>>()?;
                 let runs = store
                     .server_runs()?
                     .into_iter()
@@ -86,6 +89,7 @@ impl Rules {
     }
 
     pub async fn channel_view(&self, id: String, before_id: Option<i64>) -> Result<ChannelView> {
+        let rules = self.clone();
         let preview = self.limits().member_preview;
         let page_messages = self.limits().web_page_messages;
         self.db()
@@ -100,8 +104,8 @@ impl Rules {
                     .map(|name| {
                         store
                             .agent(name)?
-                            .map(AgentInfo::from)
                             .ok_or_else(|| RuleError::agent_not_found(name))
+                            .and_then(|a| rules.observed_agent(store, a, None, Some(&id)))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let page = super::messages::read_channel(
@@ -128,13 +132,14 @@ impl Rules {
     }
 
     pub async fn agent_view(&self, name: String) -> Result<AgentView> {
+        let rules = self.clone();
         let preview = self.limits().member_preview;
         self.db()
             .read(move |store| {
                 let agent = store
                     .agent(&name)?
-                    .map(AgentInfo::from)
-                    .ok_or_else(|| RuleError::agent_not_found(&name))?;
+                    .ok_or_else(|| RuleError::agent_not_found(&name))
+                    .and_then(|a| rules.observed_agent(store, a, None, None))?;
                 let channels = store
                     .all_channel_ids(Some(&name))?
                     .iter()

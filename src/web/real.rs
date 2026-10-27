@@ -172,6 +172,8 @@ fn agent(a: AgentInfo) -> Agent {
         name: a.name,
         created_at: a.created_at,
         last_seen: a.last_seen,
+        listening: a.listening,
+        waiting_channels: a.waiting_channels,
         run_id: a.run_id,
         description: a.description,
     }

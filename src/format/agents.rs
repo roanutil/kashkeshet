@@ -67,7 +67,27 @@ impl Formatter {
         agents
             .iter()
             .map(|a| {
-                let whole = build(a, a.description.as_deref());
+                // A single agent can wait on more channels than fit in a row.
+                // Keep the agent visible and state how many channel IDs were omitted.
+                let render = |shown: &AgentInfo, description: Option<&str>| {
+                    let mut row = build(shown, description);
+                    let omitted = a.waiting_channels.len() - shown.waiting_channels.len();
+                    if omitted > 0 {
+                        row.text
+                            .push_str(&format!(" ({omitted} more waiting channels)"));
+                        row.json["waiting_channels_more"] = json!(omitted);
+                    }
+                    row
+                };
+                let mut shown = a.clone();
+                // Reserve the full description and the row continuation while
+                // reducing IDs; if no IDs remain, the description itself can be cut.
+                while !fits(&render(&shown, a.description.as_deref()))
+                    && !shown.waiting_channels.is_empty()
+                {
+                    shown.waiting_channels.pop();
+                }
+                let whole = render(&shown, a.description.as_deref());
                 let Some(d) = a.description.as_deref().filter(|_| !fits(&whole)) else {
                     return whole;
                 };
@@ -75,13 +95,13 @@ impl Formatter {
                 let (mut lo, mut hi) = (0, d.len());
                 while lo < hi {
                     let mid = (lo + hi).div_ceil(2);
-                    if fits(&build(a, Some(&cut_bytes(d, mid)))) {
+                    if fits(&render(&shown, Some(&cut_bytes(d, mid)))) {
                         lo = mid;
                     } else {
                         hi = mid - 1;
                     }
                 }
-                build(a, Some(&cut_bytes(d, lo)))
+                render(&shown, Some(&cut_bytes(d, lo)))
             })
             .collect()
     }
@@ -90,15 +110,21 @@ impl Formatter {
         let now = self.clock.now();
         let rows = self.described_rows(f, None, "agents", &page.items, |a, description| Row {
             text: with_description(
-                match &a.last_seen {
-                    Some(seen) => format!("{}  last seen {}", a.name, short_time(seen, now)),
-                    None => a.name.clone(),
-                },
+                format!(
+                    "{}; {}",
+                    match &a.last_seen {
+                        Some(seen) => format!("{}  last call {}", a.name, short_time(seen, now)),
+                        None => a.name.clone(),
+                    },
+                    listening_text(a)
+                ),
                 description,
             ),
             json: json!({
                 "name": a.name,
                 "last_seen": a.last_seen,
+                "listening": a.listening,
+                "waiting_channels": a.waiting_channels,
                 "description": description,
             }),
             resume: format!("cursor={}", a.name),
@@ -115,4 +141,12 @@ pub(super) fn with_description(mut line: String, description: Option<&str>) -> S
         line.push_str(&one_line(d));
     }
     line
+}
+
+pub(super) fn listening_text(a: &AgentInfo) -> String {
+    if a.listening {
+        format!("listening on {}", a.waiting_channels.join(", "))
+    } else {
+        "not listening".into()
+    }
 }

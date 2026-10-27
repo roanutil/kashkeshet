@@ -39,6 +39,9 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
             }
             "default_limit" => options.default_limit = Some(value.count("default_limit")?),
             "max_limit" => options.max_limit = Some(value.count("max_limit")?),
+            "waiting_grace_seconds" => {
+                options.waiting_grace_seconds = Some(value.count("waiting_grace_seconds")?)
+            }
             "sends_per_minute" => options.sends_per_minute = Some(value.count("sends_per_minute")?),
             "allow_origins" => options.allow_origins = Some(value.strings("allow_origins")?),
             "allow_hosts" => options.allow_hosts = Some(value.strings("allow_hosts")?),
@@ -186,6 +189,7 @@ mod tests {
         assert_eq!(
             options,
             ServeOptions {
+                waiting_grace_seconds: None,
                 db: Some(PathBuf::from("/home/sam/data/kkt.db")),
                 bind: Some("127.0.0.1:9000".parse().expect("addr")),
                 max_response_bytes: Some(4096),
