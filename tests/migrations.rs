@@ -57,7 +57,7 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
@@ -331,5 +331,61 @@ async fn hidden_entries_migrate_and_stay_hidden_after_reopening_without_losing_m
     assert_eq!(revoked.as_deref(), Some("later"));
     drop(conn);
     drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn instruction_versions_survive_reopen_and_reject_mutation() {
+    let dir = temp_dir("instructions");
+    let path = dir.join("old.db");
+    make_v1(&path);
+    let db = Db::open(&path).unwrap();
+    assert!(
+        db.read(|s| s.current_operator_instructions())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let saved = db
+        .write(|s| {
+            let run_id = s.insert_server_run(&kashkeshet::store::NewServerRunRecord {
+                started_at: "2026-10-27T00:00:00Z".into(),
+                version: "test".into(),
+                git_commit: "test".into(),
+                settings: "test".into(),
+                instructions_sha256: "test".into(),
+            })?;
+            s.append_operator_instructions("first\n😀", "2026-10-27T00:00:01Z", run_id)
+        })
+        .await
+        .unwrap();
+    drop(db);
+    let db = Db::open(&path).unwrap();
+    assert_eq!(
+        db.read(|s| s.operator_instructions_history())
+            .await
+            .unwrap(),
+        vec![saved]
+    );
+    drop(db);
+    let conn = Connection::open(&path).unwrap();
+    assert!(
+        conn.execute("UPDATE operator_instructions SET text = 'changed'", [])
+            .is_err()
+    );
+    assert!(conn.execute("INSERT OR REPLACE INTO operator_instructions (version, text, saved_at, run_id) SELECT version, 'replaced', saved_at, run_id FROM operator_instructions", []).is_err());
+    assert!(
+        conn.execute("DELETE FROM operator_instructions", [])
+            .is_err()
+    );
+    assert_eq!(
+        conn.query_row("SELECT body FROM messages WHERE id = 1", [], |row| row
+            .get::<_, String>(
+            0
+        ))
+        .unwrap(),
+        "hello from v1"
+    );
+    drop(conn);
     std::fs::remove_dir_all(dir).unwrap();
 }

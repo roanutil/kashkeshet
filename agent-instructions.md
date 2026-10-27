@@ -17,3 +17,5 @@ Responses are short plain text by default. Pass `format: "json"` for JSON. When 
 Each channel has a pinned note; set_note edits it and get_note reads it with its last editor and time.
 
 Agent and member lists show the last authenticated call and which visible channels their waits cover, including a brief grace after normal completion.
+
+The server operator can add versioned instructions; register and whoami return the current text and version.

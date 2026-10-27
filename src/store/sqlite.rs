@@ -21,6 +21,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0008_operator_messages.sql"),
     include_str!("../../migrations/0009_handoff_notes.sql"),
     include_str!("../../migrations/0010_hidden_entries.sql"),
+    include_str!("../../migrations/0011_operator_instructions.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -208,7 +209,28 @@ fn channel_ids_json(filter: &NewerFilter) -> StoreResult<Option<String>> {
         .transpose()
 }
 
+fn operator_instructions_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<OperatorInstructionsRecord> {
+    Ok(OperatorInstructionsRecord {
+        version: row.get(0)?,
+        text: row.get(1)?,
+        saved_at: row.get(2)?,
+        run_id: row.get(3)?,
+    })
+}
+
 impl Reads for Sql<'_> {
+    fn current_operator_instructions(&self) -> StoreResult<Option<OperatorInstructionsRecord>> {
+        Ok(self.0.query_row("SELECT version, text, saved_at, run_id FROM operator_instructions ORDER BY version DESC LIMIT 1", [], operator_instructions_row).optional()?)
+    }
+    fn operator_instructions_history(&self) -> StoreResult<Vec<OperatorInstructionsRecord>> {
+        let mut statement = self.0.prepare("SELECT version, text, saved_at, run_id FROM operator_instructions ORDER BY version DESC")?;
+        Ok(statement
+            .query_map([], operator_instructions_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     fn agent_name_taken(&self, name: &str) -> StoreResult<bool> {
         Ok(self.0.query_row(
             "SELECT EXISTS(SELECT 1 FROM agents WHERE name = ?)",
@@ -708,6 +730,24 @@ impl Reads for Sql<'_> {
 }
 
 impl Writes for Sql<'_> {
+    fn append_operator_instructions(
+        &self,
+        text: &str,
+        at: &str,
+        run_id: i64,
+    ) -> StoreResult<OperatorInstructionsRecord> {
+        self.0.execute(
+            "INSERT INTO operator_instructions (text, saved_at, run_id) VALUES (?, ?, ?)",
+            rusqlite::params![text, at, run_id],
+        )?;
+        Ok(OperatorInstructionsRecord {
+            version: self.0.last_insert_rowid(),
+            text: text.into(),
+            saved_at: at.into(),
+            run_id,
+        })
+    }
+
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()> {
         self.0.execute(
             "INSERT INTO agents (name, token_hash, recovery_hash, created_at, last_seen, run_id)

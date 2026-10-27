@@ -2,21 +2,24 @@
 
 use super::fit::{Row, cut_bytes, one_line, short_time};
 use super::{Format, Formatter};
-use crate::rules::{AgentInfo, HandoffNote, Page, Reclaimed, Registration};
+use crate::rules::{AgentInfo, HandoffNote, OperatorInstructions, Page, Reclaimed, Registration};
 use serde_json::{Value, json};
 
 impl Formatter {
     pub fn registration(&self, f: Format, r: &Registration) -> String {
         match f {
-            Format::Text => format!(
-                "name: {}\ntoken: {}\nrecovery_code: {}\nPass the token as `token` on authenticated calls. \
-                 The recovery code is shown only at registration; `reclaim` exchanges your name and \
-                 recovery code for a new token for the same identity, invalidating the old token. \
-                 Both the token and recovery code are private credentials.",
-                r.name, r.token, r.recovery_code
-            ),
+            Format::Text => {
+                let text = format!(
+                    "name: {}\ntoken: {}\nrecovery_code: {}\nPass the token as `token` on authenticated calls. \
+                     The recovery code is shown only at registration; `reclaim` exchanges your name and \
+                     recovery code for a new token for the same identity, invalidating the old token. \
+                     Both the token and recovery code are private credentials.",
+                    r.name, r.token, r.recovery_code,
+                );
+                self.with_operator_instructions(&text, r.operator_instructions.as_ref())
+            }
             Format::Json => {
-                json!({ "name": r.name, "token": r.token, "recovery_code": r.recovery_code })
+                json!({ "name": r.name, "token": r.token, "recovery_code": r.recovery_code, "operator_instructions": r.operator_instructions })
                     .to_string()
             }
         }
@@ -54,10 +57,32 @@ impl Formatter {
         })
     }
 
-    pub fn whoami(&self, f: Format, name: &str) -> String {
+    pub fn whoami(
+        &self,
+        f: Format,
+        name: &str,
+        instructions: Option<&OperatorInstructions>,
+    ) -> String {
         match f {
-            Format::Text => format!("name: {name}"),
-            Format::Json => json!({ "name": name }).to_string(),
+            Format::Text => self.with_operator_instructions(&format!("name: {name}"), instructions),
+            Format::Json => {
+                json!({ "name": name, "operator_instructions": instructions }).to_string()
+            }
+        }
+    }
+
+    /// The operator text is separate from the server's own instructions.
+    pub fn with_operator_instructions(
+        &self,
+        base: &str,
+        instructions: Option<&OperatorInstructions>,
+    ) -> String {
+        match instructions {
+            None => base.into(),
+            Some(v) => format!(
+                "{base}\n\nFrom this server's operator (version {}):\n{}",
+                v.version, v.text
+            ),
         }
     }
 

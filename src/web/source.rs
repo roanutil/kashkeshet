@@ -50,6 +50,11 @@ pub trait Source: Send + Sync {
     /// working.
     fn new_recovery_code(&self, name: String) -> BoxFuture<'_, Result<String, SourceError>>;
 
+    /// The editor's history, newest first, and the save limit.
+    fn operator_instructions(&self)
+    -> BoxFuture<'_, Result<OperatorInstructionsView, SourceError>>;
+    fn save_operator_instructions(&self, text: String) -> BoxFuture<'_, Result<(), SourceError>>;
+
     /// Everything that happens from now on, until the server stops.
     fn live(&self) -> BoxStream<'static, LiveEvent>;
 
@@ -297,4 +302,17 @@ pub enum LiveEvent {
     Left(Left),
     /// The feed fell behind and missed this many events. The page reloads.
     Missed(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperatorInstructionsVersion {
+    pub version: i64,
+    pub text: String,
+    pub saved_at: String,
+    pub run_id: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperatorInstructionsView {
+    pub history: Vec<OperatorInstructionsVersion>,
+    pub max_chars: usize,
 }

@@ -552,3 +552,34 @@ fn an_unset_handoff_note_says_so() {
         "handoff note for amber-falcon\nset at (never)\noffset: 0\n"
     );
 }
+
+#[test]
+fn current_operator_instruction_text_and_version_are_returned_whole() {
+    let instructions = crate::rules::OperatorInstructions {
+        version: 7,
+        text: "\u{1}😀\n".repeat(Limits::DEFAULT.max_operator_instructions_chars / 3),
+        saved_at: "2026-10-27T00:00:00Z".into(),
+        run_id: 3,
+    };
+    let registration = crate::rules::Registration {
+        name: "amber-falcon".into(),
+        token: "act_example".into(),
+        recovery_code: "arc_example".into(),
+        operator_instructions: Some(instructions.clone()),
+    };
+    let fmt = formatter(crate::config::MIN_RESPONSE_BYTES);
+    for format in [Format::Text, Format::Json] {
+        let registration_text = fmt.registration(format, &registration);
+        let identity = fmt.whoami(format, &registration.name, Some(&instructions));
+        for out in [registration_text, identity] {
+            if format == Format::Json {
+                let value: Value = serde_json::from_str(&out).unwrap();
+                assert_eq!(value["operator_instructions"]["text"], instructions.text);
+                assert_eq!(value["operator_instructions"]["version"], 7);
+            } else {
+                assert!(out.ends_with(&instructions.text));
+                assert!(out.contains("From this server's operator (version 7):"));
+            }
+        }
+    }
+}

@@ -133,6 +133,7 @@ struct World {
     /// Every message, by ID.
     messages: Vec<Message>,
     runs: Vec<ServerRun>,
+    operator_instructions: Vec<super::source::OperatorInstructionsVersion>,
     next_id: i64,
     /// How many of `CHANNELS` are used so far.
     channels_used: usize,
@@ -352,6 +353,41 @@ impl Source for Preview {
         Box::pin(async move { code })
     }
 
+    fn operator_instructions(
+        &self,
+    ) -> BoxFuture<'_, Result<super::source::OperatorInstructionsView, SourceError>> {
+        let view = super::source::OperatorInstructionsView {
+            history: self.world().operator_instructions.clone(),
+            max_chars: crate::config::Limits::DEFAULT.max_operator_instructions_chars,
+        };
+        Box::pin(async move { Ok(view) })
+    }
+    fn save_operator_instructions(&self, text: String) -> BoxFuture<'_, Result<(), SourceError>> {
+        let max = crate::config::Limits::DEFAULT.max_operator_instructions_chars;
+        if text.chars().count() > max {
+            return Box::pin(async move {
+                Err(SourceError::Invalid(format!(
+                    "operator instructions must be at most {max} characters"
+                )))
+            });
+        }
+        let mut world = self.world();
+        let version = world
+            .operator_instructions
+            .first()
+            .map_or(1, |v| v.version + 1);
+        world.operator_instructions.insert(
+            0,
+            super::source::OperatorInstructionsVersion {
+                version,
+                text,
+                saved_at: clock::to_text(self.clock.now()),
+                run_id: RUN_ID,
+            },
+        );
+        Box::pin(async { Ok(()) })
+    }
+
     fn live(&self) -> BoxStream<'static, LiveEvent> {
         self.events
             .subscribe()
@@ -372,6 +408,7 @@ impl World {
         let start = now - history;
         let mut world = World {
             retired_names: std::collections::HashSet::new(),
+            operator_instructions: Vec::new(),
             agents: Vec::new(),
             channels: Vec::new(),
             messages: Vec::new(),
