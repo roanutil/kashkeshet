@@ -166,3 +166,31 @@ async fn the_server_accepts_a_created_key() {
     child.kill().await.expect("stop kkt");
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[tokio::test]
+async fn show_prints_only_the_key() {
+    let home = temp_home("show");
+    let path = home.join("key");
+    let key = "k".repeat(40);
+    std::fs::write(&path, format!("{key}\n")).expect("write key");
+    let out = kkt(
+        &home,
+        &["key", "show", "--key-file", path.to_str().expect("path")],
+    )
+    .await;
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{key}\n"));
+    assert!(out.stderr.is_empty());
+}
+
+#[tokio::test]
+async fn show_without_a_key_file_is_an_error() {
+    let home = temp_home("show-missing");
+    let out = kkt(&home, &["key", "show"]).await;
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("could not read key file"),
+        "{}",
+        text(&out)
+    );
+}

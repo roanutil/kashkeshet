@@ -1,0 +1,41 @@
+# kkt in Docker, served over HTTPS on your tailnet by a Tailscale container.
+#   cp .env.example .env     # then fill in the values
+#   docker compose -f compose.tailscale.yaml up -d
+#   docker compose -f compose.tailscale.yaml exec kkt kkt key show
+# kkt shares the Tailscale container's network and listens on its loopback
+# only. Nothing is published on the host.
+
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    restart: unless-stopped
+    hostname: ${TS_HOSTNAME:?set TS_HOSTNAME in .env}
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      TS_HOSTNAME: ${TS_HOSTNAME}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      # Userspace networking: no /dev/net/tun and no extra capabilities.
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale:/config:ro
+
+  kkt:
+    image: ghcr.io/sam-mfb/kashkeshet:latest
+    restart: unless-stopped
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
+    volumes:
+      - kkt-data:/data
+    command:
+      - serve
+      - --bind
+      - 127.0.0.1:7420
+      - --allow-host
+      - ${TS_HOSTNAME}.${TS_TAILNET:?set TS_TAILNET in .env}
+
+volumes:
+  kkt-data:
+  tailscale-state:

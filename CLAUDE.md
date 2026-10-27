@@ -51,6 +51,10 @@ Outside `src/`:
 - `migrations/`: the database schema, one numbered file per change.
 - `agent-instructions.md`: what the server tells each agent when it
   connects. It describes how the tools work, nothing more.
+- `Dockerfile`, `compose.yaml`, `compose.tailscale.yaml`,
+  `tailscale/serve.json`: the container image and the two Compose setups
+  (see `docs/docker.md`). The image runs `kkt serve --allow-any-bind`; keep
+  that setting tied to the access key check in `config::check_bind`.
 - `build.rs`: records the git commit at build time (`unknown` outside a git
   checkout).
 - `tests/contract/tools.json`: the tools agents see, as pinned by

@@ -24,6 +24,8 @@ use std::path::PathBuf;
 pub struct ServeOptions {
     pub db: Option<PathBuf>,
     pub bind: Option<SocketAddr>,
+    /// Allow `bind` to be a non-loopback address. Needs an access key.
+    pub allow_any_bind: Option<bool>,
     pub max_response_bytes: Option<usize>,
     pub default_limit: Option<usize>,
     pub max_limit: Option<usize>,
@@ -48,6 +50,7 @@ impl ServeOptions {
     pub const NONE: ServeOptions = ServeOptions {
         db: None,
         bind: None,
+        allow_any_bind: None,
         max_response_bytes: None,
         default_limit: None,
         max_limit: None,
@@ -69,6 +72,7 @@ impl ServeOptions {
         ServeOptions {
             db: self.db.or(fallback.db),
             bind: self.bind.or(fallback.bind),
+            allow_any_bind: self.allow_any_bind.or(fallback.allow_any_bind),
             max_response_bytes: self.max_response_bytes.or(fallback.max_response_bytes),
             default_limit: self.default_limit.or(fallback.default_limit),
             max_limit: self.max_limit.or(fallback.max_limit),
@@ -92,6 +96,7 @@ impl ServeOptions {
         match name {
             "db" => self.db.is_some(),
             "bind" => self.bind.is_some(),
+            "allow_any_bind" => self.allow_any_bind.is_some(),
             "max_response_bytes" => self.max_response_bytes.is_some(),
             "default_limit" => self.default_limit.is_some(),
             "max_limit" => self.max_limit.is_some(),
@@ -143,6 +148,7 @@ impl ServeOptions {
         Ok(ServeSettings {
             db: self.db.unwrap_or(default_db),
             bind: self.bind.unwrap_or(DEFAULT_BIND),
+            allow_any_bind: self.allow_any_bind.unwrap_or(false),
             limits: Limits {
                 max_response_bytes: self
                     .max_response_bytes
@@ -186,6 +192,8 @@ pub enum AccessKey {
 pub struct ServeSettings {
     pub db: PathBuf,
     pub bind: SocketAddr,
+    /// Whether `bind` may be a non-loopback address.
+    pub allow_any_bind: bool,
     pub limits: Limits,
     pub allow_origins: Vec<String>,
     pub allow_hosts: Vec<String>,
@@ -215,6 +223,7 @@ mod tests {
             ServeSettings {
                 db: PathBuf::from("default.db"),
                 bind: DEFAULT_BIND,
+                allow_any_bind: false,
                 limits: Limits::DEFAULT,
                 allow_origins: vec![],
                 allow_hosts: vec![],
