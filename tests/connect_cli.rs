@@ -327,14 +327,14 @@ async fn doctor_cli_reports_typed_service_state_without_real_manager_commands() 
     let out = run().output().await.expect("doctor");
     assert!(out.status.success(), "{}", text(&out));
     assert!(
-        text(&out).contains("ok: service: installed and running"),
+        text(&out).contains("ok: this machine's kkt service: installed and running"),
         "{}",
         text(&out)
     );
     std::fs::write(&script, "#!/bin/sh\nexit 3\n").expect("inactive");
     let out = run().output().await.expect("doctor");
     assert!(!out.status.success());
-    assert!(text(&out).contains("problem: service: installed but not running"));
+    assert!(text(&out).contains("problem: this machine's kkt service: installed but not running"));
     assert!(text(&out).contains("kkt service start"));
     std::fs::remove_file(home.0.join(".config/systemd/user/kashkeshet.service"))
         .expect("remove unit");

@@ -40,11 +40,34 @@ kkt connect claude-code --url http://127.0.0.1:7420/mcp --key-file ~/.config/kkt
 ## With Tailscale
 
 `compose.tailscale.yaml` runs the `tailscale/tailscale` image as a separate
-container, and starts kkt with `network_mode: service:tailscale`, so both
-share one network. kkt listens on `127.0.0.1:7420` inside it. Nothing is
-published on the host, and the port is not open on the tailnet address:
-Tailscale Serve (`tailscale/serve.json`) is the only way in, over HTTPS on
-port 443.
+container beside kkt, on the same Compose network. kkt is published on the
+host's loopback only (`127.0.0.1:7420`), as in `compose.yaml`. Tailscale Serve (`tailscale/serve.json`) takes HTTPS on port 443
+and proxies it to `http://kkt:7420`. kkt listens on all addresses inside its
+own container, as in the plain image, so it needs the access key.
+
+Who can reach kkt over plain HTTP:
+
+- **The tailnet:** no one. Only the Tailscale container is on the tailnet, and
+  it answers HTTPS on port 443. Connections to port 7420 on the tailnet
+  address reach that container, where nothing listens.
+- **The Tailscale container:** it talks to kkt over plain HTTP on the Compose
+  network. That traffic does not leave the host.
+- **The Docker host:** programs on the host use `http://127.0.0.1:7420`, like
+  a normal local install. On Linux they can also reach the container's
+  internal address (for example `172.18.0.3:7420`) directly. On Docker
+  Desktop (Mac and Windows) only the loopback port works.
+- **Other machines on the local network:** no one. The port is published to
+  the host's loopback only.
+
+The access key guards kkt in every case. To limit who on your tailnet can
+connect at all, use Tailscale's access controls.
+
+Either container can be restarted alone.
+
+If a machine named `TS_HOSTNAME` is already on your tailnet, Tailscale names
+the new one `<name>-1`, and kkt, which is told the name you set, refuses
+requests to the new name. Remove the old machine in the Tailscale admin
+console before starting, or set `TS_HOSTNAME` to the name the node got.
 
 Values in `.env`:
 
