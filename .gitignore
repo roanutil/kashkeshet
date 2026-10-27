@@ -36,3 +36,6 @@ __pycache__/
 
 # Compose secrets
 .env
+
+# Node modules for tests/web_script
+node_modules/
