@@ -176,6 +176,12 @@ enum KeyCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Print the access key, and nothing else. The server never logs it.
+    Show {
+        /// The key file (otherwise the default access-key path).
+        #[arg(long)]
+        key_file: Option<PathBuf>,
+    },
     /// Write a new random access key to a file only you can read.
     Create {
         /// Where to write it. By default ~/.config/kkt/access-key
@@ -203,6 +209,10 @@ struct ServeFlags {
         "Address to listen on. Must be a loopback address [default: {DEFAULT_BIND}]"
     ))]
     bind: Option<SocketAddr>,
+    /// Let --bind be a non-loopback address, such as 0.0.0.0 inside a
+    /// container. Needs an access key.
+    #[arg(long)]
+    allow_any_bind: bool,
     #[arg(long, help = format!(
         "Largest response, in bytes, before it is cut short [default: {}]",
         Limits::DEFAULT.max_response_bytes
@@ -271,6 +281,7 @@ impl ServeFlags {
         ServeOptions {
             db: self.db,
             bind: self.bind,
+            allow_any_bind: self.allow_any_bind.then_some(true),
             max_response_bytes: self.max_response_bytes,
             default_limit: self.default_limit,
             max_limit: self.max_limit,
@@ -399,6 +410,16 @@ fn key_header(env: &Env, path: Option<PathBuf>, json: bool) -> Result<(), String
     Ok(())
 }
 
+fn key_show(env: &Env, path: Option<PathBuf>) -> Result<(), String> {
+    let path = path
+        .or_else(|| env.access_key_file())
+        .ok_or("set HOME or pass --key-file")?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("could not read key file {}: {e}", path.display()))?;
+    println!("{}", text.trim());
+    Ok(())
+}
+
 async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
     let connection = client_connection(env, flags, false)?;
     let mut checks = diagnostics::inspect(&connection.url, connection.key_file.as_deref()).await?;
@@ -457,6 +478,9 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
         Command::Key {
             command: KeyCommand::Header { key_file, json },
         } => key_header(env, key_file, json),
+        Command::Key {
+            command: KeyCommand::Show { key_file },
+        } => key_show(env, key_file),
         Command::Connect {
             client,
             connection,
@@ -726,6 +750,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
     let ServeSettings {
         db: db_path,
         bind,
+        allow_any_bind,
         limits,
         allow_origins,
         allow_hosts,
@@ -735,7 +760,8 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         log_level,
         dependency_log_level,
     } = settings;
-    config::check_bind(bind).map_err(|e| sources.invalid(e))?;
+    config::check_bind(bind, allow_any_bind, access_key != AccessKey::None)
+        .map_err(|e| sources.invalid(e))?;
     config::check_dependency_log_level(dependency_log_level).map_err(|e| sources.invalid(e))?;
     limits.check().map_err(|e| sources.invalid(e))?;
     let allowed_hosts = AllowedHosts::new(&allow_hosts).map_err(|e| sources.invalid(e))?;
@@ -762,6 +788,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         log_file: log_file.map(|p| p.display().to_string()),
         log_level,
         dependency_log_level,
+        allow_any_bind,
     };
     Ok(Checked {
         db_path,

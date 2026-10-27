@@ -4,11 +4,13 @@
 
 use super::notice::live_event;
 use super::source::{
-    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
+    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelAction, ChannelLink,
+    ChannelSummary, ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source,
+    SourceError,
 };
 use crate::admission::{self, Credentials, Decision, WebAdmission};
-use crate::rules::{self, AgentInfo, ChannelInfo, Code, RuleError, Rules, ServerRunInfo};
+use crate::names;
+use crate::rules::{self, Actor, AgentInfo, ChannelInfo, Code, RuleError, Rules, ServerRunInfo};
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -37,6 +39,7 @@ impl Source for RulesSource {
                         channel: channel(c.info),
                         message_count: c.message_count,
                         last_message_at: c.last_message_at,
+                        last_from_operator: c.last_speaker.as_deref() == Some(names::OPERATOR),
                         last_speaker: c.last_speaker,
                         recent_activity: c
                             .recent_activity
@@ -96,7 +99,93 @@ impl Source for RulesSource {
                 agent: agent(v.agent),
                 channels: v.channels.into_iter().map(channel).collect(),
                 message_count: v.message_count,
+                handoff_note: v.handoff_note.text,
+                handoff_note_set_at: v.handoff_note.set_at,
             })
+        })
+    }
+
+    fn new_recovery_code(&self, name: String) -> BoxFuture<'_, Result<String, SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .new_recovery_code(name)
+                .await
+                .map_err(source_error)
+        })
+    }
+
+    fn set_purpose(
+        &self,
+        channel_id: String,
+        purpose: String,
+    ) -> BoxFuture<'_, Result<(), SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .set_purpose(Actor::Human, channel_id, purpose)
+                .await
+                .map(|_| ())
+                .map_err(source_error)
+        })
+    }
+
+    fn change_channel(
+        &self,
+        channel_id: String,
+        change: ChannelAction,
+    ) -> BoxFuture<'_, Result<(), SourceError>> {
+        let change = match change {
+            ChannelAction::SetOpen(open) => crate::rules::ChannelChange::SetOpen(open),
+            ChannelAction::AddMember(name) => crate::rules::ChannelChange::AddMember(name),
+            ChannelAction::RemoveMember(name) => crate::rules::ChannelChange::RemoveMember(name),
+            ChannelAction::Hide => crate::rules::ChannelChange::Hide,
+        };
+        Box::pin(async move {
+            self.rules
+                .change_channel(Actor::Human, channel_id, change)
+                .await
+                .map_err(source_error)
+        })
+    }
+
+    fn hide_agent(&self, name: String) -> BoxFuture<'_, Result<(), SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .hide_agent(Actor::Human, name)
+                .await
+                .map_err(source_error)
+        })
+    }
+
+    fn operator_instructions(
+        &self,
+    ) -> BoxFuture<'_, Result<super::source::OperatorInstructionsView, SourceError>> {
+        Box::pin(async move {
+            let history = self
+                .rules
+                .operator_instructions_history()
+                .await
+                .map_err(source_error)?;
+            Ok(super::source::OperatorInstructionsView {
+                max_chars: self.rules.limits().max_operator_instructions_chars,
+                history: history
+                    .into_iter()
+                    .map(|v| super::source::OperatorInstructionsVersion {
+                        version: v.version,
+                        text: v.text,
+                        saved_at: v.saved_at,
+                        run_id: v.run_id,
+                    })
+                    .collect(),
+            })
+        })
+    }
+    fn save_operator_instructions(&self, text: String) -> BoxFuture<'_, Result<(), SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .save_operator_instructions(Actor::Human, text)
+                .await
+                .map(|_| ())
+                .map_err(source_error)
         })
     }
 
@@ -142,6 +231,14 @@ impl Gate for WebAdmission {
     fn sign_out(&self, session_id: &str) {
         WebAdmission::sign_out(self, session_id)
     }
+
+    fn form_token(&self, session_id: Option<&str>) -> Option<String> {
+        WebAdmission::form_token(self, session_id)
+    }
+
+    fn form_token_matches(&self, session_id: Option<&str>, presented: &str) -> bool {
+        WebAdmission::form_token_matches(self, session_id, presented)
+    }
 }
 
 fn source_error(e: RuleError) -> SourceError {
@@ -184,6 +281,7 @@ fn message(m: rules::Message) -> Message {
         id: m.id,
         channel_id: m.channel_id,
         channel_name: m.channel_name,
+        from_operator: m.agent == names::OPERATOR,
         agent: m.agent,
         body: m.body,
         created_at: m.created_at,

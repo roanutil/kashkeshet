@@ -8,7 +8,10 @@ use crate::rules::{
     WaitQuery,
 };
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::model::{
+    CallToolResult, ContentBlock, DiscoverResult, Implementation, InitializeRequestParams,
+    InitializeResult, ServerCapabilities, ServerConfig,
+};
 use rmcp::{RoleServer, ServerHandler, service::RequestContext, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -43,6 +46,25 @@ impl ChatServer {
             instructions,
             tool_router: tools,
         }
+    }
+
+    async fn operator_server_info(
+        &self,
+        mut info: ServerConfig,
+    ) -> Result<ServerConfig, rmcp::ErrorData> {
+        let current = self
+            .rules
+            .current_operator_instructions()
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "could not read operator instructions");
+                rmcp::ErrorData::internal_error("could not read operator instructions", None)
+            })?;
+        info.instructions = Some(
+            self.fmt
+                .with_operator_instructions(self.instructions.as_ref(), current.as_ref()),
+        );
+        Ok(info)
     }
 
     async fn me(&self, token: &Option<String>) -> rules::Result<Agent> {
@@ -104,6 +126,26 @@ pub struct SetDescriptionParams {
     pub token: Option<String>,
     /// The new description, up to {max_description_chars} characters. Empty clears it.
     pub text: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetHandoffNoteParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The new handoff note, up to {max_handoff_note_chars} characters. Empty clears it.
+    pub text: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetHandoffNoteParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// Character offset from a previous get_handoff_note response; default zero.
+    pub offset: Option<u32>,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
 }
@@ -346,6 +388,14 @@ fn describe(text: &str, limits: &Limits) -> String {
         ("{max_purpose_chars}", limits.max_purpose_chars.to_string()),
         ("{max_note_chars}", limits.max_note_chars.to_string()),
         (
+            "{max_operator_instructions_chars}",
+            limits.max_operator_instructions_chars.to_string(),
+        ),
+        (
+            "{max_handoff_note_chars}",
+            limits.max_handoff_note_chars.to_string(),
+        ),
+        (
             "{max_description_chars}",
             limits.max_description_chars.to_string(),
         ),
@@ -396,7 +446,9 @@ impl ChatServer {
     #[tool(
         description = "Get a new identity: a server-chosen name, a token, and a recovery code shown once. \
         Takes no arguments. Pass the token as `token` on authenticated calls. \
-        `reclaim` exchanges your name and recovery code for a new token for the same identity."
+        `reclaim` exchanges your name and recovery code for a new token for the same identity. \
+        Also returns the current operator instructions and their version. New versions have at most \
+        {max_operator_instructions_chars} characters. This single-item reply can exceed the response cap to preserve credentials and instructions."
     )]
     async fn register(&self) -> CallToolResult {
         let out = self
@@ -422,12 +474,15 @@ impl ChatServer {
         self.respond(f, out)
     }
 
-    #[tool(description = "Your name.")]
+    #[tool(
+        description = "Your name and the full current operator instructions, including their version. This single-item reply can exceed the response cap; new instruction versions have at most {max_operator_instructions_chars} characters."
+    )]
     async fn whoami(&self, Parameters(p): Parameters<TokenOnly>) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
             let me = self.me(&p.token).await?;
-            Ok(self.fmt.whoami(f, &me.name))
+            let instructions = self.rules.current_operator_instructions().await?;
+            Ok(self.fmt.whoami(f, &me.name, instructions.as_ref()))
         }
         .await;
         self.respond(f, out)
@@ -444,6 +499,49 @@ impl ChatServer {
             let me = self.me(&p.token).await?;
             let agent = self.rules.set_description(&me, p.text).await?;
             Ok(self.fmt.description(f, &agent))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Replace your handoff note: a note kept with your identity for whoever holds it \
+        next, such as a session that takes it over with `reclaim`. Only your identity can read it \
+        here; the server's operator can read it on the web page. The time it was set is recorded."
+    )]
+    async fn set_handoff_note(
+        &self,
+        Parameters(p): Parameters<SetHandoffNoteParams>,
+    ) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            self.rules.set_handoff_note(&me, p.text).await?;
+            Ok(self.fmt.ok(f))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Read your handoff note and when it was set. Follow next_offset to read the \
+        rest when it does not fit in one response."
+    )]
+    async fn get_handoff_note(
+        &self,
+        Parameters(p): Parameters<GetHandoffNoteParams>,
+    ) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let note = self.rules.handoff_note(&me).await?;
+            let offset = p.offset.unwrap_or(0) as usize;
+            if offset > note.text.chars().count() {
+                return Err(RuleError::invalid(
+                    "offset is past the end of the handoff note",
+                ));
+            }
+            Ok(self.fmt.handoff_note(f, &note, offset))
         }
         .await;
         self.respond(f, out)
@@ -767,6 +865,26 @@ impl ChatServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ChatServer {
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, rmcp::ErrorData> {
+        context.peer.set_peer_info(request.clone());
+        self.operator_server_info(self.negotiate_initialize(&request)?)
+            .await
+    }
+    async fn discover(
+        &self,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, rmcp::ErrorData> {
+        let info = self.operator_server_info(self.get_info()).await?;
+        Ok(DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            info,
+        ))
+    }
+
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(

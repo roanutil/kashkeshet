@@ -718,3 +718,100 @@ async fn disconnect_clears_listening_without_completion_grace() {
     .expect("disconnect clears listening immediately, without the 30-second grace");
     observer.cancel().await.unwrap();
 }
+
+#[tokio::test]
+async fn operator_instructions_reach_both_handshakes_and_connected_agents() {
+    let server = start().await;
+    let connected = connect_new(&server).await;
+    let (_, token) = register(&connected).await;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    async fn save(http: &reqwest::Client, server: &Server, text: &str) {
+        let page = http
+            .get(format!("{}/instructions", server.base))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let form_token = page
+            .split_once("name=\"form_token\" value=\"")
+            .unwrap()
+            .1
+            .split_once('"')
+            .unwrap()
+            .0;
+        let response = http
+            .post(format!("{}/instructions", server.base))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(format!(
+                "text={}&form_token={form_token}",
+                text.bytes()
+                    .map(|b| format!("%{b:02X}"))
+                    .collect::<String>()
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::SEE_OTHER);
+    }
+    save(&http, &server, "Ask in #help-desk.\nFirst version 😀").await;
+    for lifecycle in [
+        ClientLifecycleMode::Initialize,
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    ] {
+        let client = connect(&server, lifecycle).await;
+        let expected = "test instructions: call register\n\nFrom this server's operator (version 1):\nAsk in #help-desk.\nFirst version 😀";
+        assert_eq!(
+            client.peer_info().unwrap().instructions.as_deref(),
+            Some(expected)
+        );
+        client.cancel().await.unwrap();
+    }
+    let registration = ok(&connected, "register", json!({})).await;
+    assert!(registration.contains("From this server's operator (version 1):"));
+    assert!(registration.contains("First version 😀"));
+    let identity = json_of(
+        &ok(
+            &connected,
+            "whoami",
+            json!({"token": token, "format":"json"}),
+        )
+        .await,
+    );
+    assert_eq!(identity["operator_instructions"]["version"], 1);
+    assert_eq!(
+        identity["operator_instructions"]["text"],
+        "Ask in #help-desk.\nFirst version 😀"
+    );
+    save(&http, &server, "Second version").await;
+    let identity = json_of(&ok(&connected, "whoami", json!({"token":token,"format":"json"})).await);
+    assert_eq!(identity["operator_instructions"]["version"], 2);
+    assert_eq!(identity["operator_instructions"]["text"], "Second version");
+    assert!(
+        ok(&connected, "whoami", json!({"token":token}))
+            .await
+            .contains("From this server's operator (version 2):\nSecond version")
+    );
+    save(&http, &server, "").await;
+    let identity = json_of(&ok(&connected, "whoami", json!({"token":token,"format":"json"})).await);
+    assert_eq!(identity["operator_instructions"]["version"], 3);
+    assert_eq!(identity["operator_instructions"]["text"], "");
+    let fresh = connect_new(&server).await;
+    assert!(
+        fresh
+            .peer_info()
+            .unwrap()
+            .instructions
+            .as_deref()
+            .unwrap()
+            .ends_with("From this server's operator (version 3):\n")
+    );
+    fresh.cancel().await.unwrap();
+    connected.cancel().await.unwrap();
+}

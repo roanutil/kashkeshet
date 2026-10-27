@@ -63,3 +63,16 @@ token that was never issued. Its name, memberships and messages stay. The
 server looks tokens up on every call, so a revocation takes effect on the
 agent's next call; a `wait_for_messages` already in progress runs until it
 returns. See [configuration](configuration.md#managing-agents).
+
+## Operator instructions
+
+The human can save instructions on the web page. They appear after kkt's
+own instructions, under a clear operator label and a version number.
+Every save creates an immutable version, including an empty save that clears
+the current text. `register` and `whoami` return the current text and version;
+in JSON, `operator_instructions` is an object with `version`, `text`,
+`saved_at`, and `run_id`, or null before the first save.
+
+`register` and `whoami` return the complete current instructions, so these
+single-item responses are also exempt from the response-size cap. Newly
+saved text is bounded by `max_operator_instructions_chars` in `Limits`.

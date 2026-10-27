@@ -5,6 +5,32 @@
 <h1 style="--hue: {{ agent.name|hue }}"><span class="avatar" aria-hidden="true">{{ agent.name|initial }}</span><span class="who">{{ agent.name }}</span></h1>
 <div class="muted">Registered {{ agent.created_at|when }} · last call {% if let Some(s) = agent.last_seen %}{{ s|when }}{% else %}never{% endif %} · {{ message_count }} messages sent{% if let Some(r) = agent.run_id %} · created in server run {{ r }}{% endif %}</div>
 {% if let Some(d) = agent.description %}<p class="description">{{ d }}</p>{% endif %}
+{% if !form_token.is_empty() %}
+<details>
+  <summary>Manage agent</summary>
+  <form class="change" method="post" action="/agents/{{ agent.name|urlencode }}/hide">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <button type="submit">Hide agent and revoke access</button>
+  </form>
+  <p class="muted">Hiding removes this agent from lists and channels and revokes its access. Stored messages are kept.</p>
+</details>
+{% endif %}
+<section>
+  <h2>Handoff note</h2>
+  {% if handoff_note.is_empty() %}<p class="muted">{% if handoff_note_set_at.is_some() %}Cleared{% else %}None set{% endif %}{% if let Some(at) = handoff_note_set_at %} at {{ at|when }}{% endif %}.</p>
+  {% else %}<div class="panel" style="white-space: pre-wrap; overflow-wrap: anywhere">{{ handoff_note }}</div>
+  <p class="muted">Set {% if let Some(at) = handoff_note_set_at %}at {{ at|when }}{% endif %}</p>{% endif %}
+</section>
+{% if !form_token.is_empty() %}
+<section>
+  <h2>Recovery code</h2>
+  <p class="muted">A new code lets another session take over this identity with <code>reclaim</code>. The old code stops working. The code is shown once.</p>
+  <form class="change" method="post" action="/agents/{{ agent.name|urlencode }}/recovery-code">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <button type="submit">Issue a new recovery code</button>
+  </form>
+</section>
+{% endif %}
 <h2>Channels ({{ channels.len() }})</h2>
 <div class="panel scroll">
 <table>

@@ -1,6 +1,6 @@
-//! What the web page needs, in its own terms: the reads its pages make and
-//! the live feed ([`Source`]), and the sign-in check ([`Gate`]). Pages
-//! depend only on these. The server provides them over the rules and
+//! What the web page needs, in its own terms: the reads its pages make, the
+//! changes the human makes, and the live feed ([`Source`]); and the sign-in
+//! check and form tokens ([`Gate`]). Pages depend only on these. The server provides them over the rules and
 //! admission (`real`); the preview provides them from simulated data
 //! (`preview`).
 
@@ -26,12 +26,49 @@ pub trait Source: Send + Sync {
     /// One agent and the channels it is in.
     fn agent(&self, name: String) -> BoxFuture<'_, Result<AgentView, SourceError>>;
 
+    /// Changes a channel's purpose, as the human. Empty text clears it. The
+    /// change is announced in the channel by a message from the operator.
+    fn set_purpose(
+        &self,
+        channel_id: String,
+        purpose: String,
+    ) -> BoxFuture<'_, Result<(), SourceError>>;
+
+    /// Channel administration; each actual change posts an operator message.
+    fn change_channel(
+        &self,
+        channel_id: String,
+        change: ChannelAction,
+    ) -> BoxFuture<'_, Result<(), SourceError>>;
+
+    /// Hides an agent and revokes access, retaining messages and posting
+    /// an operator message in each affected channel.
+    fn hide_agent(&self, name: String) -> BoxFuture<'_, Result<(), SourceError>>;
+
+    /// Gives the agent named `name` a new recovery code, as the human, and
+    /// returns it. This is the only time it is seen; the old code stops
+    /// working.
+    fn new_recovery_code(&self, name: String) -> BoxFuture<'_, Result<String, SourceError>>;
+
+    /// The editor's history, newest first, and the save limit.
+    fn operator_instructions(&self)
+    -> BoxFuture<'_, Result<OperatorInstructionsView, SourceError>>;
+    fn save_operator_instructions(&self, text: String) -> BoxFuture<'_, Result<(), SourceError>>;
+
     /// Everything that happens from now on, until the server stops.
     fn live(&self) -> BoxStream<'static, LiveEvent>;
 
     /// The most messages one page shows. [`Source::channel`] returns no more
     /// than this, and the live view keeps no more than this on the page.
     fn page_messages(&self) -> usize;
+}
+
+#[derive(Clone, Debug)]
+pub enum ChannelAction {
+    SetOpen(bool),
+    AddMember(String),
+    RemoveMember(String),
+    Hide,
 }
 
 /// Whether a viewer may see the pages, and signing in and out.
@@ -48,6 +85,15 @@ pub trait Gate: Send + Sync {
 
     /// Ends a session.
     fn sign_out(&self, session_id: &str);
+
+    /// The token the page puts in its forms for the viewer with this session
+    /// (if any). `None` when the viewer has no live session and needs one.
+    fn form_token(&self, session_id: Option<&str>) -> Option<String>;
+
+    /// Whether `presented` is that viewer's form token. A change is made
+    /// only when it is: another site can send a form here, but cannot read a
+    /// page to learn the token.
+    fn form_token_matches(&self, session_id: Option<&str>, presented: &str) -> bool;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,7 +118,8 @@ pub enum SignIn {
 pub enum SourceError {
     /// No such channel or agent.
     NotFound(String),
-    /// The request made no sense, such as a malformed position.
+    /// The request made no sense, such as a malformed position or a purpose
+    /// that is too long.
     Invalid(String),
     /// Something broke. The page says so; the cause is logged.
     Failed(String),
@@ -112,6 +159,9 @@ pub struct Message {
     pub channel_id: String,
     pub channel_name: String,
     pub agent: String,
+    /// The message is from the human operator, not an agent; `agent` is
+    /// then the operator's name.
+    pub from_operator: bool,
     pub body: String,
     pub created_at: String,
     /// The server run that stored the message, if known.
@@ -148,6 +198,8 @@ pub struct ChannelSummary {
     /// When the newest message was sent, and by whom.
     pub last_message_at: Option<String>,
     pub last_speaker: Option<String>,
+    /// The newest message is from the operator, who has no agent page.
+    pub last_from_operator: bool,
     /// The messages of the last `WEB_ACTIVITY_WINDOW`, counted in
     /// stretches of `WEB_ACTIVITY_BUCKET`, oldest first.
     pub recent_activity: Vec<ActivityCount>,
@@ -196,6 +248,11 @@ pub struct AgentView {
     pub agent: Agent,
     pub channels: Vec<Channel>,
     pub message_count: i64,
+    /// The note the agent keeps for whoever next holds its identity. Empty
+    /// if none.
+    pub handoff_note: String,
+    /// When it was last set, also when cleared. `None` if never.
+    pub handoff_note_set_at: Option<String>,
 }
 
 /// An agent registered.
@@ -245,4 +302,17 @@ pub enum LiveEvent {
     Left(Left),
     /// The feed fell behind and missed this many events. The page reloads.
     Missed(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperatorInstructionsVersion {
+    pub version: i64,
+    pub text: String,
+    pub saved_at: String,
+    pub run_id: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperatorInstructionsView {
+    pub history: Vec<OperatorInstructionsVersion>,
+    pub max_chars: usize,
 }

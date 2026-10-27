@@ -34,6 +34,7 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
         match key.as_str() {
             "db" => options.db = Some(value.path("db", dir, env)?),
             "bind" => options.bind = Some(value.address("bind")?),
+            "allow_any_bind" => options.allow_any_bind = Some(value.boolean("allow_any_bind")?),
             "max_response_bytes" => {
                 options.max_response_bytes = Some(value.count("max_response_bytes")?)
             }
@@ -171,6 +172,7 @@ mod tests {
             r#"
             db = "~/data/kkt.db"
             bind = "127.0.0.1:9000"
+            allow_any_bind = true
             max_response_bytes = 4096
             default_limit = 10
             max_limit = 40
@@ -192,6 +194,7 @@ mod tests {
                 waiting_grace_seconds: None,
                 db: Some(PathBuf::from("/home/sam/data/kkt.db")),
                 bind: Some("127.0.0.1:9000".parse().expect("addr")),
+                allow_any_bind: Some(true),
                 max_response_bytes: Some(4096),
                 default_limit: Some(10),
                 max_limit: Some(40),
@@ -229,6 +232,7 @@ mod tests {
             ("allow_hosts = \"one.example\"", "allow_hosts"),
             ("allow_origins = [1]", "allow_origins"),
             ("no_access_key = \"yes\"", "no_access_key"),
+            ("allow_any_bind = \"yes\"", "allow_any_bind"),
             ("log_level = \"loud\"", "log_level"),
             ("dependency_log_level = 3", "dependency_log_level"),
             ("db = \"\"", "db"),

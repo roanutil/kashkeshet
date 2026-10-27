@@ -60,6 +60,14 @@ pub struct ChannelFacts {
     pub open: bool,
 }
 
+/// The note an agent keeps for whoever next holds its identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HandoffNoteRecord {
+    pub text: String,
+    /// When it was last set, also when cleared. `None` if never.
+    pub set_at: Option<String>,
+}
+
 /// A pinned channel note, including the most recent edit (also when cleared).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelNoteRecord {
@@ -231,16 +239,36 @@ pub struct MembershipRecord {
     pub agent: String,
 }
 
+/// One immutable save of the operator's instructions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperatorInstructionsRecord {
+    pub version: i64,
+    pub text: String,
+    pub saved_at: String,
+    pub run_id: i64,
+}
+
 /// Questions the rules can ask.
 pub trait Reads {
+    fn current_operator_instructions(&self) -> StoreResult<Option<OperatorInstructionsRecord>>;
+    /// Newest version first.
+    fn operator_instructions_history(&self) -> StoreResult<Vec<OperatorInstructionsRecord>>;
+
     // ---- agents ----
 
+    /// A non-hidden identity.
     fn agent(&self, name: &str) -> StoreResult<Option<AgentRecord>>;
+
+    /// Whether a name is reserved by any identity, including hidden ones.
+    fn agent_name_taken(&self, name: &str) -> StoreResult<bool>;
 
     fn agent_by_token_hash(&self, hash: &[u8]) -> StoreResult<Option<AgentRecord>>;
 
     /// Looks up an agent by both its name and hashed recovery code.
     fn agent_by_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<Option<AgentRecord>>;
+
+    /// The agent's handoff note, or `None` if there is no such agent.
+    fn handoff_note(&self, name: &str) -> StoreResult<Option<HandoffNoteRecord>>;
 
     /// Up to `limit` agents in name order, after `after_name` if given, whose
     /// names contain `text` if given.
@@ -260,6 +288,9 @@ pub trait Reads {
     // ---- channels ----
 
     fn channel(&self, id: &str) -> StoreResult<Option<ChannelFacts>>;
+
+    /// Whether an ID is reserved, including by a hidden channel.
+    fn channel_id_taken(&self, id: &str) -> StoreResult<bool>;
 
     fn is_member(&self, channel_id: &str, agent: &str) -> StoreResult<bool>;
 
@@ -342,10 +373,23 @@ pub trait Reads {
 
 /// Changes the rules can make, on top of what they can ask.
 pub trait Writes: Reads {
+    fn append_operator_instructions(
+        &self,
+        text: &str,
+        at: &str,
+        run_id: i64,
+    ) -> StoreResult<OperatorInstructionsRecord>;
+
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()>;
 
     /// Replaces the authentication token, preserving the agent's identity.
     fn set_token_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()>;
+
+    /// Replaces the hashed recovery code; the old code stops working.
+    fn set_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()>;
+
+    /// Replaces the agent's handoff note, set at `at`. Empty text clears it.
+    fn set_handoff_note(&self, name: &str, text: &str, at: &str) -> StoreResult<()>;
 
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()>;
 
@@ -358,6 +402,14 @@ pub trait Writes: Reads {
     fn insert_channel(&self, channel: &NewChannelRecord) -> StoreResult<()>;
 
     fn set_purpose(&self, channel_id: &str, purpose: Option<&str>) -> StoreResult<()>;
+
+    fn set_channel_open(&self, channel_id: &str, open: bool) -> StoreResult<()>;
+
+    /// Hides a channel and removes its memberships, retaining its messages.
+    fn hide_channel(&self, channel_id: &str) -> StoreResult<()>;
+
+    /// Hides and revokes an identity, removing its memberships but retaining messages.
+    fn hide_agent(&self, name: &str, at: &str) -> StoreResult<()>;
 
     fn set_note(&self, channel_id: &str, text: &str, editor: &str, at: &str) -> StoreResult<()>;
 

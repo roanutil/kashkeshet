@@ -34,7 +34,7 @@ impl Build {
 pub struct ServerRun {
     pub version: String,
     pub commit: String,
-    /// The settings in effect. See [`settings_text`].
+    /// The settings in effect: the `allow_any_bind` line, then [`settings_text`].
     pub settings: String,
     /// SHA-256 of the instructions text, in lowercase hex.
     pub instructions_sha256: String,
@@ -46,7 +46,8 @@ impl ServerRun {
             version: build.version.to_string(),
             commit: build.commit.to_string(),
             settings: {
-                let mut settings = settings_text(
+                let mut settings = format!("allow_any_bind={}\n", config.allow_any_bind);
+                settings.push_str(&settings_text(
                     &config.limits,
                     config.log_level,
                     config.dependency_log_level,
@@ -54,7 +55,7 @@ impl ServerRun {
                     config.allowed_hosts.extra(),
                     config.config_file.as_deref(),
                     config.admission.key_source(),
-                );
+                ));
                 if let Some(file) = &config.log_file {
                     settings.push('\n');
                     settings.push_str(&log_text(file, &LogPolicy::DEFAULT));
@@ -104,6 +105,8 @@ pub fn settings_text(
         max_purpose_chars,
         max_description_chars,
         max_note_chars,
+        max_operator_instructions_chars,
+        max_handoff_note_chars,
         sends_per_minute,
         registrations_per_minute,
         max_agents,
@@ -124,6 +127,8 @@ pub fn settings_text(
         format!("max_purpose_chars={max_purpose_chars}"),
         format!("max_description_chars={max_description_chars}"),
         format!("max_note_chars={max_note_chars}"),
+        format!("max_operator_instructions_chars={max_operator_instructions_chars}"),
+        format!("max_handoff_note_chars={max_handoff_note_chars}"),
         format!("sends_per_minute={sends_per_minute}"),
         format!("registrations_per_minute={registrations_per_minute}"),
         format!("max_agents={max_agents}"),
@@ -196,6 +201,7 @@ mod tests {
             log_file: None,
             log_level: crate::config::DEFAULT_LOG_LEVEL,
             dependency_log_level: crate::config::DEFAULT_DEPENDENCY_LOG_LEVEL,
+            allow_any_bind: crate::config::DEFAULT_ALLOW_ANY_BIND,
         }
     }
 
@@ -211,14 +217,17 @@ mod tests {
         assert_eq!(run.commit, "abc123");
         assert_eq!(
             run.settings,
-            settings_text(
-                &Limits::DEFAULT,
-                LogLevel::Info,
-                LogLevel::Warn,
-                &[],
-                &[],
-                None,
-                None
+            format!(
+                "allow_any_bind=false\n{}",
+                settings_text(
+                    &Limits::DEFAULT,
+                    LogLevel::Info,
+                    LogLevel::Warn,
+                    &[],
+                    &[],
+                    None,
+                    None
+                )
             )
         );
         // SHA-256 of the empty string.
@@ -248,6 +257,8 @@ mod tests {
              max_purpose_chars=500\n\
              max_description_chars=300\n\
              max_note_chars=10000\n\
+             max_operator_instructions_chars=4000\n\
+             max_handoff_note_chars=20000\n\
              sends_per_minute=30\n\
              registrations_per_minute=20\n\
              max_agents=1000\n\
@@ -257,7 +268,7 @@ mod tests {
              member_preview=3\n\
              purpose_preview_chars=120\n\
              web_session_lifetime_ms=43200000\n\
-             web_page_messages=200\n\
+             web_page_messages=100\n\
              log_level=info\n\
              dependency_log_level=warn\n\
              allowed_origin=http://localhost:6274\n\
@@ -300,6 +311,16 @@ mod tests {
         ));
         let plain = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
         assert!(!plain.settings.contains("config_file"));
+    }
+
+    #[test]
+    fn a_run_records_whether_any_address_may_be_bound() {
+        let mut open = config(Limits::DEFAULT, &[], "");
+        let closed = ServerRun::new(TEST_BUILD, &open);
+        assert!(closed.settings.starts_with("allow_any_bind=false\n"));
+        open.allow_any_bind = true;
+        let allowed = ServerRun::new(TEST_BUILD, &open);
+        assert!(allowed.settings.starts_with("allow_any_bind=true\n"));
     }
 
     #[test]

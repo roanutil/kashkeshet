@@ -490,3 +490,96 @@ fn many_waiting_channels_keep_paginated_agents_and_members_visible() {
         }
     }
 }
+
+#[test]
+fn a_long_handoff_note_reads_back_whole_in_parts_within_the_cap() {
+    let cap = crate::config::MIN_RESPONSE_BYTES;
+    let text = "😀 \"quoted\"\nline ".repeat(200);
+    let note = crate::rules::HandoffNote {
+        name: "amber-falcon".into(),
+        text: text.clone(),
+        set_at: Some("2026-10-23T14:00:00Z".into()),
+    };
+    let fmt = formatter(cap);
+    for f in [Format::Text, Format::Json] {
+        let mut read = String::new();
+        let mut offset = 0;
+        let mut parts = 0;
+        loop {
+            let out = fmt.handoff_note(f, &note, offset);
+            assert!(out.len() <= cap, "{} bytes", out.len());
+            parts += 1;
+            let next = match f {
+                Format::Json => {
+                    let json: Value = serde_json::from_str(&out).expect("valid JSON");
+                    read.push_str(json["text"].as_str().expect("text"));
+                    json["next_offset"].as_u64().map(|n| n as usize)
+                }
+                Format::Text => {
+                    let (_, rest) = out.split_once("offset: ").expect("offset line");
+                    let (_, body) = rest.split_once('\n').expect("text");
+                    match body.rsplit_once("\nnext_offset: ") {
+                        Some((part, tail)) => {
+                            read.push_str(part);
+                            tail.split(' ').next().and_then(|n| n.parse().ok())
+                        }
+                        None => {
+                            read.push_str(body);
+                            None
+                        }
+                    }
+                }
+            };
+            match next {
+                Some(n) => offset = n,
+                None => break,
+            }
+        }
+        assert!(parts > 1, "the note needed several parts");
+        assert_eq!(read, text, "nothing is lost");
+    }
+}
+
+#[test]
+fn an_unset_handoff_note_says_so() {
+    let note = crate::rules::HandoffNote {
+        name: "amber-falcon".into(),
+        text: String::new(),
+        set_at: None,
+    };
+    assert_eq!(
+        formatter(8000).handoff_note(Format::Text, &note, 0),
+        "handoff note for amber-falcon\nset at (never)\noffset: 0\n"
+    );
+}
+
+#[test]
+fn current_operator_instruction_text_and_version_are_returned_whole() {
+    let instructions = crate::rules::OperatorInstructions {
+        version: 7,
+        text: "\u{1}😀\n".repeat(Limits::DEFAULT.max_operator_instructions_chars / 3),
+        saved_at: "2026-10-27T00:00:00Z".into(),
+        run_id: 3,
+    };
+    let registration = crate::rules::Registration {
+        name: "amber-falcon".into(),
+        token: "act_example".into(),
+        recovery_code: "arc_example".into(),
+        operator_instructions: Some(instructions.clone()),
+    };
+    let fmt = formatter(crate::config::MIN_RESPONSE_BYTES);
+    for format in [Format::Text, Format::Json] {
+        let registration_text = fmt.registration(format, &registration);
+        let identity = fmt.whoami(format, &registration.name, Some(&instructions));
+        for out in [registration_text, identity] {
+            if format == Format::Json {
+                let value: Value = serde_json::from_str(&out).unwrap();
+                assert_eq!(value["operator_instructions"]["text"], instructions.text);
+                assert_eq!(value["operator_instructions"]["version"], 7);
+            } else {
+                assert!(out.ends_with(&instructions.text));
+                assert!(out.contains("From this server's operator (version 7):"));
+            }
+        }
+    }
+}

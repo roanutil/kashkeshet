@@ -74,6 +74,12 @@ impl Rules {
                 return Err(e);
             }
         };
+        self.publish_message(&message);
+        Ok(message)
+    }
+
+    /// Tells waiting agents and the web page about a stored message.
+    pub(super) fn publish_message(&self, message: &Message) {
         self.events().publish(NewMessage {
             id: message.id,
             channel_id: message.channel_id.clone(),
@@ -83,7 +89,36 @@ impl Rules {
             created_at: message.created_at.clone(),
             run_id: message.run_id,
         });
-        Ok(message)
+    }
+
+    /// Stores a message from the operator in `channel`, saying what the
+    /// human changed. Runs inside the change's own write, so the change and
+    /// its message are stored together or not at all. The caller publishes
+    /// the message once the write is done.
+    pub(super) fn post_as_operator(
+        &self,
+        store: &dyn Writes,
+        channel: &ChannelFacts,
+        body: String,
+    ) -> Result<Message> {
+        let created_at = self.now_text();
+        let run_id = self.inner.deps.run_id;
+        let id = store.insert_message(&NewMessageRecord {
+            channel_id: channel.id.clone(),
+            agent: names::OPERATOR.to_string(),
+            body: body.clone(),
+            created_at: created_at.clone(),
+            run_id,
+        })?;
+        Ok(Message {
+            id,
+            channel_id: channel.id.clone(),
+            channel_name: channel.name.clone(),
+            agent: names::OPERATOR.to_string(),
+            body,
+            created_at,
+            run_id: Some(run_id),
+        })
     }
 
     /// Messages in a channel `me` is in.
@@ -111,7 +146,12 @@ impl Rules {
                     None => false,
                 };
                 let open = channel.as_ref().is_some_and(|c| c.open);
-                match access::decide(channel.is_some(), open, member, Need::Membership) {
+                match access::decide(
+                    channel.is_some(),
+                    open,
+                    Who::Agent { member },
+                    Need::Membership,
+                ) {
                     Decision::Allowed => Ok(Message::from(message)),
                     Decision::NotMember => Err(RuleError::not_member(&message.channel_id)),
                     // A message in a hidden channel does not exist, as far as `me` can tell.

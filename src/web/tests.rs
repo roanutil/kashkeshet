@@ -58,6 +58,262 @@ async fn get(site: &Router, path: &str) -> (StatusCode, String) {
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// A form post to `path`, sent from this site.
+async fn post(site: &Router, path: &str, body: &str) -> (StatusCode, Option<String>) {
+    let request = HttpRequest::builder()
+        .method("POST")
+        .uri(path)
+        .header("Host", "localhost")
+        .header("Origin", "http://localhost")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(body.to_string()))
+        .expect("request");
+    let response = site.clone().oneshot(request).await.expect("response");
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|l| l.to_str().ok())
+        .map(str::to_string);
+    (response.status(), location)
+}
+
+/// The value of the first `form_token` field in `page`.
+fn form_token_in(page: &str) -> String {
+    let (_, rest) = page
+        .split_once(r#"name="form_token" value=""#)
+        .expect("a form token");
+    rest.split_once('"').expect("closing quote").0.to_string()
+}
+
+/// What every source must do for a change: refuse it without the page's
+/// form token; with it, make it, and show the operator's message saying so.
+async fn changes_work(source: Arc<dyn Source>) {
+    let overview = source.overview().await.expect("overview");
+    let id = overview
+        .channels
+        .first()
+        .expect("a channel")
+        .channel
+        .id
+        .clone();
+    let site = site(source.clone());
+    let path = format!("/channels/{id}/purpose");
+    let (_, page) = get(&site, &format!("/channels/{id}")).await;
+    assert!(page.contains(&format!(r#"action="/channels/{id}/purpose""#)));
+    let token = form_token_in(&page);
+
+    let (status, _) = post(&site, &path, "purpose=forged").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = post(&site, &path, "purpose=forged&form_token=guess").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let view = source.channel(id.clone(), None).await.expect("view");
+    assert_ne!(view.channel.purpose.as_deref(), Some("forged"));
+
+    let (status, location) = post(
+        &site,
+        &path,
+        &format!("purpose=Release+%26+prep&form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location, Some(format!("/channels/{id}")));
+    let view = source.channel(id.clone(), None).await.expect("view");
+    assert_eq!(view.channel.purpose.as_deref(), Some("Release & prep"));
+    let said = view.messages.last().expect("the operator's message");
+    assert!(said.from_operator);
+    assert_eq!(said.agent, crate::names::OPERATOR);
+    assert_eq!(
+        said.body,
+        "The operator changed the purpose to: Release & prep"
+    );
+    // The page shows the operator by name, with no link to an agent page.
+    let (_, page) = get(&site, &format!("/channels/{id}")).await;
+    assert!(page.contains(r#"<span class="who">operator</span>"#));
+    assert!(!page.contains("/agents/operator"));
+    // So does the front page, where the operator spoke last in the channel.
+    let overview = source.overview().await.expect("overview");
+    let summary = overview
+        .channels
+        .iter()
+        .find(|c| c.channel.id == id)
+        .expect("the channel");
+    assert!(summary.last_from_operator);
+    let (_, page) = get(&site, "/").await;
+    assert!(!page.contains("/agents/operator"));
+
+    let (status, _) = post(
+        &site,
+        "/channels/ch_missing0/purpose",
+        &format!("purpose=x&form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// What every source must do for an agent's handoff: show its note, and give
+/// a new recovery code only to a form from the page, on a page the browser
+/// does not keep.
+async fn handoff_works(source: Arc<dyn Source>) -> (String, String) {
+    let overview = source.overview().await.expect("overview");
+    let mut noted = None;
+    for a in &overview.agents {
+        let view = source.agent(a.agent.name.clone()).await.expect("view");
+        if !view.handoff_note.is_empty() {
+            noted = Some(view);
+            break;
+        }
+    }
+    let view = noted.expect("an agent with a handoff note");
+    let name = view.agent.name.clone();
+    let site = site(source.clone());
+    let (_, page) = get(&site, &format!("/agents/{name}")).await;
+    let first_line = view.handoff_note.lines().next().expect("a line");
+    assert!(page.contains(first_line), "the page shows the note");
+    let path = format!("/agents/{name}/recovery-code");
+    assert!(page.contains(&format!(r#"action="{path}""#)));
+    let token = form_token_in(&page);
+
+    let (status, _) = post(&site, &path, "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let request = HttpRequest::builder()
+        .method("POST")
+        .uri(&path)
+        .header("Host", "localhost")
+        .header("Origin", "http://localhost")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!("form_token={token}")))
+        .expect("request");
+    let response = site.clone().oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .map(|v| v.as_bytes()),
+        Some(&b"no-store"[..])
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let page = String::from_utf8_lossy(&bytes).into_owned();
+    let (_, rest) = page
+        .split_once(r#"<p class="mono" style="overflow-wrap: anywhere">"#)
+        .expect("the code");
+    let code = rest.split_once('<').expect("end of code").0.to_string();
+    assert!(code.starts_with("arc_"), "{code}");
+
+    let (status, _) = post(
+        &site,
+        "/agents/nobody-here/recovery-code",
+        &format!("form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    (name, code)
+}
+
+#[tokio::test]
+async fn handoff_works_through_the_rules() {
+    let (rules, source) = rules_world().await;
+    let (name, code) = handoff_works(source).await;
+    // The code shown on the page is the one that now takes over the identity.
+    let taken = rules.reclaim(name, code).await.expect("reclaim");
+    rules.authenticate(Some(&taken.token)).await.expect("auth");
+}
+
+#[tokio::test]
+async fn handoff_works_in_the_preview() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    handoff_works(preview(1, clock, &Shutdown::new())).await;
+}
+
+/// What every source must do for "Show previous": from the first page of the
+/// busiest channel, the earlier pages read back every message once, oldest
+/// first, a page at a time, until there are no more.
+async fn earlier_pages_work(source: Arc<dyn Source>) -> usize {
+    let overview = source.overview().await.expect("overview");
+    let busiest = overview
+        .channels
+        .iter()
+        .max_by_key(|c| c.message_count)
+        .expect("a channel");
+    let id = busiest.channel.id.clone();
+    let site = site(source.clone());
+    let first = source.channel(id.clone(), None).await.expect("first page");
+    let (_, page) = get(&site, &format!("/channels/{id}")).await;
+    let before = first.older_before_id.expect("earlier messages to load");
+    assert!(page.contains(&format!(r#"data-before="{before}""#)));
+    assert!(page.contains(&format!(
+        "Show previous {} messages",
+        source.page_messages()
+    )));
+
+    let mut ids: Vec<i64> = first.messages.iter().map(|m| m.id).collect();
+    let mut next = Some(before);
+    let mut pages = 1;
+    while let Some(before) = next {
+        let (status, body) = get(
+            &site,
+            &format!("/channels/{id}/messages?before_id={before}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let json: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        let page: Vec<i64> = json["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["id"].as_i64().expect("id"))
+            .collect();
+        assert!(!page.is_empty() && page.len() <= source.page_messages());
+        assert!(page.iter().all(|&m| m < before), "only earlier messages");
+        ids.splice(0..0, page);
+        next = json["older_before_id"].as_i64();
+        pages += 1;
+    }
+    let mut sorted = ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(ids, sorted, "oldest first, each once");
+    assert_eq!(ids.len() as i64, busiest.message_count, "every message");
+
+    let (status, _) = get(&site, "/channels/ch_missing0/messages?before_id=1").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = get(&site, &format!("/channels/{id}/messages")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "before_id is required");
+    pages
+}
+
+#[tokio::test]
+async fn earlier_pages_work_through_the_rules() {
+    let limits = Limits {
+        web_page_messages: 2,
+        ..Limits::DEFAULT
+    };
+    let (_, source) = rules_world_with(limits).await;
+    assert!(earlier_pages_work(source).await >= 2);
+}
+
+#[tokio::test]
+async fn the_preview_has_a_channel_long_enough_to_page_back_through() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    let source = preview(1, clock, &Shutdown::new());
+    assert_eq!(source.page_messages(), Limits::DEFAULT.web_page_messages);
+    assert!(earlier_pages_work(source).await >= 3, "several pages back");
+}
+
+#[tokio::test]
+async fn changes_work_through_the_rules() {
+    changes_work(rules_source().await).await;
+}
+
+#[tokio::test]
+async fn changes_work_in_the_preview() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    changes_work(preview(1, clock, &Shutdown::new())).await;
+}
+
 /// What every source must do: serve each page, page back through a
 /// channel, and answer 404 for what does not exist.
 async fn pages_work(source: Arc<dyn Source>) {
@@ -149,6 +405,15 @@ async fn pages_work(source: Arc<dyn Source>) {
 /// Rules over an in-memory database with two agents, an open and a closed
 /// channel, and a few messages.
 async fn rules_source() -> Arc<dyn Source> {
+    rules_world().await.1
+}
+
+/// The rules behind `rules_source`, too, for checking what a change did.
+async fn rules_world() -> (Rules, Arc<dyn Source>) {
+    rules_world_with(Limits::DEFAULT).await
+}
+
+async fn rules_world_with(limits: Limits) -> (Rules, Arc<dyn Source>) {
     let db = Db::open_in_memory().expect("db");
     let run_id = db
         .write(|w| {
@@ -168,10 +433,10 @@ async fn rules_source() -> Arc<dyn Source> {
         events: Events::new(),
         clock: Arc::new(FixedClock::new(start_time())),
         entropy: Arc::new(SeqEntropy::new(4)),
-        sends: SendLimiter::new(Limits::DEFAULT.sends_per_minute),
-        registrations: RegisterLimiter::new(Limits::DEFAULT.registrations_per_minute),
+        sends: SendLimiter::new(limits.sends_per_minute),
+        registrations: RegisterLimiter::new(limits.registrations_per_minute),
         run_id,
-        limits: Limits::DEFAULT,
+        limits,
     });
     let mut agents = Vec::new();
     for _ in 0..2 {
@@ -210,7 +475,14 @@ async fn rules_source() -> Arc<dyn Source> {
                 .expect("send");
         }
     }
-    Arc::new(RulesSource::new(rules))
+    rules
+        .set_handoff_note(
+            &agents[0],
+            "Next: the parser.\nOwner approves pushes.".into(),
+        )
+        .await
+        .expect("handoff note");
+    (rules.clone(), Arc::new(RulesSource::new(rules)))
 }
 
 fn preview(seed: u64, clock: Arc<FixedClock>, shutdown: &Shutdown) -> Arc<Preview> {
@@ -249,7 +521,9 @@ async fn the_show_older_link_appears_only_when_older_messages_exist() {
             Some(before) => {
                 seen_paged = true;
                 assert!(
-                    page.contains(&format!("?before_id={before}\">Show older")),
+                    page.contains(&format!(
+                        "?before_id={before}\" data-before=\"{before}\">Show previous"
+                    )),
                     "{}",
                     c.name
                 );
@@ -546,4 +820,266 @@ async fn channel_page_shows_the_pinned_note_and_editor_as_escaped_text() {
     assert!(page.contains("Last edited by"));
     assert!(page.contains(ch.note_edited_by.as_deref().unwrap()));
     assert!(page.contains("2026-10-25"));
+}
+
+async fn administration_works(source: Arc<dyn Source>) {
+    let overview = source.overview().await.unwrap();
+    let id = overview.channels[0].channel.id.clone();
+    let current = source.channel(id.clone(), None).await.unwrap();
+    let name = current.members[0].name.clone();
+    let count = current.members.len();
+    let app = site(source.clone());
+    let (_, page) = get(&app, &format!("/channels/{id}")).await;
+    let token = form_token_in(&page);
+    let routes = [
+        (
+            format!("/channels/{id}/visibility"),
+            "open=false".to_string(),
+        ),
+        (
+            format!("/channels/{id}/members/add"),
+            format!("name={name}"),
+        ),
+        (
+            format!("/channels/{id}/members/remove"),
+            format!("name={name}"),
+        ),
+        (format!("/channels/{id}/hide"), String::new()),
+        (format!("/agents/{name}/hide"), String::new()),
+    ];
+    for (path, fields) in &routes {
+        assert_eq!(post(&app, path, fields).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            post(&app, path, &format!("{fields}&form_token=invalid"))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(get(&app, path).await.0, StatusCode::METHOD_NOT_ALLOWED);
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri(path)
+            .header("Host", "localhost")
+            .header("Origin", "http://other.example")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(Body::from(format!("{fields}&form_token={token}")))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    // The forged requests made no changes.
+    assert_eq!(
+        source
+            .channel(id.clone(), None)
+            .await
+            .unwrap()
+            .members
+            .len(),
+        count
+    );
+    assert!(source.agent(name.clone()).await.is_ok());
+    let open = !current.channel.open;
+    assert_eq!(
+        post(
+            &app,
+            &routes[0].0,
+            &format!("open={open}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        source.channel(id.clone(), None).await.unwrap().channel.open,
+        open
+    );
+    assert_eq!(
+        post(
+            &app,
+            &routes[2].0,
+            &format!("name={name}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        source
+            .channel(id.clone(), None)
+            .await
+            .unwrap()
+            .members
+            .len(),
+        count - 1
+    );
+    assert_eq!(
+        post(
+            &app,
+            &routes[1].0,
+            &format!("name={name}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    let view = source.channel(id.clone(), None).await.unwrap();
+    assert_eq!(view.members.len(), count);
+    assert!(view.messages.last().unwrap().from_operator);
+    assert!(view.messages.last().unwrap().body.contains("added"));
+    assert_eq!(
+        post(&app, &routes[4].0, &format!("form_token={token}"))
+            .await
+            .0,
+        StatusCode::SEE_OTHER
+    );
+    assert!(matches!(
+        source.agent(name.clone()).await,
+        Err(SourceError::NotFound(_))
+    ));
+    let view = source.channel(id.clone(), None).await.unwrap();
+    assert!(!view.members.iter().any(|m| m.name == name));
+    assert!(view.messages.last().unwrap().from_operator);
+    assert!(view.messages.last().unwrap().body.contains("hid"));
+    assert_eq!(
+        post(&app, &routes[3].0, &format!("form_token={token}")).await,
+        (StatusCode::SEE_OTHER, Some("/".into()))
+    );
+    assert!(matches!(
+        source.channel(id.clone(), None).await,
+        Err(SourceError::NotFound(_))
+    ));
+    let overview = source.overview().await.unwrap();
+    assert!(!overview.channels.iter().any(|c| c.channel.id == id));
+    assert!(!overview.agents.iter().any(|a| a.agent.name == name));
+}
+
+#[tokio::test]
+async fn administration_works_through_the_rules() {
+    administration_works(rules_source().await).await;
+}
+
+#[tokio::test]
+async fn administration_works_through_the_preview() {
+    administration_works(preview(
+        1,
+        Arc::new(FixedClock::new(start_time())),
+        &Shutdown::new(),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn preview_feed_survives_empty_channels_and_hiding_every_entry() {
+    let p = preview(1, Arc::new(FixedClock::new(start_time())), &Shutdown::new());
+    let overview = p.overview().await.unwrap();
+    for agent in overview.agents {
+        p.hide_agent(agent.agent.name).await.unwrap();
+    }
+    // No remaining channel members must not cause an entropy-index panic.
+    p.step();
+    for channel in p.overview().await.unwrap().channels {
+        p.change_channel(channel.channel.id, ChannelAction::Hide)
+            .await
+            .unwrap();
+    }
+    assert!(p.overview().await.unwrap().channels.is_empty());
+    p.step();
+    assert!(!p.overview().await.unwrap().channels.is_empty());
+}
+
+async fn operator_editor_works(source: Arc<dyn Source>) {
+    let site = site(source.clone());
+    let (status, page) = get(&site, "/instructions").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("No versions saved."));
+    let token = form_token_in(&page);
+    let foreign = HttpRequest::builder()
+        .method("POST")
+        .uri("/instructions")
+        .header("Host", "localhost")
+        .header("Origin", "https://evil.example")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!("text=forged&form_token={token}")))
+        .unwrap();
+    assert_eq!(
+        site.clone().oneshot(foreign).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    assert_eq!(
+        post(&site, "/instructions", "text=forged").await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(&site, "/instructions", "text=forged&form_token=wrong")
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert!(
+        source
+            .operator_instructions()
+            .await
+            .unwrap()
+            .history
+            .is_empty()
+    );
+    assert_eq!(
+        post(
+            &site,
+            "/instructions",
+            &format!("text=%3Cscript%3E%26%0Ahello&form_token={token}")
+        )
+        .await,
+        (StatusCode::SEE_OTHER, Some("/instructions".into()))
+    );
+    let first = source.operator_instructions().await.unwrap();
+    assert_eq!(first.history[0].version, 1);
+    assert_eq!(first.history[0].text, "<script>&\nhello");
+    let (_, page) = get(&site, "/instructions").await;
+    assert!(page.contains("&#60;script&#62;&#38;"));
+    assert!(!page.contains("<script>&"));
+    assert!(page.contains("Version 1"));
+    assert_eq!(
+        post(&site, "/instructions", &format!("text=&form_token={token}"))
+            .await
+            .0,
+        StatusCode::SEE_OTHER
+    );
+    let history = source.operator_instructions().await.unwrap().history;
+    assert_eq!(history[0].text, "");
+    assert_eq!(history[0].version, 2);
+    assert_eq!(history[1], first.history[0]);
+    let too_long = "x".repeat(first.max_chars + 1);
+    assert_eq!(
+        post(
+            &site,
+            "/instructions",
+            &format!("text={too_long}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        source.operator_instructions().await.unwrap().history,
+        history
+    );
+    // A page read cannot make another version.
+    get(&site, "/instructions?text=forged").await;
+    assert_eq!(
+        source.operator_instructions().await.unwrap().history.len(),
+        2
+    );
+}
+#[tokio::test]
+async fn operator_editor_works_through_rules() {
+    operator_editor_works(rules_source().await).await;
+}
+#[tokio::test]
+async fn operator_editor_works_in_preview() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    operator_editor_works(preview(1, clock, &Shutdown::new())).await;
 }

@@ -35,7 +35,7 @@ impl Rules {
         let now = self.now_text();
         let created_at = now.clone();
         let run_id = self.inner.deps.run_id;
-        let name = self
+        let (name, operator_instructions) = self
             .db()
             .write(move |store| {
                 // A cap too large for the database's count type is no cap.
@@ -58,7 +58,10 @@ impl Rules {
                     last_seen: Some(now),
                     run_id,
                 })?;
-                Ok::<_, RuleError>(name)
+                let instructions = store
+                    .current_operator_instructions()?
+                    .map(OperatorInstructions::from);
+                Ok::<_, RuleError>((name, instructions))
             })
             .await?;
         self.events().publish_agent(NewAgent {
@@ -69,6 +72,7 @@ impl Rules {
             name,
             token,
             recovery_code,
+            operator_instructions,
         })
     }
 
@@ -116,6 +120,35 @@ impl Rules {
             .await
     }
 
+    /// Replaces `me`'s handoff note: a note for whoever next holds this
+    /// identity, such as a session that takes it over with `reclaim`. Only
+    /// this identity reads it through MCP; the human sees it on the web
+    /// page. Empty text clears it. The time is recorded either way.
+    pub async fn set_handoff_note(&self, me: &Agent, text: String) -> Result<HandoffNote> {
+        let max = self.limits().max_handoff_note_chars;
+        if text.chars().count() > max {
+            return Err(RuleError::invalid(format!(
+                "handoff note must be at most {max} characters"
+            )));
+        }
+        let name = me.name.clone();
+        let now = self.now_text();
+        self.db()
+            .write(move |store| {
+                store.set_handoff_note(&name, &text, &now)?;
+                handoff_note(store, &name)
+            })
+            .await
+    }
+
+    /// `me`'s own handoff note.
+    pub async fn handoff_note(&self, me: &Agent) -> Result<HandoffNote> {
+        let name = me.name.clone();
+        self.db()
+            .read(move |store| handoff_note(store, &name))
+            .await
+    }
+
     /// Agents in name order, optionally only those whose names contain `query`.
     pub async fn list_agents(
         &self,
@@ -145,14 +178,25 @@ impl Rules {
     }
 }
 
+pub(super) fn handoff_note(store: &dyn Reads, name: &str) -> Result<HandoffNote> {
+    let note = store
+        .handoff_note(name)?
+        .ok_or_else(|| RuleError::agent_not_found(name))?;
+    Ok(HandoffNote {
+        name: name.to_string(),
+        text: note.text,
+        set_at: note.set_at,
+    })
+}
+
 /// `base` if no agent has it, else the first free numbered form of it.
 fn free_name(store: &dyn Reads, base: &str) -> Result<String> {
-    if !agent_exists(store, base)? {
+    if !store.agent_name_taken(base)? {
         return Ok(base.to_string());
     }
     for attempt in 1..=MAX_NAME_ATTEMPTS {
         let candidate = names::numbered_name(base, attempt);
-        if !agent_exists(store, &candidate)? {
+        if !store.agent_name_taken(&candidate)? {
             return Ok(candidate);
         }
     }
@@ -176,6 +220,29 @@ fn clean_description(text: &str, max_chars: usize) -> Result<Option<String>> {
     Ok(Some(text.to_string()))
 }
 
+/// The note an agent keeps for whoever next holds its identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HandoffNote {
+    pub name: String,
+    pub text: String,
+    /// When it was last set, also when cleared. `None` if never.
+    pub set_at: Option<String>,
+}
+
+/// Who makes a change: an agent, or the human operator through the web
+/// page. Both go through the same rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Actor {
+    Agent(Agent),
+    Human,
+}
+
+impl From<&Agent> for Actor {
+    fn from(agent: &Agent) -> Actor {
+        Actor::Agent(agent.clone())
+    }
+}
+
 /// An agent that has proven who it is on this call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Agent {
@@ -184,6 +251,7 @@ pub struct Agent {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Registration {
+    pub operator_instructions: Option<OperatorInstructions>,
     pub name: String,
     pub token: String,
     pub recovery_code: String,

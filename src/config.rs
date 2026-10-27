@@ -72,6 +72,8 @@ pub const NOTE_PREVIEW_CHARS: usize = 120;
 
 /// Address to listen on.
 pub const DEFAULT_BIND: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7420));
+/// Whether `bind` may be a non-loopback address.
+pub const DEFAULT_ALLOW_ANY_BIND: bool = false;
 /// Database file name in the per-user data directory, for `kkt serve`.
 pub const DB_FILE_NAME: &str = "kashkeshet.db";
 /// The per-user data directory on macOS, under the home directory.
@@ -336,6 +338,10 @@ pub struct Limits {
     pub max_description_chars: usize,
     /// Longest pinned channel note, in characters.
     pub max_note_chars: usize,
+    /// Longest operator instruction text, in characters.
+    pub max_operator_instructions_chars: usize,
+    /// Longest handoff note an agent keeps for itself, in characters.
+    pub max_handoff_note_chars: usize,
     /// Messages one agent may send per minute.
     pub sends_per_minute: u32,
     /// Agents the whole server may register per minute.
@@ -354,9 +360,9 @@ pub struct Limits {
     pub purpose_preview_chars: usize,
     /// How long a web page sign-in lasts, when an access key is set.
     pub web_session_lifetime: Duration,
-    /// The most messages one web page shows: a channel's page, and the live
-    /// view, which drops the oldest as new ones arrive. Older messages are a
-    /// "show older" link away.
+    /// The most messages one web page shows at first: a channel's page, and
+    /// the live view, which drops the oldest as new ones arrive. A channel
+    /// page's "Show previous" button loads this many earlier ones at a time.
     pub web_page_messages: usize,
 }
 
@@ -370,6 +376,8 @@ impl Limits {
         max_purpose_chars: 500,
         max_description_chars: 300,
         max_note_chars: 10_000,
+        max_operator_instructions_chars: 4000,
+        max_handoff_note_chars: 20_000,
         sends_per_minute: 30,
         registrations_per_minute: 20,
         max_agents: 1000,
@@ -380,7 +388,7 @@ impl Limits {
         member_preview: 3,
         purpose_preview_chars: 120,
         web_session_lifetime: Duration::from_secs(12 * 60 * 60),
-        web_page_messages: 200,
+        web_page_messages: 100,
     };
 
     /// Checks that these limits make sense together. The server refuses to
@@ -393,6 +401,11 @@ impl Limits {
             ("max_purpose_chars", self.max_purpose_chars),
             ("max_description_chars", self.max_description_chars),
             ("max_note_chars", self.max_note_chars),
+            (
+                "max_operator_instructions_chars",
+                self.max_operator_instructions_chars,
+            ),
+            ("max_handoff_note_chars", self.max_handoff_note_chars),
             ("sends_per_minute", self.sends_per_minute as usize),
             (
                 "registrations_per_minute",
@@ -469,17 +482,34 @@ impl InvalidSetting {
     }
 }
 
-/// Checks the listen address. Only loopback addresses are allowed: the server
-/// has no authentication beyond agent tokens and is meant for one machine.
-pub fn check_bind(addr: SocketAddr) -> Result<(), InvalidSetting> {
+/// Checks the listen address. Only loopback addresses are allowed unless
+/// `allow_any_bind` is set: the server is meant for one machine, and a
+/// container needs to listen on its own network interface. `has_key` says
+/// whether an access key guards the server; any other address needs one.
+pub fn check_bind(
+    addr: SocketAddr,
+    allow_any_bind: bool,
+    has_key: bool,
+) -> Result<(), InvalidSetting> {
     if addr.ip().is_loopback() {
-        Ok(())
-    } else {
-        Err(InvalidSetting::new(
-            "bind",
-            format!("must be a loopback address (such as 127.0.0.1), not {addr}"),
-        ))
+        return Ok(());
     }
+    if !allow_any_bind {
+        return Err(InvalidSetting::new(
+            "bind",
+            format!(
+                "must be a loopback address (such as 127.0.0.1), not {addr}, \
+                 unless allow_any_bind is set"
+            ),
+        ));
+    }
+    if !has_key {
+        return Err(InvalidSetting::new(
+            "allow_any_bind",
+            "needs an access key: it cannot be used with no_access_key",
+        ));
+    }
+    Ok(())
 }
 
 /// Checks an access key, as read from `--access-key-file` without
@@ -550,13 +580,17 @@ mod tests {
     #[test]
     fn zero_is_refused_for_every_count() {
         type SetZero = fn(&mut Limits);
-        let cases: [(&str, SetZero); 10] = [
+        let cases: [(&str, SetZero); 12] = [
             ("default_limit", |l| l.default_limit = 0),
             ("max_body_bytes", |l| l.max_body_bytes = 0),
             ("max_channel_name_chars", |l| l.max_channel_name_chars = 0),
             ("max_purpose_chars", |l| l.max_purpose_chars = 0),
             ("max_description_chars", |l| l.max_description_chars = 0),
             ("max_note_chars", |l| l.max_note_chars = 0),
+            ("max_operator_instructions_chars", |l| {
+                l.max_operator_instructions_chars = 0
+            }),
+            ("max_handoff_note_chars", |l| l.max_handoff_note_chars = 0),
             ("sends_per_minute", |l| l.sends_per_minute = 0),
             ("registrations_per_minute", |l| {
                 l.registrations_per_minute = 0
@@ -626,10 +660,21 @@ mod tests {
 
     #[test]
     fn only_loopback_addresses_may_be_bound() {
-        assert_eq!(check_bind("127.0.0.1:7420".parse().expect("addr")), Ok(()));
-        assert_eq!(check_bind("[::1]:7420".parse().expect("addr")), Ok(()));
-        let err = check_bind("0.0.0.0:7420".parse().expect("addr")).expect_err("refused");
+        let local: SocketAddr = "127.0.0.1:7420".parse().expect("addr");
+        let local6: SocketAddr = "[::1]:7420".parse().expect("addr");
+        let any: SocketAddr = "0.0.0.0:7420".parse().expect("addr");
+        assert_eq!(check_bind(local, false, true), Ok(()));
+        assert_eq!(check_bind(local6, false, false), Ok(()));
+        let err = check_bind(any, false, true).expect_err("refused");
         assert_eq!(err.name, "bind");
+    }
+
+    #[test]
+    fn any_address_may_be_bound_only_when_allowed_and_keyed() {
+        let any: SocketAddr = "0.0.0.0:7420".parse().expect("addr");
+        assert_eq!(check_bind(any, true, true), Ok(()));
+        let err = check_bind(any, true, false).expect_err("refused");
+        assert_eq!(err.name, "allow_any_bind");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! What the human sees through the web page. The human sees everything,
-//! including closed channels, and changes nothing.
+//! including closed channels. The human's changes are the same rules as
+//! agents', made as [`Actor::Human`].
 
 use super::*;
 use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW};
@@ -147,12 +148,38 @@ impl Rules {
                     .collect::<Result<Vec<_>>>()?;
                 let message_count = store.message_count_from(&name)?;
                 Ok(AgentView {
+                    handoff_note: super::agents::handoff_note(store, &name)?,
                     agent,
                     channels,
                     message_count,
                 })
             })
             .await
+    }
+
+    /// Gives the agent named `name` a new recovery code, for the human to
+    /// hand to a new session, which calls `reclaim` with it. The old code
+    /// stops working; the agent's current token keeps working until a
+    /// `reclaim`. Only a hash is stored, so the code is returned once and
+    /// never again. A revoked agent cannot be reclaimed, so gets none.
+    pub async fn new_recovery_code(&self, name: String) -> Result<String> {
+        let code = auth::recovery_code(self.inner.deps.entropy.as_ref());
+        let hash = auth::hash_token(&code);
+        self.db()
+            .write(move |store| {
+                let agent = store
+                    .agent(&name)?
+                    .ok_or_else(|| RuleError::agent_not_found(&name))?;
+                if agent.revoked_at.is_some() {
+                    return Err(RuleError::invalid(format!(
+                        "{name} is revoked, and a revoked identity cannot be reclaimed"
+                    )));
+                }
+                store.set_recovery_hash(&name, &hash)?;
+                Ok(())
+            })
+            .await?;
+        Ok(code)
     }
 }
 
@@ -241,4 +268,5 @@ pub struct AgentView {
     pub agent: AgentInfo,
     pub channels: Vec<ChannelInfo>,
     pub message_count: i64,
+    pub handoff_note: HandoffNote,
 }

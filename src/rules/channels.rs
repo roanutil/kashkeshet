@@ -237,22 +237,41 @@ impl Rules {
             .await
     }
 
+    /// Changes a channel's purpose. Any member may; so may the human, whose
+    /// change is announced in the channel by an operator message.
     pub async fn set_purpose(
         &self,
-        me: &Agent,
+        actor: impl Into<Actor>,
         channel_id: String,
         purpose: String,
     ) -> Result<ChannelInfo> {
+        let actor = actor.into();
         let limits = self.limits().clone();
         let purpose = clean_purpose(Some(&purpose), limits.max_purpose_chars)?;
-        let me = me.name.clone();
-        self.db()
+        let rules = self.clone();
+        let (info, notice) = self
+            .db()
             .write(move |store| {
-                let channel = member_channel(store, &me, &channel_id)?;
+                let channel = changeable_channel(store, &actor, &channel_id)?;
                 store.set_purpose(&channel.id, purpose.as_deref())?;
-                channel_info(store, &channel.id, Some(&me), None, limits.member_preview)
+                let (viewer, notice) = match &actor {
+                    Actor::Agent(agent) => (Some(agent.name.as_str()), None),
+                    Actor::Human => {
+                        let text = match &purpose {
+                            Some(p) => format!("The operator changed the purpose to: {p}"),
+                            None => "The operator cleared the purpose.".to_string(),
+                        };
+                        (None, Some(rules.post_as_operator(store, &channel, text)?))
+                    }
+                };
+                let info = channel_info(store, &channel.id, viewer, None, limits.member_preview)?;
+                Ok::<_, RuleError>((info, notice))
             })
-            .await
+            .await?;
+        if let Some(message) = notice {
+            self.publish_message(&message);
+        }
+        Ok(info)
     }
 }
 
@@ -304,7 +323,7 @@ fn members_page(
 fn free_channel_id(store: &dyn Reads, entropy: &dyn Entropy) -> Result<String> {
     for _ in 0..MAX_CHANNEL_ID_ATTEMPTS {
         let id = names::channel_id(entropy);
-        if store.channel(&id)?.is_none() {
+        if !store.channel_id_taken(&id)? {
             return Ok(id);
         }
     }

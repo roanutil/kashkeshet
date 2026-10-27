@@ -1,12 +1,15 @@
-//! The human's read-only view: pages for all channels, one channel, and one
-//! agent, plus a stream of new messages for live updates. Requests naming a
-//! host that is not allowed are refused, as they are on `/mcp`. When the
-//! gate requires it, viewers log in first (`sign_in`).
+//! The human's view: pages for all channels, one channel, and one agent,
+//! plus a stream of new messages for live updates, and the changes the
+//! human makes from them. Requests naming a host that is not allowed are
+//! refused, as they are on `/mcp`. When the gate requires it, viewers log in
+//! first (`sign_in`). Every change is a form `POST` checked by `change`.
 //!
-//! The pages read only through their own contract (`source`): the server
-//! supplies it over the rules (`real`), and the preview from simulated data
-//! (`preview`), so the page can run and be worked on without a server.
+//! The pages read and change only through their own contract (`source`):
+//! the server supplies it over the rules (`real`), and the preview from
+//! simulated data (`preview`), so the page can run and be worked on without
+//! a server.
 
+mod change;
 mod notice;
 mod preview;
 mod real;
@@ -16,31 +19,55 @@ mod source;
 pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
-    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel, Overview, ServerRun,
-    SignIn, Source, SourceError,
+    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelAction, ChannelLink,
+    ChannelSummary, ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel,
+    OperatorInstructionsVersion, OperatorInstructionsView, Overview, ServerRun, SignIn, Source,
+    SourceError,
 };
 
 use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
 use crate::hosts::AllowedHosts;
 use askama::Template;
+use axum::Json;
 use axum::Router;
-use axum::extract::{Path, Query, Request, State};
-use axum::http::{StatusCode, header};
+use axum::extract::{FromRef, Path, Query, Request, State};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
+use change::{Change, NoFields};
 use futures::{Stream, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::Arc;
 
-/// What the pages need: their data, and whether to offer a logout button.
+/// What the pages need: their data, the gate (for form tokens), and
+/// whether to offer a logout button.
 #[derive(Clone)]
 struct Pages {
     source: Arc<dyn Source>,
+    gate: Arc<dyn Gate>,
     sign_out: bool,
+}
+
+impl FromRef<Pages> for Arc<dyn Gate> {
+    fn from_ref(pages: &Pages) -> Arc<dyn Gate> {
+        pages.gate.clone()
+    }
+}
+
+impl Pages {
+    /// The token this viewer's forms carry; empty if the viewer has none.
+    fn form_token(&self, headers: &HeaderMap) -> String {
+        self.gate
+            .form_token(sign_in::session_cookie(headers).as_deref())
+            .unwrap_or_default()
+    }
+
+    fn error(&self, e: SourceError, headers: &HeaderMap) -> Response {
+        error_page(e, self.sign_out, self.form_token(headers))
+    }
 }
 
 /// The web page, reading from `source`. Every route checks the `Host`
@@ -51,10 +78,23 @@ pub fn router(source: Arc<dyn Source>, hosts: AllowedHosts, gate: Arc<dyn Gate>)
     let pages = Router::new()
         .route("/", get(index))
         .route("/channels/{id}", get(channel))
+        .route("/channels/{id}/messages", get(earlier_messages))
+        .route("/channels/{id}/purpose", post(set_purpose))
+        .route("/channels/{id}/visibility", post(set_visibility))
+        .route("/channels/{id}/members/add", post(add_member))
+        .route("/channels/{id}/members/remove", post(remove_member))
+        .route("/channels/{id}/hide", post(hide_channel))
         .route("/agents/{name}", get(agent))
+        .route("/agents/{name}/hide", post(hide_agent))
+        .route("/agents/{name}/recovery-code", post(new_recovery_code))
         .route("/events", get(events))
+        .route(
+            "/instructions",
+            get(operator_instructions).post(save_operator_instructions),
+        )
         .with_state(Pages {
             source,
+            gate: gate.clone(),
             sign_out: sign_in_required,
         });
     let site = if sign_in_required {
@@ -114,6 +154,7 @@ struct IndexPage {
     /// The stretches they are counted in, in seconds.
     bucket_secs: u64,
     sign_out: bool,
+    form_token: String,
 }
 
 #[derive(Template)]
@@ -128,6 +169,7 @@ struct ChannelPage {
     /// The most messages the page keeps as new ones arrive.
     max_messages: usize,
     sign_out: bool,
+    form_token: String,
 }
 
 #[derive(Template)]
@@ -136,7 +178,19 @@ struct AgentPage {
     agent: Agent,
     channels: Vec<Channel>,
     message_count: i64,
+    handoff_note: String,
+    handoff_note_set_at: Option<String>,
     sign_out: bool,
+    form_token: String,
+}
+
+#[derive(Template)]
+#[template(path = "recovery.html")]
+struct RecoveryCodePage {
+    agent: String,
+    code: String,
+    sign_out: bool,
+    form_token: String,
 }
 
 #[derive(Template)]
@@ -145,6 +199,7 @@ struct ErrorPage {
     status: u16,
     message: String,
     sign_out: bool,
+    form_token: String,
 }
 
 #[derive(Deserialize)]
@@ -152,7 +207,44 @@ struct ChannelParams {
     before_id: Option<i64>,
 }
 
-async fn index(State(pages): State<Pages>) -> Response {
+#[derive(Deserialize)]
+struct EarlierParams {
+    before_id: i64,
+}
+
+/// A page of a channel's messages, as the channel page's "Show previous"
+/// button fetches them.
+#[derive(Serialize)]
+struct EarlierMessages {
+    /// Oldest first.
+    messages: Vec<Message>,
+    /// Set when there are earlier ones still: the `before_id` that reads them.
+    older_before_id: Option<i64>,
+}
+
+/// The messages just before `before_id`, as JSON, for the channel page to
+/// add above the ones it shows.
+async fn earlier_messages(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    Query(params): Query<EarlierParams>,
+) -> Response {
+    match pages.source.channel(id, Some(params.before_id)).await {
+        Ok(v) => Json(EarlierMessages {
+            messages: v.messages,
+            older_before_id: v.older_before_id,
+        })
+        .into_response(),
+        Err(SourceError::NotFound(message)) => (StatusCode::NOT_FOUND, message).into_response(),
+        Err(SourceError::Invalid(message)) => (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(SourceError::Failed(message)) => {
+            tracing::error!(error = %message, "could not read earlier messages");
+            (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
+        }
+    }
+}
+
+async fn index(State(pages): State<Pages>, headers: HeaderMap) -> Response {
     match pages.source.overview().await {
         Ok(o) => page(IndexPage {
             channels: in_creation_order(o.channels, |c| (&c.channel.created_at, &c.channel.id)),
@@ -162,8 +254,9 @@ async fn index(State(pages): State<Pages>) -> Response {
             window_secs: WEB_ACTIVITY_WINDOW.as_secs(),
             bucket_secs: WEB_ACTIVITY_BUCKET.as_secs(),
             sign_out: pages.sign_out,
+            form_token: pages.form_token(&headers),
         }),
-        Err(e) => error_page(e, pages.sign_out),
+        Err(e) => pages.error(e, &headers),
     }
 }
 
@@ -179,6 +272,7 @@ async fn channel(
     State(pages): State<Pages>,
     Path(id): Path<String>,
     Query(params): Query<ChannelParams>,
+    headers: HeaderMap,
 ) -> Response {
     match pages.source.channel(id, params.before_id).await {
         Ok(v) => page(ChannelPage {
@@ -189,20 +283,171 @@ async fn channel(
             live: params.before_id.is_none(),
             max_messages: pages.source.page_messages(),
             sign_out: pages.sign_out,
+            form_token: pages.form_token(&headers),
         }),
-        Err(e) => error_page(e, pages.sign_out),
+        Err(e) => pages.error(e, &headers),
     }
 }
 
-async fn agent(State(pages): State<Pages>, Path(name): Path<String>) -> Response {
+#[derive(Deserialize)]
+struct PurposeForm {
+    purpose: String,
+}
+
+/// The human changes a channel's purpose, then sees the channel again, with
+/// the operator's message saying what changed.
+async fn set_purpose(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<PurposeForm>,
+) -> Response {
+    match pages.source.set_purpose(id.clone(), form.purpose).await {
+        Ok(()) => Redirect::to(&format!("/channels/{}", url_path(&id))).into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
+#[derive(Deserialize)]
+struct VisibilityForm {
+    open: String,
+}
+
+#[derive(Deserialize)]
+struct MemberForm {
+    name: String,
+}
+
+async fn channel_change(
+    pages: Pages,
+    id: String,
+    headers: HeaderMap,
+    change: ChannelAction,
+) -> Response {
+    let hidden = matches!(change, ChannelAction::Hide);
+    match pages.source.change_channel(id.clone(), change).await {
+        Ok(()) => Redirect::to(
+            if hidden {
+                "/".to_string()
+            } else {
+                format!("/channels/{}", url_path(&id))
+            }
+            .as_str(),
+        )
+        .into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
+async fn set_visibility(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<VisibilityForm>,
+) -> Response {
+    let open = match form.open.as_str() {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return pages.error(
+                SourceError::Invalid("open must be true or false".into()),
+                &headers,
+            );
+        }
+    };
+    channel_change(pages, id, headers, ChannelAction::SetOpen(open)).await
+}
+
+async fn add_member(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<MemberForm>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::AddMember(form.name)).await
+}
+
+async fn remove_member(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<MemberForm>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::RemoveMember(form.name)).await
+}
+
+async fn hide_channel(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(_): Change<change::NoFields>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::Hide).await
+}
+
+async fn hide_agent(
+    State(pages): State<Pages>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Change(_): Change<change::NoFields>,
+) -> Response {
+    match pages.source.hide_agent(name).await {
+        Ok(()) => Redirect::to("/").into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
+/// `text` as one URL path segment.
+fn url_path(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// The human gives an agent a new recovery code. The page that shows it is
+/// the only place it ever appears, so the browser is told not to keep it.
+async fn new_recovery_code(
+    State(pages): State<Pages>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Change(NoFields {}): Change<NoFields>,
+) -> Response {
+    match pages.source.new_recovery_code(name.clone()).await {
+        Ok(code) => (
+            [(header::CACHE_CONTROL, "no-store")],
+            page(RecoveryCodePage {
+                agent: name,
+                code,
+                sign_out: pages.sign_out,
+                form_token: pages.form_token(&headers),
+            }),
+        )
+            .into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
+async fn agent(
+    State(pages): State<Pages>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
     match pages.source.agent(name).await {
         Ok(v) => page(AgentPage {
             agent: v.agent,
             channels: v.channels,
             message_count: v.message_count,
+            handoff_note: v.handoff_note,
+            handoff_note_set_at: v.handoff_note_set_at,
             sign_out: pages.sign_out,
+            form_token: pages.form_token(&headers),
         }),
-        Err(e) => error_page(e, pages.sign_out),
+        Err(e) => pages.error(e, &headers),
     }
 }
 
@@ -302,7 +547,7 @@ fn page(t: impl Template) -> Response {
     }
 }
 
-fn error_page(e: SourceError, sign_out: bool) -> Response {
+fn error_page(e: SourceError, sign_out: bool, form_token: String) -> Response {
     let (status, message) = match e {
         SourceError::NotFound(message) => (StatusCode::NOT_FOUND, message),
         SourceError::Invalid(message) => (StatusCode::BAD_REQUEST, message),
@@ -315,6 +560,7 @@ fn error_page(e: SourceError, sign_out: bool) -> Response {
         status: status.as_u16(),
         message,
         sign_out,
+        form_token,
     };
     match body.render() {
         Ok(html) => (status, Html(html)).into_response(),
@@ -385,5 +631,44 @@ mod filter_tests {
         assert_eq!(render("0123456789abcdef0123"), "0123456789ab");
         assert_eq!(render("0123456789abcdef0123-dirty"), "0123456789ab-dirty");
         assert_eq!(render("unknown"), "unknown");
+    }
+}
+
+#[derive(Template)]
+#[template(path = "instructions.html")]
+struct OperatorInstructionsPage {
+    history: Vec<source::OperatorInstructionsVersion>,
+    current_text: String,
+    max_chars: usize,
+    sign_out: bool,
+    form_token: String,
+}
+async fn operator_instructions(State(pages): State<Pages>, headers: HeaderMap) -> Response {
+    match pages.source.operator_instructions().await {
+        Ok(view) => page(OperatorInstructionsPage {
+            current_text: view
+                .history
+                .first()
+                .map_or_else(String::new, |v| v.text.clone()),
+            history: view.history,
+            max_chars: view.max_chars,
+            sign_out: pages.sign_out,
+            form_token: pages.form_token(&headers),
+        }),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+#[derive(Deserialize)]
+struct InstructionsForm {
+    text: String,
+}
+async fn save_operator_instructions(
+    State(pages): State<Pages>,
+    headers: HeaderMap,
+    Change(form): Change<InstructionsForm>,
+) -> Response {
+    match pages.source.save_operator_instructions(form.text).await {
+        Ok(()) => Redirect::to("/instructions").into_response(),
+        Err(e) => pages.error(e, &headers),
     }
 }

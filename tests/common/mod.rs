@@ -43,6 +43,7 @@ pub fn test_config() -> AppConfig {
         log_file: None,
         log_level: LogLevel::Info,
         dependency_log_level: LogLevel::Warn,
+        allow_any_bind: false,
     }
 }
 

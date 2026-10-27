@@ -57,7 +57,7 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 7);
+    assert_eq!(version, 11);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
@@ -99,6 +99,14 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
         )
         .expect("old agent kept with no description");
     assert_eq!(description, None);
+    let (note, note_set_at): (String, Option<String>) = conn
+        .query_row(
+            "SELECT handoff_note, handoff_note_set_at FROM agents WHERE name = 'amber-falcon'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("old agent kept with an empty handoff note");
+    assert_eq!((note.as_str(), note_set_at), ("", None));
     let (body, message_run): (String, Option<i64>) = conn
         .query_row("SELECT body, run_id FROM messages", [], |r| {
             Ok((r.get(0)?, r.get(1)?))
@@ -140,6 +148,56 @@ fn a_new_row_can_name_its_run() {
         [],
     );
     assert!(bad.is_err(), "a run_id must name an existing run");
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
+fn messages_may_come_from_the_operator_but_no_unknown_agent() {
+    let dir = temp_dir("operator");
+    let path = dir.join("old.db");
+    make_v1(&path);
+
+    drop(Db::open(&path).expect("open and migrate"));
+
+    let conn = Connection::open(&path).expect("reopen");
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .expect("foreign keys");
+    // The old message kept its ID, and search still finds it.
+    let (id, agent): (i64, String) = conn
+        .query_row(
+            "SELECT m.id, m.agent FROM messages_fts f JOIN messages m ON m.id = f.rowid
+             WHERE messages_fts MATCH 'hello'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("old message found");
+    assert_eq!((id, agent.as_str()), (1, "amber-falcon"));
+    conn.execute(
+        "INSERT INTO messages (channel_id, agent, body, created_at)
+         VALUES ('ch_1', 'operator', 'The operator changed the purpose', 't')",
+        [],
+    )
+    .expect("an operator message");
+    let unknown = conn.execute(
+        "INSERT INTO messages (channel_id, agent, body, created_at)
+         VALUES ('ch_1', 'nobody-here', 'hi', 't')",
+        [],
+    );
+    assert!(unknown.is_err(), "a message's agent must exist");
+    let bad_channel = conn.execute(
+        "INSERT INTO messages (channel_id, agent, body, created_at)
+         VALUES ('ch_none', 'operator', 'hi', 't')",
+        [],
+    );
+    assert!(bad_channel.is_err(), "a message's channel must exist");
+    let hits: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'purpose'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("search");
+    assert_eq!(hits, 1, "new messages are indexed");
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
 
@@ -207,5 +265,127 @@ async fn existing_channels_gain_an_empty_note_and_edits_survive_reopening() {
     assert_eq!(note.edited_by.as_deref(), Some("amber-falcon"));
     assert_eq!(note.edited_at.as_deref(), Some("2026-10-26T12:00:00Z"));
     drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn hidden_entries_migrate_and_stay_hidden_after_reopening_without_losing_messages() {
+    let dir = temp_dir("hidden-entries");
+    let path = dir.join("old.db");
+    make_v1(&path);
+    let db = Db::open(&path).unwrap();
+    assert!(
+        db.read(|s| s.agent("amber-falcon"))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(db.read(|s| s.channel("ch_1")).await.unwrap().is_some());
+    db.write(|s| {
+        s.add_member("ch_1", "amber-falcon", "t")?;
+        s.hide_agent("amber-falcon", "later")?;
+        s.hide_channel("ch_1")
+    })
+    .await
+    .unwrap();
+    drop(db);
+    let db = Db::open(&path).unwrap();
+    assert!(
+        db.read(|s| s.agent("amber-falcon"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        db.read(|s| s.agent_name_taken("amber-falcon"))
+            .await
+            .unwrap()
+    );
+    assert!(db.read(|s| s.channel("ch_1")).await.unwrap().is_none());
+    assert!(
+        db.read(|s| s.all_channel_ids(None))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        db.read(|s| s.agents_by_last_seen())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(db.read(|s| s.member_count("ch_1")).await.unwrap(), 0);
+    assert_eq!(
+        db.read(|s| s.message(1)).await.unwrap().unwrap().body,
+        "hello from v1"
+    );
+    assert_eq!(db.read(|s| s.active_agent_count()).await.unwrap(), 0);
+    let conn = Connection::open(&path).unwrap();
+    let revoked: Option<String> = conn
+        .query_row(
+            "SELECT revoked_at FROM agents WHERE name = 'amber-falcon'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(revoked.as_deref(), Some("later"));
+    drop(conn);
+    drop(db);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn instruction_versions_survive_reopen_and_reject_mutation() {
+    let dir = temp_dir("instructions");
+    let path = dir.join("old.db");
+    make_v1(&path);
+    let db = Db::open(&path).unwrap();
+    assert!(
+        db.read(|s| s.current_operator_instructions())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let saved = db
+        .write(|s| {
+            let run_id = s.insert_server_run(&kashkeshet::store::NewServerRunRecord {
+                started_at: "2026-10-27T00:00:00Z".into(),
+                version: "test".into(),
+                git_commit: "test".into(),
+                settings: "test".into(),
+                instructions_sha256: "test".into(),
+            })?;
+            s.append_operator_instructions("first\n😀", "2026-10-27T00:00:01Z", run_id)
+        })
+        .await
+        .unwrap();
+    drop(db);
+    let db = Db::open(&path).unwrap();
+    assert_eq!(
+        db.read(|s| s.operator_instructions_history())
+            .await
+            .unwrap(),
+        vec![saved]
+    );
+    drop(db);
+    let conn = Connection::open(&path).unwrap();
+    assert!(
+        conn.execute("UPDATE operator_instructions SET text = 'changed'", [])
+            .is_err()
+    );
+    assert!(conn.execute("INSERT OR REPLACE INTO operator_instructions (version, text, saved_at, run_id) SELECT version, 'replaced', saved_at, run_id FROM operator_instructions", []).is_err());
+    assert!(
+        conn.execute("DELETE FROM operator_instructions", [])
+            .is_err()
+    );
+    assert_eq!(
+        conn.query_row("SELECT body FROM messages WHERE id = 1", [], |row| row
+            .get::<_, String>(
+            0
+        ))
+        .unwrap(),
+        "hello from v1"
+    );
+    drop(conn);
     std::fs::remove_dir_all(dir).unwrap();
 }

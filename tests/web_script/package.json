@@ -1,0 +1,9 @@
+{
+  "name": "kkt-web-script-checks",
+  "private": true,
+  "description": "jsdom checks of the web page's script, run by hand against the web preview; see load_previous.mjs",
+  "type": "module",
+  "dependencies": {
+    "jsdom": "24.1.3"
+  }
+}
