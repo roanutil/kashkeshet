@@ -1,8 +1,6 @@
-//! The Tailscale Compose setup: kkt's loopback address must match the one
-//! Tailscale Serve proxies to, and must not be 127.0.0.1, which tailnet
-//! connections for the node's own address reach in userspace mode.
-
-use std::net::SocketAddr;
+//! The Tailscale Compose setup: kkt and Tailscale are separate containers, and
+//! Tailscale Serve proxies to the kkt service by name on the port kkt binds.
+//! Only the Tailscale container may be on the tailnet.
 
 fn read(path: &str) -> String {
     std::fs::read_to_string(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")))
@@ -10,17 +8,17 @@ fn read(path: &str) -> String {
 }
 
 /// The address after `--bind` in the Compose file's kkt command.
-fn compose_bind() -> SocketAddr {
+fn compose_bind() -> String {
     let compose = read("compose.tailscale.yaml");
     let mut lines = compose.lines().map(str::trim);
     lines
         .find(|line| *line == "- --bind")
         .expect("compose.tailscale.yaml passes --bind");
-    let value = lines
+    lines
         .next()
         .and_then(|line| line.strip_prefix("- "))
-        .expect("--bind has a value");
-    value.parse().expect("bind is an address")
+        .expect("--bind has a value")
+        .to_string()
 }
 
 fn serve_proxy() -> String {
@@ -35,13 +33,29 @@ fn serve_proxy() -> String {
 }
 
 #[test]
-fn serve_proxies_to_the_address_kkt_binds() {
-    assert_eq!(serve_proxy(), format!("http://{}", compose_bind()));
+fn serve_proxies_to_the_kkt_service_on_the_port_kkt_binds() {
+    let port = compose_bind()
+        .rsplit(':')
+        .next()
+        .expect("bind has a port")
+        .to_string();
+    assert_eq!(serve_proxy(), format!("http://kkt:{port}"));
 }
 
 #[test]
-fn kkt_is_not_on_the_address_tailnet_connections_reach() {
-    let bind = compose_bind();
-    assert!(bind.ip().is_loopback(), "{bind}");
-    assert_ne!(bind.ip().to_string(), "127.0.0.1", "{bind}");
+fn kkt_listens_beyond_loopback_with_the_flag_that_allows_it() {
+    let compose = read("compose.tailscale.yaml");
+    assert!(compose_bind().starts_with("0.0.0.0:"));
+    assert!(compose.contains("- --allow-any-bind"));
+}
+
+#[test]
+fn kkt_does_not_share_the_tailscale_network_or_publish_ports() {
+    let compose = read("compose.tailscale.yaml");
+    assert!(!compose.contains("network_mode"));
+    assert!(
+        !compose
+            .lines()
+            .any(|l| l.trim_start().starts_with("ports:"))
+    );
 }

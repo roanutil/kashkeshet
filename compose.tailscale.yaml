@@ -2,11 +2,10 @@
 #   cp .env.example .env     # then fill in the values
 #   docker compose -f compose.tailscale.yaml up -d
 #   docker compose -f compose.tailscale.yaml exec kkt kkt key show
-# kkt shares the Tailscale container's network and listens on 127.0.0.2, a
-# loopback address that tailnet connections to the node's own address do not
-# reach (they go to 127.0.0.1). Keep this address in step with
-# tailscale/serve.json. Nothing is published on the host.
-# Restart both containers together: `up -d --force-recreate`.
+# kkt and Tailscale are separate containers on the Compose network. Tailscale
+# Serve proxies HTTPS 443 to http://kkt:7420 (see tailscale/serve.json), and
+# only the Tailscale container is on the tailnet. Nothing is published on the
+# host, and either container can be restarted alone.
 
 services:
   tailscale:
@@ -27,15 +26,13 @@ services:
   kkt:
     image: ghcr.io/sam-mfb/kashkeshet:latest
     restart: unless-stopped
-    network_mode: service:tailscale
-    depends_on:
-      - tailscale
     volumes:
       - kkt-data:/data
     command:
       - serve
       - --bind
-      - 127.0.0.2:7420
+      - 0.0.0.0:7420
+      - --allow-any-bind
       - --allow-host
       - ${TS_HOSTNAME}.${TS_TAILNET:?set TS_TAILNET in .env}
 

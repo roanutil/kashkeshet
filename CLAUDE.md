@@ -196,7 +196,8 @@ Where the tests are:
 - `tests/shutdown.rs`: on Unix, stops a real server with SIGTERM and Ctrl-C,
   including with open event streams and pending message waits.
 - `tests/docker_files.rs`: the Tailscale Compose file and `serve.json` agree
-  on kkt's loopback address, and it is not 127.0.0.1.
+  on where Serve proxies to, and kkt is not on Tailscale's network or
+  published on the host.
 - `tests/common/`: starts a server on a free port for the tests above.
 
 ## Working with other agents

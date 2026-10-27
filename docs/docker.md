@@ -40,18 +40,18 @@ kkt connect claude-code --url http://127.0.0.1:7420/mcp --key-file ~/.config/kkt
 ## With Tailscale
 
 `compose.tailscale.yaml` runs the `tailscale/tailscale` image as a separate
-container, and starts kkt with `network_mode: service:tailscale`, so both
-share one network. Nothing is published on the host. Tailscale Serve
-(`tailscale/serve.json`) is the way in, over HTTPS on port 443.
+container beside kkt, on the same Compose network. Nothing is published on
+the host. Tailscale Serve (`tailscale/serve.json`) takes HTTPS on port 443
+and proxies it to `http://kkt:7420`. kkt listens on all addresses inside its
+own container, as in the plain image, so it needs the access key.
 
-kkt listens on `127.0.0.2:7420`, not `127.0.0.1`. Both are loopback, which
-kkt requires. The reason is that userspace Tailscale passes tailnet
-connections for the node's own address to `127.0.0.1` on the same port. With
-kkt on `127.0.0.1:7420`, anyone on the tailnet could reach it over plain HTTP
-at `http://<name>:7420`. On `127.0.0.2` nothing answers there, and Serve
-(which names `127.0.0.2` in `serve.json`) is the only path. The access key
-guards kkt either way. To limit who on your tailnet can connect at all, use
+Only the Tailscale container is on the tailnet. Connections to port 7420 on
+the tailnet address reach that container, where nothing listens, so plain
+HTTP is not available; HTTPS on 443 is the only way in. The access key guards
+kkt either way. To limit who on your tailnet can connect at all, use
 Tailscale's access controls.
+
+Either container can be restarted alone.
 
 Values in `.env`:
 
@@ -72,15 +72,6 @@ The Tailscale container uses userspace networking, so it needs no
 `tailscale-state` volume, so it keeps its identity across restarts. HTTPS
 certificates must be enabled for your tailnet in the Tailscale admin
 console.
-
-kkt shares the Tailscale container's network, so the two must restart
-together. Restarting only the Tailscale container leaves kkt on the old
-network, and Serve answers 502 until kkt restarts too. To restart or update
-both:
-
-```
-docker compose -f compose.tailscale.yaml up -d --force-recreate
-```
 
 ## Building the image yourself
 
