@@ -16,6 +16,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0003_revoked_agents.sql"),
     include_str!("../../migrations/0004_identity_recovery.sql"),
     include_str!("../../migrations/0005_messages_by_time.sql"),
+    include_str!("../../migrations/0006_agent_descriptions.sql"),
+    include_str!("../../migrations/0007_channel_notes.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -161,7 +163,7 @@ fn migrate(conn: &mut Connection) -> StoreResult<()> {
 /// [`Db::write`] the connection is a transaction.
 struct Sql<'a>(&'a Connection);
 
-const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id, revoked_at";
+const AGENT_COLUMNS: &str = "name, created_at, last_seen, run_id, revoked_at, description";
 
 fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
     Ok(AgentRecord {
@@ -170,6 +172,7 @@ fn agent_from_row(r: &rusqlite::Row) -> rusqlite::Result<AgentRecord> {
         last_seen: r.get(2)?,
         run_id: r.get(3)?,
         revoked_at: r.get(4)?,
+        description: r.get(5)?,
     })
 }
 
@@ -372,7 +375,7 @@ impl Reads for Sql<'_> {
                         EXISTS (SELECT 1 FROM memberships m WHERE m.channel_id = c.id AND m.agent = :viewer),
                         CASE WHEN :after IS NULL THEN NULL
                              ELSE (SELECT count(*) FROM messages g WHERE g.channel_id = c.id AND g.id > :after)
-                        END
+                        END, c.note, c.note_edited_by, c.note_edited_at
                  FROM channels c WHERE c.id = :id",
                 named_params! { ":id": id, ":viewer": viewer, ":after": after_id },
                 |r| {
@@ -386,6 +389,7 @@ impl Reads for Sql<'_> {
                         member_count: r.get(6)?,
                         viewer_is_member: r.get(7)?,
                         new_messages: r.get(8)?,
+                        note: ChannelNoteRecord { text: r.get(9)?, edited_by: r.get(10)?, edited_at: r.get(11)? },
                     })
                 },
             )
@@ -415,19 +419,20 @@ impl Reads for Sql<'_> {
         channel_id: &str,
         after_name: Option<&str>,
         limit: usize,
-    ) -> StoreResult<Vec<String>> {
-        let mut stmt = self.0.prepare_cached(
-            "SELECT agent FROM memberships
-             WHERE channel_id = :id AND (:cursor IS NULL OR agent > :cursor)
-             ORDER BY agent LIMIT :limit",
-        )?;
-        let names = stmt
+    ) -> StoreResult<Vec<AgentRecord>> {
+        let mut stmt = self.0.prepare_cached(&format!(
+            "SELECT {AGENT_COLUMNS} FROM agents
+             WHERE name IN (SELECT agent FROM memberships WHERE channel_id = :id)
+               AND (:cursor IS NULL OR name > :cursor)
+             ORDER BY name LIMIT :limit"
+        ))?;
+        let members = stmt
             .query_map(
                 named_params! { ":id": channel_id, ":cursor": after_name, ":limit": limit as i64 },
-                |r| r.get::<_, String>(0),
+                agent_from_row,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(names)
+        Ok(members)
     }
 
     fn message(&self, id: i64) -> StoreResult<Option<MessageRecord>> {
@@ -697,6 +702,14 @@ impl Writes for Sql<'_> {
         Ok(())
     }
 
+    fn set_description(&self, name: &str, description: Option<&str>) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET description = ? WHERE name = ?",
+            rusqlite::params![description, name],
+        )?;
+        Ok(())
+    }
+
     fn set_revoked(&self, name: &str, at: &str) -> StoreResult<()> {
         self.0.execute(
             "UPDATE agents SET revoked_at = ? WHERE name = ?",
@@ -725,6 +738,14 @@ impl Writes for Sql<'_> {
         self.0.execute(
             "UPDATE channels SET purpose = ? WHERE id = ?",
             rusqlite::params![purpose, channel_id],
+        )?;
+        Ok(())
+    }
+
+    fn set_note(&self, channel_id: &str, text: &str, editor: &str, at: &str) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE channels SET note = ?, note_edited_by = ?, note_edited_at = ? WHERE id = ?",
+            rusqlite::params![text, editor, at, channel_id],
         )?;
         Ok(())
     }

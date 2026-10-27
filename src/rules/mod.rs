@@ -11,7 +11,8 @@
 //! | Appears in `list_channels` | To everyone | To members only |
 //! | Join | Anyone | Only by being added |
 //! | Add others | Any member | Any member |
-//! | Read, send, set purpose | Members | Members |
+//! | Read messages, send, set purpose or note | Members | Members |
+//! | Read note | Everyone | Members |
 //! | Leave | Any member | Any member |
 //!
 //! To anyone outside a closed channel, it does not exist: every call answers
@@ -27,12 +28,14 @@ mod human;
 mod messages;
 mod operator;
 mod rate;
+mod waiting;
+pub use waiting::Waiting;
 
 #[cfg(test)]
 mod tests;
 
 pub use agents::{Agent, AgentInfo, Reclaimed, Registration};
-pub use channels::{ChannelInfo, ChannelQuery, Members, NewChannel, channel_cursor};
+pub use channels::{ChannelInfo, ChannelNote, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
 pub use human::ServerRunInfo;
 pub use messages::{
@@ -66,6 +69,7 @@ pub struct Page<T> {
 
 /// Everything the rules depend on, supplied at startup.
 pub struct Deps {
+    pub waiting: Waiting,
     pub db: Db,
     pub events: Events,
     pub clock: Arc<dyn Clock>,
@@ -161,6 +165,12 @@ fn channel_info(
         id: summary.id,
         name: summary.name,
         purpose: summary.purpose,
+        note: ChannelNote {
+            channel_id: id.to_string(),
+            text: summary.note.text,
+            edited_by: summary.note.edited_by,
+            edited_at: summary.note.edited_at,
+        },
         open: summary.open,
         created_by: summary.created_by,
         created_at: summary.created_at,

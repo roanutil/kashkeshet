@@ -99,16 +99,17 @@ pub fn settings_text(
         max_response_bytes,
         default_limit,
         max_limit,
-        max_body_chars,
         max_body_bytes,
         max_channel_name_chars,
         max_purpose_chars,
+        max_description_chars,
+        max_note_chars,
         sends_per_minute,
         registrations_per_minute,
         max_agents,
         default_wait,
         max_wait,
-        last_seen_interval,
+        waiting_grace,
         member_preview,
         purpose_preview_chars,
         web_session_lifetime,
@@ -118,16 +119,17 @@ pub fn settings_text(
         format!("max_response_bytes={max_response_bytes}"),
         format!("default_limit={default_limit}"),
         format!("max_limit={max_limit}"),
-        format!("max_body_chars={max_body_chars}"),
         format!("max_body_bytes={max_body_bytes}"),
         format!("max_channel_name_chars={max_channel_name_chars}"),
         format!("max_purpose_chars={max_purpose_chars}"),
+        format!("max_description_chars={max_description_chars}"),
+        format!("max_note_chars={max_note_chars}"),
         format!("sends_per_minute={sends_per_minute}"),
         format!("registrations_per_minute={registrations_per_minute}"),
         format!("max_agents={max_agents}"),
         format!("default_wait_ms={}", default_wait.as_millis()),
         format!("max_wait_ms={}", max_wait.as_millis()),
-        format!("last_seen_interval_ms={}", last_seen_interval.as_millis()),
+        format!("waiting_grace_ms={}", waiting_grace.as_millis()),
         format!("member_preview={member_preview}"),
         format!("purpose_preview_chars={purpose_preview_chars}"),
         format!(
@@ -241,16 +243,17 @@ mod tests {
             "max_response_bytes=8192\n\
              default_limit=20\n\
              max_limit=100\n\
-             max_body_chars=500\n\
              max_body_bytes=8192\n\
              max_channel_name_chars=64\n\
              max_purpose_chars=500\n\
+             max_description_chars=300\n\
+             max_note_chars=10000\n\
              sends_per_minute=30\n\
              registrations_per_minute=20\n\
              max_agents=1000\n\
              default_wait_ms=30000\n\
              max_wait_ms=50000\n\
-             last_seen_interval_ms=60000\n\
+             waiting_grace_ms=3000\n\
              member_preview=3\n\
              purpose_preview_chars=120\n\
              web_session_lifetime_ms=43200000\n\

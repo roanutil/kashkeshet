@@ -37,36 +37,66 @@ impl Formatter {
             } else {
                 tail.clone()
             };
-            match f {
-                Format::Text => {
-                    let mut lines = Vec::new();
-                    if let Some((h, _)) = &header {
-                        lines.push(h.clone());
-                    }
-                    if rows.is_empty() {
-                        lines.push("(none)".into());
-                    }
-                    lines.extend(rows[..k].iter().map(|r| r.text.clone()));
-                    if let Some(m) = more {
-                        lines.push(format!("more: {m}"));
-                    }
-                    lines.join("\n")
-                }
-                Format::Json => {
-                    let mut obj = match &header {
-                        Some((_, Value::Object(map))) => map.clone(),
-                        _ => serde_json::Map::new(),
-                    };
-                    obj.insert(
-                        key.into(),
-                        Value::Array(rows[..k].iter().map(|r| r.json.clone()).collect()),
-                    );
-                    obj.insert("more".into(), more.map_or(Value::Null, Value::String));
-                    Value::Object(obj).to_string()
-                }
-            }
+            self.list_page(f, header.as_ref(), key, &rows[..k], more)
         };
         fit(rows.len(), self.max_bytes, render)
+    }
+
+    /// Whether `row` alone, with a `more:` line after it, fits in a response.
+    pub(super) fn row_fits(
+        &self,
+        f: Format,
+        header: Option<&(String, Value)>,
+        key: &str,
+        row: &Row,
+    ) -> bool {
+        let page = self.list_page(
+            f,
+            header,
+            key,
+            std::slice::from_ref(row),
+            Some(row.resume.clone()),
+        );
+        page.len() <= self.max_bytes
+    }
+
+    /// Renders all of `rows`, whatever their size.
+    fn list_page(
+        &self,
+        f: Format,
+        header: Option<&(String, Value)>,
+        key: &str,
+        rows: &[Row],
+        more: Option<String>,
+    ) -> String {
+        match f {
+            Format::Text => {
+                let mut lines = Vec::new();
+                if let Some((h, _)) = header {
+                    lines.push(h.clone());
+                }
+                if rows.is_empty() {
+                    lines.push("(none)".into());
+                }
+                lines.extend(rows.iter().map(|r| r.text.clone()));
+                if let Some(m) = more {
+                    lines.push(format!("more: {m}"));
+                }
+                lines.join("\n")
+            }
+            Format::Json => {
+                let mut obj = match header {
+                    Some((_, Value::Object(map))) => map.clone(),
+                    _ => serde_json::Map::new(),
+                };
+                obj.insert(
+                    key.into(),
+                    Value::Array(rows.iter().map(|r| r.json.clone()).collect()),
+                );
+                obj.insert("more".into(), more.map_or(Value::Null, Value::String));
+                Value::Object(obj).to_string()
+            }
+        }
     }
 
     pub(super) fn messages(
@@ -74,11 +104,11 @@ impl Formatter {
         f: Format,
         msgs: &[Message],
         keep: Keep,
-        max_body_chars: usize,
+        max_body_chars: Option<usize>,
         trailer: impl Fn(&[Message], bool) -> Trailer,
     ) -> String {
         let now = self.clock.now();
-        let render = |k: usize| {
+        let render = |k: usize, max_body_chars: Option<usize>| {
             let kept = match keep {
                 Keep::Oldest => &msgs[..k],
                 Keep::Newest => &msgs[msgs.len() - k..],
@@ -147,7 +177,33 @@ impl Formatter {
                 }
             }
         };
-        fit(msgs.len(), self.max_bytes, render)
+        let out = fit(msgs.len(), self.max_bytes, |k| render(k, max_body_chars));
+        if msgs.is_empty() || render(1, max_body_chars).len() <= self.max_bytes {
+            return out;
+        }
+        // Even one message does not fit whole: show the first one in line,
+        // with as much of its body as fits, and the usual cut marker.
+        let longest = msgs
+            .iter()
+            .map(|m| m.body.chars().count())
+            .max()
+            .unwrap_or(0);
+        let start = max_body_chars.map_or(longest, |n| n.min(longest));
+        let (mut low, mut high) = (0, start);
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            if render(1, Some(mid)).len() <= self.max_bytes {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        let shortened = render(1, Some(low));
+        if shortened.len() <= self.max_bytes {
+            shortened
+        } else {
+            out
+        }
     }
 
     /// Shortens a single-item response that is over the cap.
@@ -188,11 +244,26 @@ pub(super) fn fit(n: usize, cap: usize, render: impl Fn(usize) -> String) -> Str
 }
 
 /// The first `max_chars` characters of `body`, and whether anything was cut.
-pub(super) fn cut_body(body: &str, max_chars: usize) -> (String, bool) {
-    match body.char_indices().nth(max_chars) {
+/// With no `max_chars`, the body is whole.
+pub(super) fn cut_body(body: &str, max_chars: Option<usize>) -> (String, bool) {
+    let cut_at = max_chars.and_then(|n| body.char_indices().nth(n));
+    match cut_at {
         Some((end, _)) => (format!("{}…", &body[..end]), true),
         None => (body.to_string(), false),
     }
+}
+
+/// `text` cut at a character boundary to at most `max_bytes` bytes, ending
+/// in `…` if anything was cut.
+pub(super) fn cut_bytes(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = max_bytes.saturating_sub('…'.len_utf8());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 pub(super) fn one_line(text: &str) -> String {

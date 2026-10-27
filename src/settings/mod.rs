@@ -27,8 +27,8 @@ pub struct ServeOptions {
     pub max_response_bytes: Option<usize>,
     pub default_limit: Option<usize>,
     pub max_limit: Option<usize>,
-    pub max_body_chars: Option<usize>,
     pub sends_per_minute: Option<u32>,
+    pub waiting_grace_seconds: Option<u32>,
     pub allow_origins: Option<Vec<String>>,
     pub allow_hosts: Option<Vec<String>>,
     pub instructions: Option<PathBuf>,
@@ -51,8 +51,8 @@ impl ServeOptions {
         max_response_bytes: None,
         default_limit: None,
         max_limit: None,
-        max_body_chars: None,
         sends_per_minute: None,
+        waiting_grace_seconds: None,
         allow_origins: None,
         allow_hosts: None,
         instructions: None,
@@ -72,8 +72,10 @@ impl ServeOptions {
             max_response_bytes: self.max_response_bytes.or(fallback.max_response_bytes),
             default_limit: self.default_limit.or(fallback.default_limit),
             max_limit: self.max_limit.or(fallback.max_limit),
-            max_body_chars: self.max_body_chars.or(fallback.max_body_chars),
             sends_per_minute: self.sends_per_minute.or(fallback.sends_per_minute),
+            waiting_grace_seconds: self
+                .waiting_grace_seconds
+                .or(fallback.waiting_grace_seconds),
             allow_origins: self.allow_origins.or(fallback.allow_origins),
             allow_hosts: self.allow_hosts.or(fallback.allow_hosts),
             instructions: self.instructions.or(fallback.instructions),
@@ -93,8 +95,8 @@ impl ServeOptions {
             "max_response_bytes" => self.max_response_bytes.is_some(),
             "default_limit" => self.default_limit.is_some(),
             "max_limit" => self.max_limit.is_some(),
-            "max_body_chars" => self.max_body_chars.is_some(),
             "sends_per_minute" => self.sends_per_minute.is_some(),
+            "waiting_grace" => self.waiting_grace_seconds.is_some(),
             "allow_origin" | "allow_origins" => self.allow_origins.is_some(),
             "allow_host" | "allow_hosts" => self.allow_hosts.is_some(),
             "instructions" => self.instructions.is_some(),
@@ -147,8 +149,11 @@ impl ServeOptions {
                     .unwrap_or(defaults.max_response_bytes),
                 default_limit: self.default_limit.unwrap_or(defaults.default_limit),
                 max_limit: self.max_limit.unwrap_or(defaults.max_limit),
-                max_body_chars: self.max_body_chars.unwrap_or(defaults.max_body_chars),
                 sends_per_minute: self.sends_per_minute.unwrap_or(defaults.sends_per_minute),
+                waiting_grace: self
+                    .waiting_grace_seconds
+                    .map(|s| std::time::Duration::from_secs(u64::from(s)))
+                    .unwrap_or(defaults.waiting_grace),
                 ..defaults
             },
             allow_origins: self.allow_origins.unwrap_or_default(),
@@ -315,5 +320,48 @@ mod tests {
             .resolve(PathBuf::from("db"), None)
             .expect_err("no default key");
         assert_eq!(err.name, "access_key_file");
+    }
+}
+
+#[cfg(test)]
+mod waiting_tests {
+    use super::*;
+    #[test]
+    fn grace_is_configurable_with_flag_precedence_and_checked() {
+        let env = Env {
+            home: Some(PathBuf::from("/tmp")),
+            xdg_config_home: None,
+            xdg_data_home: None,
+        };
+        let file = parse_file(
+            "waiting_grace_seconds = 4",
+            std::path::Path::new("/tmp"),
+            &env,
+        )
+        .unwrap();
+        let flags = ServeOptions {
+            waiting_grace_seconds: Some(2),
+            ..ServeOptions::NONE
+        };
+        let settings = flags
+            .over(file)
+            .resolve(PathBuf::from("db"), Some(PathBuf::from("key")))
+            .unwrap();
+        assert_eq!(
+            settings.limits.waiting_grace,
+            std::time::Duration::from_secs(2)
+        );
+        settings.limits.check().unwrap();
+        let bad = Limits {
+            waiting_grace: std::time::Duration::from_secs(51),
+            ..Limits::DEFAULT
+        };
+        assert_eq!(bad.check().unwrap_err().name, "waiting_grace");
+        Limits {
+            waiting_grace: std::time::Duration::ZERO,
+            ..Limits::DEFAULT
+        }
+        .check()
+        .unwrap();
     }
 }

@@ -219,15 +219,12 @@ struct ServeFlags {
     ))]
     max_limit: Option<usize>,
     #[arg(long, help = format!(
-        "Message bodies longer than this many characters are cut in listings [default: {}]",
-        Limits::DEFAULT.max_body_chars
-    ))]
-    max_body_chars: Option<usize>,
-    #[arg(long, help = format!(
         "Messages one agent may send per minute [default: {}]",
         Limits::DEFAULT.sends_per_minute
     ))]
     sends_per_minute: Option<u32>,
+    #[arg(long, help = format!("Seconds completed waits remain listening [default: {}]", Limits::DEFAULT.waiting_grace.as_secs()))]
+    waiting_grace_seconds: Option<u32>,
     /// A browser origin allowed to call /mcp, e.g. http://localhost:6274 for
     /// MCP Inspector. Repeat for more. By default no browser origin is allowed.
     #[arg(long = "allow-origin")]
@@ -277,8 +274,8 @@ impl ServeFlags {
             max_response_bytes: self.max_response_bytes,
             default_limit: self.default_limit,
             max_limit: self.max_limit,
-            max_body_chars: self.max_body_chars,
             sends_per_minute: self.sends_per_minute,
+            waiting_grace_seconds: self.waiting_grace_seconds,
             allow_origins: list(self.allow_origins),
             allow_hosts: list(self.allow_hosts),
             instructions: self.instructions,

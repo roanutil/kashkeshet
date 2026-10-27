@@ -38,6 +38,8 @@ pub struct AgentRecord {
     pub run_id: Option<i64>,
     /// When the operator revoked the agent's token, if it has.
     pub revoked_at: Option<String>,
+    /// What the agent says about itself, if it has said anything.
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,9 +60,18 @@ pub struct ChannelFacts {
     pub open: bool,
 }
 
+/// A pinned channel note, including the most recent edit (also when cleared).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelNoteRecord {
+    pub text: String,
+    pub edited_by: Option<String>,
+    pub edited_at: Option<String>,
+}
+
 /// A channel's stored fields and counts, as one viewer sees them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelSummary {
+    pub note: ChannelNoteRecord,
     pub id: String,
     pub name: String,
     pub purpose: Option<String>,
@@ -271,13 +282,13 @@ pub trait Reads {
 
     fn member_count(&self, channel_id: &str) -> StoreResult<i64>;
 
-    /// Up to `limit` member names in name order, after `after_name` if given.
+    /// Up to `limit` members in name order, after `after_name` if given.
     fn members_by_name(
         &self,
         channel_id: &str,
         after_name: Option<&str>,
         limit: usize,
-    ) -> StoreResult<Vec<String>>;
+    ) -> StoreResult<Vec<AgentRecord>>;
 
     // ---- messages ----
 
@@ -338,12 +349,17 @@ pub trait Writes: Reads {
 
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()>;
 
+    /// Replaces the agent's description. `None` clears it.
+    fn set_description(&self, name: &str, description: Option<&str>) -> StoreResult<()>;
+
     /// Marks the agent's token as revoked at `at`.
     fn set_revoked(&self, name: &str, at: &str) -> StoreResult<()>;
 
     fn insert_channel(&self, channel: &NewChannelRecord) -> StoreResult<()>;
 
     fn set_purpose(&self, channel_id: &str, purpose: Option<&str>) -> StoreResult<()>;
+
+    fn set_note(&self, channel_id: &str, text: &str, editor: &str, at: &str) -> StoreResult<()>;
 
     /// Adds a member. Adding one already there does nothing.
     fn add_member(&self, channel_id: &str, agent: &str, joined_at: &str) -> StoreResult<()>;

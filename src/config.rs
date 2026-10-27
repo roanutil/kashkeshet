@@ -63,6 +63,9 @@ pub const ACCESS_KEY_FILE_MODE: u32 = 0o600;
 /// registration answer, and with it the agent's token.
 pub const MIN_RESPONSE_BYTES: usize = 1024;
 
+/// Characters of a pinned note shown in channel previews.
+pub const NOTE_PREVIEW_CHARS: usize = 120;
+
 // ---- Server defaults and where files live ----
 //
 // What a server uses when neither a flag nor the config file says otherwise.
@@ -323,14 +326,16 @@ pub struct Limits {
     pub default_limit: usize,
     /// Largest `limit` an agent may ask for.
     pub max_limit: usize,
-    /// Message bodies longer than this many characters are cut in listings.
-    pub max_body_chars: usize,
     /// Largest message body, in bytes.
     pub max_body_bytes: usize,
     /// Longest channel name, in characters.
     pub max_channel_name_chars: usize,
     /// Longest channel purpose, in characters.
     pub max_purpose_chars: usize,
+    /// Longest agent description, in characters.
+    pub max_description_chars: usize,
+    /// Longest pinned channel note, in characters.
+    pub max_note_chars: usize,
     /// Messages one agent may send per minute.
     pub sends_per_minute: u32,
     /// Agents the whole server may register per minute.
@@ -341,8 +346,8 @@ pub struct Limits {
     pub default_wait: Duration,
     /// Longest wait an agent may ask for.
     pub max_wait: Duration,
-    /// How often an agent's `last_seen` time may be written.
-    pub last_seen_interval: Duration,
+    /// How long a normally completed wait remains visible as listening.
+    pub waiting_grace: Duration,
     /// Member names shown with each channel in `list_channels`.
     pub member_preview: usize,
     /// Characters of a channel purpose shown in `list_channels`.
@@ -360,17 +365,18 @@ impl Limits {
         max_response_bytes: 8 * 1024,
         default_limit: 20,
         max_limit: 100,
-        max_body_chars: 500,
         max_body_bytes: 8 * 1024,
         max_channel_name_chars: 64,
         max_purpose_chars: 500,
+        max_description_chars: 300,
+        max_note_chars: 10_000,
         sends_per_minute: 30,
         registrations_per_minute: 20,
         max_agents: 1000,
         default_wait: Duration::from_secs(30),
         // Common MCP clients give up on a tool call after about 60 seconds.
         max_wait: Duration::from_secs(50),
-        last_seen_interval: Duration::from_secs(60),
+        waiting_grace: Duration::from_secs(3),
         member_preview: 3,
         purpose_preview_chars: 120,
         web_session_lifetime: Duration::from_secs(12 * 60 * 60),
@@ -382,10 +388,11 @@ impl Limits {
     pub fn check(&self) -> Result<(), InvalidSetting> {
         let at_least_one = [
             ("default_limit", self.default_limit),
-            ("max_body_chars", self.max_body_chars),
             ("max_body_bytes", self.max_body_bytes),
             ("max_channel_name_chars", self.max_channel_name_chars),
             ("max_purpose_chars", self.max_purpose_chars),
+            ("max_description_chars", self.max_description_chars),
+            ("max_note_chars", self.max_note_chars),
             ("sends_per_minute", self.sends_per_minute as usize),
             (
                 "registrations_per_minute",
@@ -419,6 +426,12 @@ impl Limits {
             return Err(InvalidSetting::new(
                 "web_session_lifetime",
                 "must be at least 1 second",
+            ));
+        }
+        if self.waiting_grace > self.max_wait {
+            return Err(InvalidSetting::new(
+                "waiting_grace",
+                "must not exceed max_wait",
             ));
         }
         if self.max_wait < self.default_wait {
@@ -537,12 +550,13 @@ mod tests {
     #[test]
     fn zero_is_refused_for_every_count() {
         type SetZero = fn(&mut Limits);
-        let cases: [(&str, SetZero); 9] = [
+        let cases: [(&str, SetZero); 10] = [
             ("default_limit", |l| l.default_limit = 0),
-            ("max_body_chars", |l| l.max_body_chars = 0),
             ("max_body_bytes", |l| l.max_body_bytes = 0),
             ("max_channel_name_chars", |l| l.max_channel_name_chars = 0),
             ("max_purpose_chars", |l| l.max_purpose_chars = 0),
+            ("max_description_chars", |l| l.max_description_chars = 0),
+            ("max_note_chars", |l| l.max_note_chars = 0),
             ("sends_per_minute", |l| l.sends_per_minute = 0),
             ("registrations_per_minute", |l| {
                 l.registrations_per_minute = 0

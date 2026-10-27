@@ -120,7 +120,7 @@ struct IndexPage {
 #[template(path = "channel.html")]
 struct ChannelPage {
     channel: Channel,
-    members: Vec<String>,
+    members: Vec<Agent>,
     messages: Vec<Message>,
     older_before_id: Option<i64>,
     /// Live updates only make sense when showing the newest messages.

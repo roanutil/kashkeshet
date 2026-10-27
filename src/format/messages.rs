@@ -19,7 +19,7 @@ impl Formatter {
         f: Format,
         page: &MessagePage,
         position: Position,
-        max_body_chars: usize,
+        max_body_chars: Option<usize>,
     ) -> String {
         let keep = match position {
             Position::After(_) => Keep::Oldest,
@@ -40,7 +40,7 @@ impl Formatter {
     }
 
     /// The result of `wait_for_messages`.
-    pub fn waited(&self, f: Format, w: &WaitResult, max_body_chars: usize) -> String {
+    pub fn waited(&self, f: Format, w: &WaitResult, max_body_chars: Option<usize>) -> String {
         self.messages(
             f,
             &w.messages,

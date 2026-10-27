@@ -80,6 +80,9 @@ pub enum SourceError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Channel {
+    pub note: String,
+    pub note_edited_by: Option<String>,
+    pub note_edited_at: Option<String>,
     pub id: String,
     pub name: String,
     pub purpose: Option<String>,
@@ -94,8 +97,12 @@ pub struct Agent {
     pub name: String,
     pub created_at: String,
     pub last_seen: Option<String>,
+    pub listening: bool,
+    pub waiting_channels: Vec<String>,
     /// The server run that created the agent, if known.
     pub run_id: Option<i64>,
+    /// What the agent says about itself, if anything.
+    pub description: Option<String>,
 }
 
 /// A message, as pages show it and as the live feed sends it (JSON).
@@ -177,7 +184,7 @@ pub struct ChannelLink {
 pub struct ChannelView {
     pub channel: Channel,
     /// Members in the order they joined.
-    pub members: Vec<String>,
+    pub members: Vec<Agent>,
     /// Oldest first.
     pub messages: Vec<Message>,
     /// Set when older messages exist: the `before_id` that reads them.

@@ -39,6 +39,7 @@ async fn world_with(limits: Limits, entropy: Arc<dyn Entropy>) -> World {
         .expect("record run");
     let operator = Operator::new(db.clone(), clock.clone());
     let rules = Rules::new(Deps {
+        waiting: crate::rules::Waiting::default(),
         db,
         events: Events::new(),
         clock: clock.clone(),
@@ -159,7 +160,7 @@ async fn name_clashes_get_a_number() {
 }
 
 #[tokio::test]
-async fn last_seen_is_written_at_most_once_a_minute() {
+async fn last_seen_records_every_authenticated_call() {
     let w = world().await;
     let reg = w.rules.register().await.unwrap();
     let seen = |w: &World| {
@@ -176,7 +177,7 @@ async fn last_seen_is_written_at_most_once_a_minute() {
     let first = seen(&w).await;
     w.clock.advance(chrono::Duration::seconds(30));
     w.rules.authenticate(Some(&reg.token)).await.unwrap();
-    assert_eq!(seen(&w).await, first);
+    assert_ne!(seen(&w).await, first);
     w.clock.advance(chrono::Duration::seconds(31));
     w.rules.authenticate(Some(&reg.token)).await.unwrap();
     assert_ne!(seen(&w).await, first);
@@ -199,6 +200,70 @@ async fn list_agents_pages_by_name() {
     assert_eq!(rest.items.len(), 2);
     assert!(rest.next_cursor.is_none());
     assert!(rest.items[0].name > first.items[2].name);
+}
+
+#[tokio::test]
+async fn descriptions_are_set_replaced_and_cleared() {
+    let w = world().await;
+    let (a, b) = (w.agent().await, w.agent().await);
+    let ch = w.channel(&a, "general", true, &[&b]).await;
+    let set = w
+        .rules
+        .set_description(&a, "  Codex, reviews only  ".into())
+        .await
+        .unwrap();
+    assert_eq!(set.description.as_deref(), Some("Codex, reviews only"));
+    w.rules
+        .set_description(&a, "Claude Code".into())
+        .await
+        .unwrap();
+    let described = |items: &[AgentInfo]| {
+        items
+            .iter()
+            .find(|i| i.name == a.name)
+            .and_then(|i| i.description.clone())
+    };
+    // Others see it in list_agents, list_members and the web page.
+    let agents = w.rules.list_agents(&b, None, 10, None).await.unwrap();
+    assert_eq!(described(&agents.items).as_deref(), Some("Claude Code"));
+    let members = w
+        .rules
+        .list_members(&b, ch.clone(), 10, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        described(&members.page.items).as_deref(),
+        Some("Claude Code")
+    );
+    let view = w.rules.channel_view(ch, None).await.unwrap();
+    assert_eq!(described(&view.members).as_deref(), Some("Claude Code"));
+    let page = w.rules.agent_view(a.name.clone()).await.unwrap();
+    assert_eq!(page.agent.description.as_deref(), Some("Claude Code"));
+    // Empty text clears it; it never touches anyone else's.
+    let cleared = w.rules.set_description(&a, "   ".into()).await.unwrap();
+    assert_eq!(cleared.description, None);
+    let agents = w.rules.list_agents(&b, None, 10, None).await.unwrap();
+    assert!(agents.items.iter().all(|i| i.description.is_none()));
+}
+
+#[tokio::test]
+async fn descriptions_over_the_limit_are_refused() {
+    let limits = Limits {
+        max_description_chars: 5,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    // The cap counts characters, not bytes.
+    let fits = w.rules.set_description(&a, "héllo".into()).await.unwrap();
+    assert_eq!(fits.description.as_deref(), Some("héllo"));
+    assert_eq!(
+        code(w.rules.set_description(&a, "héllo!".into()).await),
+        Code::InvalidArgument
+    );
+    // A refused change keeps the old description.
+    let me = w.rules.agent_view(a.name.clone()).await.unwrap();
+    assert_eq!(me.agent.description.as_deref(), Some("héllo"));
 }
 
 // ---- Rules table: appears in list_channels ----
@@ -275,7 +340,7 @@ async fn any_member_can_add_others_to_an_open_channel() {
         .await
         .unwrap();
     assert_eq!(members.total, 3);
-    assert!(members.page.items.contains(&c.name));
+    assert!(members.page.items.iter().any(|m| m.name == c.name));
 }
 
 #[tokio::test]
@@ -1539,4 +1604,268 @@ async fn legacy_agents_keep_their_token_but_have_no_recovery_code() {
         Code::Unauthenticated
     );
     w.rules.authenticate(Some("old-token")).await.unwrap();
+}
+
+#[tokio::test]
+async fn channel_notes_are_replaced_cleared_and_attributed_to_the_last_editor() {
+    let w = world_with(
+        Limits {
+            max_note_chars: 4,
+            ..Limits::DEFAULT
+        },
+        Arc::new(SeqEntropy::new(42)),
+    )
+    .await;
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let ch = w.channel(&a, "notes", true, &[&b]).await;
+    let empty = w.rules.get_note(&a, ch.clone()).await.unwrap();
+    assert_eq!(empty.text, "");
+    assert_eq!(empty.edited_by, None);
+    assert_eq!(empty.edited_at, None);
+    w.rules
+        .set_note(&a, ch.clone(), " 😀\n\t".into())
+        .await
+        .unwrap();
+    let first = w.rules.get_note(&b, ch.clone()).await.unwrap();
+    assert_eq!(first.text, " 😀\n\t");
+    assert_eq!(first.edited_by.as_deref(), Some(a.name.as_str()));
+    assert_eq!(first.edited_at, Some(clock::to_text(w.clock.now())));
+    assert_eq!(
+        code(w.rules.set_note(&b, ch.clone(), "😀".repeat(5)).await),
+        Code::InvalidArgument
+    );
+    assert_eq!(
+        w.rules.get_note(&b, ch.clone()).await.unwrap().text,
+        first.text
+    );
+    w.clock.advance(chrono::Duration::seconds(10));
+    w.rules
+        .set_note(&b, ch.clone(), "next".into())
+        .await
+        .unwrap();
+    let changed = w.rules.get_note(&a, ch.clone()).await.unwrap();
+    assert_eq!(changed.text, "next");
+    assert_eq!(changed.edited_by.as_deref(), Some(b.name.as_str()));
+    assert_eq!(changed.edited_at, Some(clock::to_text(w.clock.now())));
+    let listed = w
+        .rules
+        .list_channels(
+            &a,
+            ChannelQuery {
+                limit: 100,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.items[0].note.text, "next");
+    assert_eq!(
+        w.rules
+            .channel_view(ch.clone(), None)
+            .await
+            .unwrap()
+            .channel
+            .note
+            .text,
+        "next"
+    );
+    w.rules
+        .set_note(&a, ch.clone(), String::new())
+        .await
+        .unwrap();
+    let cleared = w.rules.get_note(&b, ch).await.unwrap();
+    assert!(cleared.text.is_empty());
+    assert_eq!(cleared.edited_by.as_deref(), Some(a.name.as_str()));
+    assert!(cleared.edited_at.is_some());
+}
+
+#[tokio::test]
+async fn channel_notes_use_channel_visibility_and_membership_rules() {
+    let w = world().await;
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let c = w.agent().await;
+    for open in [true, false] {
+        let ch = w.channel(&a, "notes", open, &[&b]).await;
+        w.rules
+            .set_note(&b, ch.clone(), "member note".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            w.rules.get_note(&a, ch.clone()).await.unwrap().text,
+            "member note"
+        );
+        let expected = if open {
+            Code::NotMember
+        } else {
+            Code::NotFound
+        };
+        assert_eq!(
+            code(w.rules.set_note(&c, ch.clone(), "outsider".into()).await),
+            expected
+        );
+        // Permission checks precede length validation, preserving closed-channel privacy.
+        assert_eq!(
+            code(w.rules.set_note(&c, ch.clone(), "x".repeat(10001)).await),
+            expected
+        );
+        if open {
+            assert_eq!(w.rules.get_note(&c, ch).await.unwrap().text, "member note");
+        } else {
+            assert_eq!(code(w.rules.get_note(&c, ch).await), Code::NotFound);
+        }
+    }
+    assert_eq!(
+        code(w.rules.get_note(&a, "missing".into()).await),
+        Code::NotFound
+    );
+    assert_eq!(
+        code(w.rules.set_note(&a, "missing".into(), "x".into()).await),
+        Code::NotFound
+    );
+}
+
+async fn observed(w: &World, viewer: &Agent, name: &str) -> AgentInfo {
+    w.rules
+        .list_agents(viewer, Some(name.into()), 10, None)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|a| a.name == name)
+        .unwrap()
+}
+fn open_wait(
+    w: &World,
+    agent: &Agent,
+    channels: Option<Vec<String>>,
+) -> tokio::task::JoinHandle<Result<WaitResult>> {
+    let rules = w.rules.clone();
+    let agent = agent.clone();
+    tokio::spawn(async move {
+        rules
+            .wait_for_messages(
+                &agent,
+                WaitQuery {
+                    after_id: 0,
+                    channel_ids: channels,
+                    timeout: Duration::from_secs(10),
+                    limit: 10,
+                },
+            )
+            .await
+    })
+}
+#[tokio::test]
+async fn listening_covers_selected_channels_and_hides_closed_channels() {
+    let w = world().await;
+    let a = w.agent().await;
+    let viewer = w.agent().await;
+    let public = w.channel(&a, "public", true, &[]).await;
+    let secret = w.channel(&a, "secret", false, &[]).await;
+    let other = w.channel(&a, "other", true, &[]).await;
+    let waiter = open_wait(&w, &a, Some(vec![public.clone(), secret.clone()]));
+    until_sleeping(&w.clock).await;
+    assert_eq!(
+        observed(&w, &viewer, &a.name).await.waiting_channels,
+        vec![public.clone()]
+    );
+    assert_eq!(observed(&w, &a, &a.name).await.waiting_channels.len(), 2);
+    let members = w
+        .rules
+        .list_members(&viewer, other, 10, None)
+        .await
+        .unwrap();
+    assert!(!members.page.items[0].listening);
+    let members = w
+        .rules
+        .list_members(&viewer, public, 10, None)
+        .await
+        .unwrap();
+    assert!(members.page.items[0].listening);
+    let human = w.rules.agent_view(a.name.clone()).await.unwrap();
+    assert_eq!(human.agent.waiting_channels.len(), 2);
+    assert!(
+        w.rules
+            .overview()
+            .await
+            .unwrap()
+            .agents
+            .iter()
+            .any(|x| x.info.listening)
+    );
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(!observed(&w, &a, &a.name).await.listening);
+}
+#[tokio::test]
+async fn normal_wait_completion_has_grace_but_aborted_wait_does_not() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    let first = open_wait(&w, &a, None);
+    until_sleeping(&w.clock).await;
+    w.clock.advance(chrono::Duration::seconds(10));
+    first.await.unwrap().unwrap();
+    assert!(observed(&w, &a, &a.name).await.listening);
+    w.clock.advance(chrono::Duration::seconds(2));
+    assert!(observed(&w, &a, &a.name).await.listening);
+    let second = open_wait(&w, &a, Some(vec![ch]));
+    until_sleeping(&w.clock).await;
+    w.clock.advance(chrono::Duration::seconds(1));
+    assert!(observed(&w, &a, &a.name).await.listening);
+    second.abort();
+    assert!(second.await.unwrap_err().is_cancelled());
+    assert!(!observed(&w, &a, &a.name).await.listening);
+}
+#[tokio::test]
+async fn overlapping_waits_and_current_memberships_are_independent() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    let first = open_wait(&w, &a, Some(vec![ch.clone()]));
+    until_sleeping(&w.clock).await;
+    let second = open_wait(&w, &a, None);
+    while w.clock.sleepers() < 2 {
+        tokio::task::yield_now().await;
+    }
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(observed(&w, &a, &a.name).await.listening);
+    let joined = w.channel(&a, "joined", true, &[]).await;
+    assert_eq!(observed(&w, &a, &a.name).await.waiting_channels.len(), 2);
+    w.rules.leave_channel(&a, ch).await.unwrap();
+    assert_eq!(
+        observed(&w, &a, &a.name).await.waiting_channels,
+        vec![joined]
+    );
+    second.abort();
+    assert!(second.await.unwrap_err().is_cancelled());
+    assert!(!observed(&w, &a, &a.name).await.listening);
+}
+
+#[tokio::test]
+async fn a_new_wait_supersedes_grace_and_disconnect_clears_it() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    w.rules
+        .wait_for_messages(
+            &a,
+            WaitQuery {
+                after_id: 0,
+                channel_ids: None,
+                timeout: Duration::ZERO,
+                limit: 10,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(observed(&w, &a, &a.name).await.listening);
+    let next = open_wait(&w, &a, Some(vec![ch]));
+    until_sleeping(&w.clock).await;
+    next.abort();
+    assert!(next.await.unwrap_err().is_cancelled());
+    assert!(!observed(&w, &a, &a.name).await.listening);
 }

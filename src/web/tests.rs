@@ -120,6 +120,26 @@ async fn pages_work(source: Arc<dyn Source>) {
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains(&agent.name));
 
+    // An agent's description shows on the front page, its own page, and as
+    // the title of its chip on the pages of channels it is in.
+    let described = overview
+        .agents
+        .iter()
+        .find_map(|a| Some((a, a.agent.description.clone()?)))
+        .expect("an agent with a description");
+    let (a, text) = described;
+    let (_, page) = get(&site, "/").await;
+    assert!(page.contains(&text), "front page lacks a description");
+    let (_, page) = get(&site, &format!("/agents/{}", a.agent.name)).await;
+    assert!(page.contains(&text), "agent page lacks its description");
+    if let Some(c) = a.channels.first() {
+        let (_, page) = get(&site, &format!("/channels/{}", c.id)).await;
+        assert!(
+            page.contains(&format!("title=\"{text}\"")),
+            "channel page lacks a member's description"
+        );
+    }
+
     let (status, _) = get(&site, "/channels/ch_nothere0").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = get(&site, "/agents/nobody-here").await;
@@ -143,6 +163,7 @@ async fn rules_source() -> Arc<dyn Source> {
         .await
         .expect("record run");
     let rules = Rules::new(Deps {
+        waiting: crate::rules::Waiting::default(),
         db,
         events: Events::new(),
         clock: Arc::new(FixedClock::new(start_time())),
@@ -157,6 +178,10 @@ async fn rules_source() -> Arc<dyn Source> {
         let reg = rules.register().await.expect("register");
         agents.push(rules.authenticate(Some(&reg.token)).await.expect("auth"));
     }
+    rules
+        .set_description(&agents[0], "Codex, reviews only".into())
+        .await
+        .expect("describe");
     for (name, open) in [("open-room", true), ("closed-room", false)] {
         let channel = rules
             .create_channel(
@@ -170,6 +195,14 @@ async fn rules_source() -> Arc<dyn Source> {
             )
             .await
             .expect("channel");
+        rules
+            .set_note(
+                &agents[1],
+                channel.id.clone(),
+                "First line\n<script>alert(1)</script>".into(),
+            )
+            .await
+            .expect("note");
         for i in 0..3 {
             rules
                 .send(&agents[i % 2], channel.id.clone(), format!("message {i}"))
@@ -495,4 +528,22 @@ async fn the_preview_runs_by_the_clock_and_stops_with_the_server() {
         live.next().await.is_none(),
         "live feeds end with the server"
     );
+}
+
+#[tokio::test]
+async fn channel_page_shows_the_pinned_note_and_editor_as_escaped_text() {
+    let source = rules_source().await;
+    let overview = source.overview().await.unwrap();
+    let ch = &overview.channels[0].channel;
+    let (status, page) = get(&site(source.clone()), &format!("/channels/{}", ch.id)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("Pinned note"));
+    assert!(
+        page.contains("First line\n&#60;script&#62;alert(1)&#60;/script&#62;"),
+        "{page}"
+    );
+    assert!(!page.contains("<script>alert(1)</script>"));
+    assert!(page.contains("Last edited by"));
+    assert!(page.contains(ch.note_edited_by.as_deref().unwrap()));
+    assert!(page.contains("2026-10-25"));
 }

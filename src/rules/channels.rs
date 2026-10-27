@@ -48,10 +48,18 @@ impl Rules {
         cursor: Option<String>,
     ) -> Result<Members> {
         let me = me.name.clone();
+        let rules = self.clone();
         self.db()
             .read(move |store| {
                 visible_channel(store, &me, &channel_id)?;
-                members_page(store, &channel_id, limit, cursor.as_deref())
+                let mut page = members_page(store, &channel_id, limit, cursor.as_deref())?;
+                for a in &mut page.page.items {
+                    let record = store
+                        .agent(&a.name)?
+                        .ok_or_else(|| RuleError::agent_not_found(&a.name))?;
+                    *a = rules.observed_agent(store, record, Some(&me), Some(&channel_id))?;
+                }
+                Ok(page)
             })
             .await
     }
@@ -199,6 +207,36 @@ impl Rules {
         Ok(page)
     }
 
+    /// Reads a visible channel's pinned note in full.
+    pub async fn get_note(&self, me: &Agent, channel_id: String) -> Result<ChannelNote> {
+        let me = me.name.clone();
+        self.db()
+            .read(move |store| {
+                visible_channel(store, &me, &channel_id)?;
+                note(store, &channel_id)
+            })
+            .await
+    }
+
+    /// Replaces the note and its attribution in one transaction. Empty text clears it.
+    pub async fn set_note(&self, me: &Agent, channel_id: String, text: String) -> Result<()> {
+        let me = me.name.clone();
+        let now = self.now_text();
+        let max = self.limits().max_note_chars;
+        self.db()
+            .write(move |store| {
+                member_channel(store, &me, &channel_id)?;
+                if text.chars().count() > max {
+                    return Err(RuleError::invalid(format!(
+                        "note must be at most {max} characters"
+                    )));
+                }
+                store.set_note(&channel_id, &text, &me, &now)?;
+                Ok(())
+            })
+            .await
+    }
+
     pub async fn set_purpose(
         &self,
         me: &Agent,
@@ -218,6 +256,26 @@ impl Rules {
     }
 }
 
+fn note(store: &dyn Reads, channel_id: &str) -> Result<ChannelNote> {
+    let summary = store
+        .channel_summary(channel_id, None, None)?
+        .ok_or_else(|| RuleError::channel_not_found(channel_id))?;
+    Ok(ChannelNote {
+        channel_id: channel_id.to_string(),
+        text: summary.note.text,
+        edited_by: summary.note.edited_by,
+        edited_at: summary.note.edited_at,
+    })
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ChannelNote {
+    pub channel_id: String,
+    pub text: String,
+    pub edited_by: Option<String>,
+    pub edited_at: Option<String>,
+}
+
 fn members_page(
     store: &dyn Reads,
     channel_id: &str,
@@ -225,10 +283,14 @@ fn members_page(
     cursor: Option<&str>,
 ) -> Result<Members> {
     let total = store.member_count(channel_id)?;
-    let mut items = store.members_by_name(channel_id, cursor, limit + 1)?;
+    let mut items: Vec<AgentInfo> = store
+        .members_by_name(channel_id, cursor, limit + 1)?
+        .into_iter()
+        .map(AgentInfo::from)
+        .collect();
     let next_cursor = if items.len() > limit {
         items.truncate(limit);
-        items.last().cloned()
+        items.last().map(|a| a.name.clone())
     } else {
         None
     };
@@ -339,6 +401,7 @@ mod tests {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ChannelInfo {
+    pub note: ChannelNote,
     pub id: String,
     pub name: String,
     pub purpose: Option<String>,
@@ -375,5 +438,5 @@ pub struct NewChannel {
 pub struct Members {
     pub channel_id: String,
     pub total: i64,
-    pub page: Page<String>,
+    pub page: Page<AgentInfo>,
 }

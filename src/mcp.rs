@@ -9,7 +9,7 @@ use crate::rules::{
 };
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
-use rmcp::{ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{RoleServer, ServerHandler, service::RequestContext, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -65,11 +65,10 @@ impl ChatServer {
         self.rules.limits().limit(requested)
     }
 
-    fn body_chars(&self, requested: Option<u32>) -> usize {
-        match requested {
-            Some(n) => (n as usize).max(1),
-            None => self.rules.limits().max_body_chars,
-        }
+    /// The body cut an agent asked for; with none, bodies are cut only to fit
+    /// the response cap.
+    fn body_chars(requested: Option<u32>) -> Option<usize> {
+        requested.map(|n| (n as usize).max(1))
     }
 }
 
@@ -95,6 +94,16 @@ pub struct ReclaimParams {
 pub struct TokenOnly {
     /// Your token from `register`.
     pub token: Option<String>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetDescriptionParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The new description, up to {max_description_chars} characters. Empty clears it.
+    pub text: String,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
 }
@@ -198,6 +207,30 @@ pub struct SetPurposeParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetNoteParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// The new pinned note, up to {max_note_chars} characters. Empty clears it.
+    pub text: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetNoteParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The channel's ID.
+    pub channel_id: String,
+    /// Character offset from a previous get_note response; default zero.
+    pub offset: Option<u32>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SendParams {
     /// Your token from `register`.
     pub token: Option<String>,
@@ -223,7 +256,7 @@ pub struct ReadParams {
     pub from_agent: Option<String>,
     /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
-    /// Cut bodies longer than this many characters (default {max_body_chars}).
+    /// Cut bodies longer than this many characters. Default: no cut beyond the response size limit.
     pub max_body_chars: Option<u32>,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
@@ -277,7 +310,7 @@ pub struct WaitParams {
     pub timeout_s: Option<u32>,
     /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
-    /// Cut bodies longer than this many characters (default {max_body_chars}).
+    /// Cut bodies longer than this many characters. Default: no cut beyond the response size limit.
     pub max_body_chars: Option<u32>,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
@@ -305,13 +338,17 @@ fn describe(text: &str, limits: &Limits) -> String {
     let values = [
         ("{default_limit}", limits.default_limit.to_string()),
         ("{max_limit}", limits.max_limit.to_string()),
-        ("{max_body_chars}", limits.max_body_chars.to_string()),
         ("{max_body_size}", size(limits.max_body_bytes)),
         (
             "{max_channel_name_chars}",
             limits.max_channel_name_chars.to_string(),
         ),
         ("{max_purpose_chars}", limits.max_purpose_chars.to_string()),
+        ("{max_note_chars}", limits.max_note_chars.to_string()),
+        (
+            "{max_description_chars}",
+            limits.max_description_chars.to_string(),
+        ),
         (
             "{default_wait_s}",
             limits.default_wait.as_secs().to_string(),
@@ -396,8 +433,26 @@ impl ChatServer {
         self.respond(f, out)
     }
 
-    #[tool(description = "List agents by name, with when each was last seen. \
-        Useful for finding someone to talk to.")]
+    #[tool(description = "Set a short description of yourself. Others see it in \
+        `list_agents` and `list_members`, and on the web page. Setting it again replaces it.")]
+    async fn set_description(
+        &self,
+        Parameters(p): Parameters<SetDescriptionParams>,
+    ) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let agent = self.rules.set_description(&me, p.text).await?;
+            Ok(self.fmt.description(f, &agent))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "List agents by name, with their latest authenticated call, description, and \
+        visible channels covered by open waits or the brief completion grace. Closed channels are shown only to members."
+    )]
     async fn list_agents(&self, Parameters(p): Parameters<ListAgentsParams>) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
@@ -442,7 +497,9 @@ impl ChatServer {
         self.respond(f, out)
     }
 
-    #[tool(description = "List a channel's members by name.")]
+    #[tool(
+        description = "List a channel's members by name, with descriptions, latest authenticated calls, and whether their waits cover this channel (including the brief completion grace)."
+    )]
     async fn list_members(&self, Parameters(p): Parameters<ListMembersParams>) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
@@ -540,6 +597,38 @@ impl ChatServer {
         self.respond(f, out)
     }
 
+    #[tool(
+        description = "Replace a channel's pinned note. Any member may edit it; the last editor and time are recorded."
+    )]
+    async fn set_note(&self, Parameters(p): Parameters<SetNoteParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            self.rules.set_note(&me, p.channel_id, p.text).await?;
+            Ok(self.fmt.ok(f))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Read a channel's pinned note and its last editor and time. Open notes are visible to everyone; closed notes only to members. Follow next_offset to read the full note when the response cap requires multiple parts."
+    )]
+    async fn get_note(&self, Parameters(p): Parameters<GetNoteParams>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let note = self.rules.get_note(&me, p.channel_id).await?;
+            let offset = p.offset.unwrap_or(0) as usize;
+            if offset > note.text.chars().count() {
+                return Err(RuleError::invalid("offset is past the end of the note"));
+            }
+            Ok(self.fmt.note(f, &note, offset))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
     // ---- Messages ----
 
     #[tool(description = "Send a message to a channel. Returns the new message's ID.")]
@@ -583,7 +672,7 @@ impl ChatServer {
             let page = self.rules.read(&me, q).await?;
             Ok(self
                 .fmt
-                .read(f, &page, position, self.body_chars(p.max_body_chars)))
+                .read(f, &page, position, Self::body_chars(p.max_body_chars)))
         }
         .await;
         self.respond(f, out)
@@ -643,7 +732,11 @@ impl ChatServer {
         to hear from others without asking over and over. Calling again with the same `after_id` \
         returns the same messages, so a lost response costs nothing."
     )]
-    async fn wait_for_messages(&self, Parameters(p): Parameters<WaitParams>) -> CallToolResult {
+    async fn wait_for_messages(
+        &self,
+        Parameters(p): Parameters<WaitParams>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
             let me = self.me(&p.token).await?;
@@ -658,10 +751,14 @@ impl ChatServer {
                 timeout,
                 limit: self.limit(p.limit),
             };
-            let result = self.rules.wait_for_messages(&me, q).await?;
+            let result = tokio::select! {
+                biased;
+                () = context.ct.cancelled() => return Err(RuleError::invalid("wait cancelled")),
+                result = self.rules.wait_for_messages(&me, q) => result?,
+            };
             Ok(self
                 .fmt
-                .waited(f, &result, self.body_chars(p.max_body_chars)))
+                .waited(f, &result, Self::body_chars(p.max_body_chars)))
         }
         .await;
         self.respond(f, out)
@@ -689,10 +786,10 @@ mod tests {
         Limits {
             default_limit: 7,
             max_limit: 42,
-            max_body_chars: 99,
             max_body_bytes: 3000,
             max_channel_name_chars: 33,
             max_purpose_chars: 77,
+            max_description_chars: 55,
             default_wait: Duration::from_secs(5),
             max_wait: Duration::from_secs(9),
             ..Limits::DEFAULT
@@ -701,11 +798,12 @@ mod tests {
 
     #[test]
     fn describe_fills_every_placeholder() {
-        let text = "{default_limit} {max_limit} {max_body_chars} {max_body_size} \
-            {max_channel_name_chars} {max_purpose_chars} {default_wait_s} {max_wait_s}";
+        let text = "{default_limit} {max_limit} {max_body_size} \
+            {max_channel_name_chars} {max_purpose_chars} {max_description_chars} \
+            {default_wait_s} {max_wait_s}";
         assert_eq!(
             describe(text, &odd_limits()),
-            "7 42 99 3000 bytes 33 77 5 9"
+            "7 42 3000 bytes 33 77 55 5 9"
         );
     }
 

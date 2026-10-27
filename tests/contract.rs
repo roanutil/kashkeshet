@@ -57,10 +57,11 @@ async fn descriptions_state_the_live_limits() {
     config.limits = Limits {
         default_limit: 7,
         max_limit: 42,
-        max_body_chars: 99,
         max_body_bytes: 3000,
         max_channel_name_chars: 33,
         max_purpose_chars: 77,
+        max_description_chars: 55,
+        max_note_chars: 1234,
         default_wait: Duration::from_secs(5),
         max_wait: Duration::from_secs(9),
         ..Limits::DEFAULT
@@ -82,7 +83,11 @@ async fn descriptions_state_the_live_limits() {
     );
     assert_eq!(
         param("read", "max_body_chars"),
-        "Cut bodies longer than this many characters (default 99)."
+        "Cut bodies longer than this many characters. Default: no cut beyond the response size limit."
+    );
+    assert_eq!(
+        param("set_note", "text"),
+        "The new pinned note, up to 1234 characters. Empty clears it."
     );
     assert_eq!(param("send", "body"), "The message text, up to 3000 bytes.");
     assert_eq!(
@@ -92,6 +97,10 @@ async fn descriptions_state_the_live_limits() {
     assert_eq!(
         param("set_purpose", "purpose"),
         "The new purpose, up to 77 characters. Empty clears it."
+    );
+    assert_eq!(
+        param("set_description", "text"),
+        "The new description, up to 55 characters. Empty clears it."
     );
     assert_eq!(
         param("wait_for_messages", "timeout_s"),

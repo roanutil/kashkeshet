@@ -382,7 +382,8 @@ details summary { cursor: pointer; }
     seenCell.append(seen);
     const channels = el("td", "small channels");
     channels.append(el("span", "muted", "none"));
-    row.append(nameCell, seenCell, channels);
+    // A new agent has not described itself yet.
+    row.append(nameCell, el("td", "small description"), seenCell, channels);
     tbody.append(row);
     agentRows.set(a.name, row);
     glow(row);

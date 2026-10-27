@@ -294,7 +294,32 @@ async fn name_pages_start_after_the_cursor() {
         .read(|r| r.members_by_name("ch_open", Some("a"), 10))
         .await
         .expect("members");
-    assert_eq!(members, ["b"]);
+    assert_eq!(
+        members.into_iter().map(|a| a.name).collect::<Vec<_>>(),
+        ["b"]
+    );
+}
+
+#[tokio::test]
+async fn descriptions_are_set_cleared_and_listed_with_members() {
+    let db = world(&[]).await;
+    db.write(|w| w.set_description("b", Some("parser bot")))
+        .await
+        .expect("set");
+    let members = db
+        .read(|r| r.members_by_name("ch_open", None, 10))
+        .await
+        .expect("members");
+    let described: Vec<_> = members
+        .iter()
+        .map(|a| (a.name.as_str(), a.description.as_deref()))
+        .collect();
+    assert_eq!(described, [("a", None), ("b", Some("parser bot"))]);
+    db.write(|w| w.set_description("b", None))
+        .await
+        .expect("clear");
+    let b = db.read(|r| r.agent("b")).await.expect("agent").expect("b");
+    assert_eq!(b.description, None);
 }
 
 #[tokio::test]

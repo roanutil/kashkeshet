@@ -87,6 +87,32 @@ async fn three_agents_talk() {
     )
     .await;
 
+    // Alice describes herself; Bob sees it among the channel's members.
+    ok(
+        &alice_c,
+        "set_description",
+        json!({"token": at, "text": "Parser maintainer"}),
+    )
+    .await;
+    let members = ok(
+        &bob_c,
+        "list_members",
+        json!({"token": bt, "channel_id": general, "format": "json"}),
+    )
+    .await;
+    let members = json_of(&members);
+    let alice_row = members["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == alice.as_str())
+        .cloned();
+    assert_eq!(
+        alice_row.map(|m| m["description"].clone()),
+        Some(json!("Parser maintainer")),
+        "{members}"
+    );
+
     // Bob waits; Alice speaks; Bob hears it.
     let waiting = {
         let bt = bt.clone();
@@ -200,7 +226,7 @@ async fn older_clients_work_without_sessions() {
 }
 
 #[tokio::test]
-async fn long_messages_are_cut_and_fetchable_in_full() {
+async fn long_messages_are_whole_unless_a_cut_is_asked_for() {
     let server = start().await;
     let c = connect_new(&server).await;
     let (_, t) = register(&c).await;
@@ -224,7 +250,15 @@ async fn long_messages_are_cut_and_fetchable_in_full() {
     .await;
     let id = sent.strip_prefix("sent: message_id=").unwrap();
     let read = ok(&c, "read", json!({"token": t, "channel_id": ch})).await;
-    assert!(read.contains(&format!("(cut; get_message {id})")), "{read}");
+    assert!(read.contains(&body), "{read}");
+    assert!(!read.contains("(cut;"), "{read}");
+    let cut = ok(
+        &c,
+        "read",
+        json!({"token": t, "channel_id": ch, "max_body_chars": 20}),
+    )
+    .await;
+    assert!(cut.contains(&format!("(cut; get_message {id})")), "{cut}");
     let full = ok(
         &c,
         "get_message",
@@ -603,4 +637,84 @@ async fn reconnect_and_reclaim_keeps_closed_channel_access() {
     assert!(text_recovery.starts_with(&format!("name: {name}\ntoken: act_")));
     assert!(!text_recovery.contains(&recovery_code));
     second.cancel().await.unwrap();
+}
+
+/// A dropped response is a dropped wait, even with a long completion grace.
+#[tokio::test]
+async fn disconnect_clears_listening_without_completion_grace() {
+    let mut config = test_config();
+    config.limits.waiting_grace = Duration::from_secs(30);
+    let server = start_with(config).await;
+    let observer = connect_new(&server).await;
+    let (name, token) = register(&observer).await;
+    let channel = json_of(
+        &ok(
+            &observer,
+            "create_channel",
+            json!({"token": token, "name": "waiting", "open": true, "format": "json"}),
+        )
+        .await,
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let http = reqwest::Client::new();
+    use tokio::io::AsyncWriteExt;
+    let address = server.base.strip_prefix("http://").unwrap();
+    let mut connection = tokio::net::TcpStream::connect(address).await.unwrap();
+    let body = json!({"jsonrpc":"2.0", "id":55, "method":"tools/call", "params": {
+        "name":"wait_for_messages", "arguments":{"token":token,"after_id":0,"timeout_s":50},
+        "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28", "io.modelcontextprotocol/clientCapabilities":{}}
+    }}).to_string();
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nMCP-Protocol-Version: 2026-07-28\r\nMcp-Method: tools/call\r\nMcp-Name: wait_for_messages\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    connection.write_all(request.as_bytes()).await.unwrap();
+    let listening = || async {
+        let agents = json_of(
+            &ok(
+                &observer,
+                "list_agents",
+                json!({"token":token,"query":name,"format":"json"}),
+            )
+            .await,
+        );
+        agents["agents"][0]["listening"].as_bool().unwrap()
+    };
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !listening().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("open HTTP wait becomes listening");
+    let members = json_of(
+        &ok(
+            &observer,
+            "list_members",
+            json!({"token":token,"channel_id":channel,"format":"json"}),
+        )
+        .await,
+    );
+    assert_eq!(members["members"][0]["waiting_channels"], json!([channel]));
+    let page = http
+        .get(format!("{}/", server.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("listening on"));
+    connection.shutdown().await.unwrap();
+    drop(connection);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while listening().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("disconnect clears listening immediately, without the 30-second grace");
+    observer.cancel().await.unwrap();
 }
