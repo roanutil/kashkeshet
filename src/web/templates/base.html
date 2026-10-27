@@ -215,16 +215,25 @@ details summary { cursor: pointer; }
       olderLink.dataset.loading = "1";
       olderLink.textContent = "Loading…";
       const channel = channelList.dataset.channel;
+      const requested = olderLink.dataset.before;
       try {
         const res = await fetch("/channels/" + encodeURIComponent(channel)
-          + "/messages?before_id=" + encodeURIComponent(olderLink.dataset.before),
+          + "/messages?before_id=" + encodeURIComponent(requested),
           { headers: { Accept: "application/json" } });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const page = await res.json();
+        // The page holds what came just before the oldest message shown when
+        // it was asked for. If the live view dropped that one meanwhile, the
+        // page no longer joins on: drop it. The button already points before
+        // the new oldest message.
+        const anchor = channelList.querySelector("li.msg");
+        if (!anchor || anchor.dataset.id !== requested) {
+          olderLink.textContent = label;
+          return;
+        }
         // Measure the oldest shown message before and after, and scroll by
         // the difference, so it does not move on screen.
-        const anchor = channelList.querySelector("li.msg");
-        const before = anchor ? anchor.getBoundingClientRect().top : 0;
+        const before = anchor.getBoundingClientRect().top;
         const items = page.messages.map((m) => {
           const li = render(m, false);
           li.classList.remove("new");
@@ -233,7 +242,7 @@ details summary { cursor: pointer; }
         if (items.length) channelList.querySelector(".empty")?.remove();
         channelList.prepend(...items);
         setOlder(channel, page.older_before_id);
-        if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - before);
+        window.scrollBy(0, anchor.getBoundingClientRect().top - before);
         olderLink.textContent = label;
       } catch (err) {
         olderLink.textContent = "Could not load (" + err.message + "); try again";
