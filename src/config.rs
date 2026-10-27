@@ -360,9 +360,9 @@ pub struct Limits {
     pub purpose_preview_chars: usize,
     /// How long a web page sign-in lasts, when an access key is set.
     pub web_session_lifetime: Duration,
-    /// The most messages one web page shows: a channel's page, and the live
-    /// view, which drops the oldest as new ones arrive. Older messages are a
-    /// "show older" link away.
+    /// The most messages one web page shows at first: a channel's page, and
+    /// the live view, which drops the oldest as new ones arrive. A channel
+    /// page's "Show previous" button loads this many earlier ones at a time.
     pub web_page_messages: usize,
 }
 
@@ -388,7 +388,7 @@ impl Limits {
         member_preview: 3,
         purpose_preview_chars: 120,
         web_session_lifetime: Duration::from_secs(12 * 60 * 60),
-        web_page_messages: 200,
+        web_page_messages: 100,
     };
 
     /// Checks that these limits make sense together. The server refuses to

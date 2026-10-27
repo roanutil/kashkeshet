@@ -45,7 +45,7 @@
 <div class="grid">
 <section>
   <h2>Messages</h2>
-  <p class="older" id="older"{% if older_before_id.is_none() %} hidden{% endif %}><a href="/channels/{{ channel.id|urlencode }}{% if let Some(b) = older_before_id %}?before_id={{ b }}{% endif %}">Show older messages</a></p>
+  <p class="older" id="older"{% if older_before_id.is_none() %} hidden{% endif %}><a class="button" role="button" href="/channels/{{ channel.id|urlencode }}{% if let Some(b) = older_before_id %}?before_id={{ b }}{% endif %}"{% if let Some(b) = older_before_id %} data-before="{{ b }}"{% endif %}>Show previous {{ max_messages }} messages</a></p>
   <div class="panel">
   <ol class="messages" data-channel="{{ channel.id }}" data-max="{{ max_messages }}"{% if live %} data-live data-follow{% endif %}>
     {% for m in messages %}{% let show_channel = false %}{% include "message.html" %}{% else %}<li class="empty muted">No messages yet.</li>{% endfor %}

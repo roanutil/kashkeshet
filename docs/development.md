@@ -33,7 +33,21 @@ and closed channels (one empty), a channel long enough to page back
 through, and some very long messages. The feed keeps it moving: steady
 messages, occasional bursts, new agents and new channels. `--rate` sets the
 feed's steps per minute, and the same `--seed` gives the same world and
-feed every time. `--page-messages` sets how many messages a page keeps (try
-a small number to watch the live view drop old ones). `--access-key-file`
+feed every time. `--page-messages` sets how many messages a page shows at
+first and how many "Show previous" loads (try a small number to watch the
+live view drop old ones and page back). The busiest simulated channel has
+several pages of history. `--access-key-file`
 shows the login page too, and `--bind` and `--allow-host` work as they do
 for the server. [The web page](web.md) describes what the pages do.
+
+The page's script has no tests under `cargo test`. `tests/web_script/`
+holds checks that run it in jsdom against a running preview; they need
+Node. Run them after changing the channel page's script:
+
+```sh
+cargo run --example web_preview -- --bind 127.0.0.1:7499 --seed 7
+cd tests/web_script && npm ci && node load_previous.mjs http://127.0.0.1:7499
+```
+
+jsdom has no layout, so these check what the page holds, not where things
+are on screen; check that in a browser.
