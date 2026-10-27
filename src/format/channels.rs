@@ -10,53 +10,27 @@ use serde_json::{Value, json};
 impl Formatter {
     /// A lossless slice of the note, sized after rendering (including JSON escapes).
     pub fn note(&self, f: Format, note: &ChannelNote, offset: usize) -> String {
-        let boundaries: Vec<usize> = note
-            .text
-            .char_indices()
-            .map(|(i, _)| i)
-            .chain(std::iter::once(note.text.len()))
-            .collect();
-        let offset = offset.min(boundaries.len() - 1);
-        let remaining = boundaries.len() - 1 - offset;
-        let render = |count: usize| {
-            let text = &note.text[boundaries[offset]..boundaries[offset + count]];
-            let next = (count < remaining).then_some(offset + count);
-            match f {
-                Format::Json => json!({"channel_id": note.channel_id, "text": text,
-                    "edited_by": note.edited_by, "edited_at": note.edited_at,
-                    "offset": offset, "next_offset": next})
-                .to_string(),
-                Format::Text => {
-                    let mut out = format!(
-                        "note [{}]\nlast edited by {} at {}\noffset: {offset}\n{text}",
-                        note.channel_id,
-                        note.edited_by.as_deref().unwrap_or("(never)"),
-                        note.edited_at.as_deref().unwrap_or("(never)")
-                    );
-                    if let Some(next) = next {
-                        out.push_str(&format!(
-                            "\nnext_offset: {next} (get_note {} offset={next})",
-                            note.channel_id
-                        ));
-                    }
-                    out
+        self.text_in_parts(&note.text, offset, |text, offset, next| match f {
+            Format::Json => json!({"channel_id": note.channel_id, "text": text,
+                "edited_by": note.edited_by, "edited_at": note.edited_at,
+                "offset": offset, "next_offset": next})
+            .to_string(),
+            Format::Text => {
+                let mut out = format!(
+                    "note [{}]\nlast edited by {} at {}\noffset: {offset}\n{text}",
+                    note.channel_id,
+                    note.edited_by.as_deref().unwrap_or("(never)"),
+                    note.edited_at.as_deref().unwrap_or("(never)")
+                );
+                if let Some(next) = next {
+                    out.push_str(&format!(
+                        "\nnext_offset: {next} (get_note {} offset={next})",
+                        note.channel_id
+                    ));
                 }
+                out
             }
-        };
-        let full = render(remaining);
-        if full.len() <= self.max_bytes {
-            return full;
-        }
-        let (mut low, mut high) = (0, remaining);
-        while low < high {
-            let mid = low + (high - low).div_ceil(2);
-            if render(mid).len() <= self.max_bytes {
-                low = mid;
-            } else {
-                high = mid - 1;
-            }
-        }
-        render(low)
+        })
     }
 
     pub fn channels(&self, f: Format, page: &Page<ChannelInfo>, purpose_chars: usize) -> String {
