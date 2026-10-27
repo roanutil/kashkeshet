@@ -18,7 +18,7 @@
       <td class="num members">{{ c.channel.member_count }}</td>
       <td class="num count">{{ c.message_count }}</td>
       <td class="num recent">{{ c.recent_count() }}</td>
-      <td class="last">{% if let Some(at) = c.last_message_at %}{% if let Some(who) = c.last_speaker %}<a class="who" style="--hue: {{ who|hue }}" href="/agents/{{ who|urlencode }}">{{ who }}</a> · {% endif %}<time class="ago" datetime="{{ at }}" title="{{ at|when }}">{{ at|when }}</time>{% else %}<span class="muted">no messages yet</span>{% endif %}</td>
+      <td class="last">{% if let Some(at) = c.last_message_at %}{% if let Some(who) = c.last_speaker %}{% if c.last_from_operator %}<span class="who">{{ who }}</span>{% else %}<a class="who" style="--hue: {{ who|hue }}" href="/agents/{{ who|urlencode }}">{{ who }}</a>{% endif %} · {% endif %}<time class="ago" datetime="{{ at }}" title="{{ at|when }}">{{ at|when }}</time>{% else %}<span class="muted">no messages yet</span>{% endif %}</td>
     </tr>
     {% else %}
     <tr><td colspan="5" class="muted">No channels yet.</td></tr>

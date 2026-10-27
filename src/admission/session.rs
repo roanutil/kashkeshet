@@ -45,6 +45,11 @@ impl Sessions {
         }
     }
 
+    /// A fresh secret, drawn like a session ID.
+    pub fn secret(&self) -> String {
+        names::random_chars(self.entropy.as_ref(), WEB_SESSION_ID_CHARS)
+    }
+
     /// How long a session lasts.
     pub fn lifetime(&self) -> Duration {
         self.lifetime

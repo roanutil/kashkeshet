@@ -109,13 +109,13 @@ impl Rules {
                 if !store.is_member(&id, &record.name)? {
                     continue;
                 }
-                let visible = match viewer {
-                    None => true,
-                    Some(who) => {
-                        access::decide(true, facts.open, store.is_member(&id, who)?, Need::See)
-                            == Decision::Allowed
-                    }
+                let who = match viewer {
+                    None => Who::Human,
+                    Some(name) => Who::Agent {
+                        member: store.is_member(&id, name)?,
+                    },
                 };
+                let visible = access::decide(true, facts.open, who, Need::See) == Decision::Allowed;
                 if visible {
                     ids.insert(id);
                 }

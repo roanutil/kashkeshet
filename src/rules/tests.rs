@@ -429,6 +429,142 @@ async fn members_of_a_closed_channel_can_read_send_and_set_purpose() {
     );
 }
 
+// ---- The human ----
+
+#[tokio::test]
+async fn the_human_changes_any_channel_and_the_operator_says_so() {
+    let w = world().await;
+    let mut notices = w.rules.events().subscribe();
+    let (a, b) = (w.agent().await, w.agent().await);
+    // A closed channel the human is not in, as no human is in any.
+    let ch = w.channel(&a, "secret", false, &[&b]).await;
+
+    let info = w
+        .rules
+        .set_purpose(Actor::Human, ch.clone(), "  release prep ".into())
+        .await
+        .unwrap();
+    assert_eq!(info.purpose.as_deref(), Some("release prep"));
+    assert!(!info.is_member);
+
+    // The members see the change explained, from the operator.
+    let page = w.read_latest(&b, &ch).await.unwrap();
+    let said = page.messages.last().expect("an operator message");
+    assert_eq!(said.agent, names::OPERATOR);
+    assert_eq!(
+        said.body,
+        "The operator changed the purpose to: release prep"
+    );
+    assert_eq!(said.run_id, Some(w.run_id));
+
+    w.rules
+        .set_purpose(Actor::Human, ch.clone(), " ".into())
+        .await
+        .unwrap();
+    let page = w.read_latest(&a, &ch).await.unwrap();
+    assert_eq!(
+        page.messages.last().map(|m| m.body.as_str()),
+        Some("The operator cleared the purpose.")
+    );
+
+    // Waiting agents hear about it like any message.
+    let mut heard = Vec::new();
+    while let Ok(Some(notice)) =
+        tokio::time::timeout(Duration::from_millis(50), notices.next()).await
+    {
+        if let Notice::Message(m) = notice {
+            heard.push((m.channel_id, m.agent));
+        }
+    }
+    assert_eq!(
+        heard,
+        [
+            (ch.clone(), names::OPERATOR.to_string()),
+            (ch.clone(), names::OPERATOR.to_string())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_operator_is_not_an_agent_and_no_agent_can_become_it() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    w.rules
+        .set_purpose(Actor::Human, ch.clone(), "talk".into())
+        .await
+        .unwrap();
+    // The operator has spoken, yet is no agent: it cannot be reclaimed,
+    // added, or found, and is not listed.
+    assert_eq!(
+        code(
+            w.rules
+                .reclaim(names::OPERATOR.into(), "arc_anything".into())
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    assert_eq!(
+        code(
+            w.rules
+                .add_to_channel(&a, ch.clone(), vec![names::OPERATOR.into()])
+                .await
+        ),
+        Code::NotFound
+    );
+    let agents = w.rules.list_agents(&a, None, 100, None).await.unwrap();
+    assert!(agents.items.iter().all(|i| i.name != names::OPERATOR));
+    // Registering, even when every name draw is the same, never gives it.
+    let w = world_with(
+        Limits::DEFAULT,
+        Arc::new(SameNameEntropy(SeqEntropy::new(5))),
+    )
+    .await;
+    for _ in 0..5 {
+        let reg = w.rules.register().await.unwrap();
+        assert_ne!(reg.name, names::OPERATOR);
+        assert!(reg.name.contains('-'), "{}", reg.name);
+    }
+}
+
+#[tokio::test]
+async fn the_human_gets_not_found_for_a_missing_channel_and_bad_input_changes_nothing() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    assert_eq!(
+        code(
+            w.rules
+                .set_purpose(Actor::Human, "ch_missing0".into(), "x".into())
+                .await
+        ),
+        Code::NotFound
+    );
+    let too_long = "x".repeat(Limits::DEFAULT.max_purpose_chars + 1);
+    assert_eq!(
+        code(
+            w.rules
+                .set_purpose(Actor::Human, ch.clone(), too_long)
+                .await
+        ),
+        Code::InvalidArgument
+    );
+    // Nothing was said: a refused change posts no operator message.
+    assert!(w.read_latest(&a, &ch).await.unwrap().messages.is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_changing_the_purpose_posts_no_operator_message() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    w.rules
+        .set_purpose(&a, ch.clone(), "talk".into())
+        .await
+        .unwrap();
+    assert!(w.read_latest(&a, &ch).await.unwrap().messages.is_empty());
+}
+
 // ---- Rules table: leave ----
 
 #[tokio::test]
