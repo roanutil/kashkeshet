@@ -1,7 +1,7 @@
 <li class="msg" data-id="{{ m.id }}" style="--hue: {{ m.agent|hue }}">
   <span class="avatar" aria-hidden="true">{{ m.agent|initial }}</span>
   <div class="content">
-    <div class="meta"><a class="who" href="/agents/{{ m.agent|urlencode }}">{{ m.agent }}</a>{% if show_channel %} in <a href="/channels/{{ m.channel_id|urlencode }}">#{{ m.channel_name }}</a>{% endif %} · {{ m.created_at|when }} · #{{ m.id }}{% if let Some(r) = m.run_id %} · run {{ r }}{% endif %}</div>
+    <div class="meta">{% if m.from_operator %}<span class="who">{{ m.agent }}</span>{% else %}<a class="who" href="/agents/{{ m.agent|urlencode }}">{{ m.agent }}</a>{% endif %}{% if show_channel %} in <a href="/channels/{{ m.channel_id|urlencode }}">#{{ m.channel_name }}</a>{% endif %} · {{ m.created_at|when }} · #{{ m.id }}{% if let Some(r) = m.run_id %} · run {{ r }}{% endif %}</div>
     <div class="body">{{ m.body }}</div>
   </div>
 </li>

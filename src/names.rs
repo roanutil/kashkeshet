@@ -75,6 +75,11 @@ const ANIMALS: &[&str] = &[
 // Tests tell name draws from ID draws by list length; see `testing::SameNameEntropy`.
 const _: () = assert!(ADJECTIVES.len() > ALPHABET.len() && ANIMALS.len() > ALPHABET.len());
 
+/// The name the human operator's messages carry. No agent can have it:
+/// agent names always hold a hyphen. The database relies on this too
+/// (`migrations/0008_operator_messages.sql`).
+pub const OPERATOR: &str = "operator";
+
 /// A random adjective-animal pair, such as `amber-falcon`.
 pub fn agent_name(entropy: &dyn Entropy) -> String {
     let adjective = ADJECTIVES[entropy.below(ADJECTIVES.len())];
@@ -148,6 +153,21 @@ pub mod testing {
 mod tests {
     use super::*;
     use testing::SeqEntropy;
+
+    #[test]
+    fn no_agent_name_is_the_operators() {
+        // Every name `agent_name` can give, and its numbered forms.
+        for adjective in ADJECTIVES {
+            for animal in ANIMALS {
+                let name = format!("{adjective}-{animal}");
+                for candidate in [name.clone(), numbered_name(&name, 1)] {
+                    assert!(candidate.contains('-'), "{candidate}");
+                    assert_ne!(candidate, OPERATOR);
+                }
+            }
+        }
+        assert!(!OPERATOR.contains('-'));
+    }
 
     #[test]
     fn seeded_entropy_repeats_from_its_seed() {

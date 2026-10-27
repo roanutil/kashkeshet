@@ -4,6 +4,17 @@
 <h1>#{{ channel.name }} {% if channel.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}</h1>
 <div class="muted"><span class="mono">{{ channel.id }}</span> · created by <a class="who" style="--hue: {{ channel.created_by|hue }}" href="/agents/{{ channel.created_by|urlencode }}">{{ channel.created_by }}</a> at {{ channel.created_at|when }}</div>
 {% if let Some(p) = channel.purpose %}<p>{{ p }}</p>{% endif %}
+{% if !form_token.is_empty() %}
+<details>
+  <summary>Change the purpose</summary>
+  <form class="change" method="post" action="/channels/{{ channel.id|urlencode }}/purpose">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <input type="text" name="purpose" aria-label="Purpose" value="{% if let Some(p) = channel.purpose %}{{ p }}{% endif %}">
+    <button type="submit">Save</button>
+  </form>
+  <p class="muted">Empty clears it. The members see a message from the operator saying what changed.</p>
+</details>
+{% endif %}
 {% if channel.note_edited_by.is_some() %}
 <section class="panel">
   <h2>Pinned note</h2>

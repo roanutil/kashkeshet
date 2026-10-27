@@ -57,7 +57,7 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
@@ -140,6 +140,56 @@ fn a_new_row_can_name_its_run() {
         [],
     );
     assert!(bad.is_err(), "a run_id must name an existing run");
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
+fn messages_may_come_from_the_operator_but_no_unknown_agent() {
+    let dir = temp_dir("operator");
+    let path = dir.join("old.db");
+    make_v1(&path);
+
+    drop(Db::open(&path).expect("open and migrate"));
+
+    let conn = Connection::open(&path).expect("reopen");
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .expect("foreign keys");
+    // The old message kept its ID, and search still finds it.
+    let (id, agent): (i64, String) = conn
+        .query_row(
+            "SELECT m.id, m.agent FROM messages_fts f JOIN messages m ON m.id = f.rowid
+             WHERE messages_fts MATCH 'hello'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("old message found");
+    assert_eq!((id, agent.as_str()), (1, "amber-falcon"));
+    conn.execute(
+        "INSERT INTO messages (channel_id, agent, body, created_at)
+         VALUES ('ch_1', 'operator', 'The operator changed the purpose', 't')",
+        [],
+    )
+    .expect("an operator message");
+    let unknown = conn.execute(
+        "INSERT INTO messages (channel_id, agent, body, created_at)
+         VALUES ('ch_1', 'nobody-here', 'hi', 't')",
+        [],
+    );
+    assert!(unknown.is_err(), "a message's agent must exist");
+    let bad_channel = conn.execute(
+        "INSERT INTO messages (channel_id, agent, body, created_at)
+         VALUES ('ch_none', 'operator', 'hi', 't')",
+        [],
+    );
+    assert!(bad_channel.is_err(), "a message's channel must exist");
+    let hits: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'purpose'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("search");
+    assert_eq!(hits, 1, "new messages are indexed");
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
 

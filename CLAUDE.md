@@ -30,7 +30,7 @@ require reading another's internals.
 | `store/` | The `Reads`/`Writes` contract and its SQLite implementation | Decide permissions; know about agents' requests |
 | `format/` | Turning rule results into text or JSON within the size cap | Query storage or apply rules |
 | `mcp.rs` | Tool definitions; parse parameters, call `rules`, call `format` | Touch storage or decide permissions |
-| `web/` | The human's read-only pages, and logging in to them. Pages read only through web's own contract (`web/source.rs`: `Source` and `Gate`), which the server provides over `rules` and `admission` (`web/real.rs`) and the preview provides from simulated data (`web/preview.rs`, run by `examples/web_preview.rs`) | Change anything except sign-in sessions, through `admission`; read `rules` outside `web/real.rs` |
+| `web/` | The human's pages, logging in to them, and the changes the human makes from them. Pages read and change only through web's own contract (`web/source.rs`: `Source` and `Gate`), which the server provides over `rules` and `admission` (`web/real.rs`) and the preview provides from simulated data (`web/preview.rs`, run by `examples/web_preview.rs`). Every change is a form `POST` read through `web/change.rs`'s `Change`, which checks the origin and the viewer's form token | Change anything except through its contract; read a changing form without `Change`; reach `rules` outside `web/real.rs` |
 | `hosts.rs` | Which `Host` names the server answers to, for `/mcp` and the web page | Touch storage, rules, or HTTP library types |
 | `service/` | Running the server as a launchd or systemd service: the service files and the commands that manage them, through its `System` contract | Touch the system except through `System`; decide server settings (`main.rs` passes them in) |
 | `settings/` | Gathering a server's settings from flags, the config file and defaults; default paths | Read files or environment variables itself; check limits (that is `config.rs`) |
@@ -69,9 +69,16 @@ or `Writes` (in our own terms, using our own record types) and implement it in
 changes go in a new numbered file in `migrations/` that is added to the
 `MIGRATIONS` list. Never edit a migration that has shipped.
 
-**Permissions.** Every check on whether an agent may use a channel goes through
-`rules::access::decide`. To an agent outside a closed channel, the channel does
-not exist: the answer must be `not_found`, exactly as for a missing ID.
+**Permissions.** Every check on whether an agent or the human may use a channel
+goes through `rules::access::decide`. To an agent outside a closed channel, the
+channel does not exist: the answer must be `not_found`, exactly as for a missing
+ID.
+
+**The human.** The human operator is an actor in `rules` (`rules::Actor::Human`),
+beside agents. A change the human makes goes through the same rule as an
+agent's, and a change to a channel posts a message in it from the operator
+(`names::OPERATOR`) saying what changed, in the same `Db::write`. Agents never
+see a channel change with no explanation.
 
 **Time and randomness.** Get the current time only from the injected `Clock`,
 and wait only through `Clock::sleep_until`. Get randomness only from the

@@ -229,21 +229,25 @@ impl Preview {
         drop(world);
         for item in out {
             match item {
-                Out::Message(m) => self.events.publish(NewMessage {
-                    id: m.id,
-                    channel_id: m.channel_id,
-                    channel_name: m.channel_name,
-                    agent: m.agent,
-                    body: m.body,
-                    created_at: m.created_at,
-                    run_id: m.run_id,
-                }),
+                Out::Message(m) => self.publish_message(m),
                 Out::Agent(a) => self.events.publish_agent(a),
                 Out::Channel(c) => self.events.publish_channel(c),
                 Out::Joined(j) => self.events.publish_joined(j),
             }
         }
         happening
+    }
+
+    fn publish_message(&self, m: Message) {
+        self.events.publish(NewMessage {
+            id: m.id,
+            channel_id: m.channel_id,
+            channel_name: m.channel_name,
+            agent: m.agent,
+            body: m.body,
+            created_at: m.created_at,
+            run_id: m.run_id,
+        });
     }
 
     fn world(&self) -> MutexGuard<'_, World> {
@@ -279,6 +283,17 @@ impl Source for Preview {
         let world = self.world();
         let view = world.agent_view(&name);
         Box::pin(async move { view })
+    }
+
+    fn set_purpose(
+        &self,
+        channel_id: String,
+        purpose: String,
+    ) -> BoxFuture<'_, Result<(), SourceError>> {
+        let now = self.clock.now();
+        let said = self.world().set_purpose(now, &channel_id, &purpose);
+        let said = said.map(|m| self.publish_message(m));
+        Box::pin(async move { said })
     }
 
     fn live(&self) -> BoxStream<'static, LiveEvent> {
@@ -447,12 +462,35 @@ impl World {
         Some(self.store(at, index, agent.to_string(), body.to_string()))
     }
 
+    /// The human changes a channel's purpose, and the operator says so, as
+    /// the server does.
+    fn set_purpose(
+        &mut self,
+        at: DateTime<Utc>,
+        channel_id: &str,
+        purpose: &str,
+    ) -> Result<Message, SourceError> {
+        let index = self
+            .channels
+            .iter()
+            .position(|c| c.channel.id == channel_id)
+            .ok_or_else(|| SourceError::NotFound(format!("no channel {channel_id}")))?;
+        let purpose = Some(purpose.trim()).filter(|p| !p.is_empty());
+        let body = match purpose {
+            Some(p) => format!("The operator changed the purpose to: {p}"),
+            None => "The operator cleared the purpose.".to_string(),
+        };
+        self.channels[index].channel.purpose = purpose.map(str::to_string);
+        Ok(self.store(at, index, names::OPERATOR.to_string(), body))
+    }
+
     fn store(&mut self, at: DateTime<Utc>, channel: usize, agent: String, body: String) -> Message {
         let c = &self.channels[channel].channel;
         let message = Message {
             id: self.next_id,
             channel_id: c.id.clone(),
             channel_name: c.name.clone(),
+            from_operator: agent == names::OPERATOR,
             agent: agent.clone(),
             body,
             created_at: clock::to_text(at),
@@ -482,6 +520,7 @@ impl World {
                     message_count: mine.clone().count() as i64,
                     last_message_at: last.map(|m| m.created_at.clone()),
                     last_speaker: last.map(|m| m.agent.clone()),
+                    last_from_operator: last.is_some_and(|m| m.from_operator),
                     recent_activity: activity(mine.filter(|m| m.created_at.as_str() >= since)),
                 }
             })

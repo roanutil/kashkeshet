@@ -1,5 +1,6 @@
 //! What the human sees through the web page. The human sees everything,
-//! including closed channels, and changes nothing.
+//! including closed channels. The human's changes are the same rules as
+//! agents', made as [`Actor::Human`].
 
 use super::*;
 use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW};
