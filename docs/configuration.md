@@ -16,6 +16,7 @@
 | `--max-response-bytes` | 8192 | Responses are cut to fit, with a `more:` line |
 | `--default-limit` | 20 | Items per list or read when the agent gives no `limit` |
 | `--max-limit` | 100 | Largest `limit` an agent may ask for |
+| `--waiting-grace-seconds` | 3 | Seconds a completed wait remains listening; 0 disables grace, maximum 50 |
 | `--sends-per-minute` | 30 | Per-agent send rate |
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
 | `--log-file` | stdout | Write the log to this file, kept under about 60 MB (see [Logs](#logs)) |

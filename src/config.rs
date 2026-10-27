@@ -346,8 +346,8 @@ pub struct Limits {
     pub default_wait: Duration,
     /// Longest wait an agent may ask for.
     pub max_wait: Duration,
-    /// How often an agent's `last_seen` time may be written.
-    pub last_seen_interval: Duration,
+    /// How long a normally completed wait remains visible as listening.
+    pub waiting_grace: Duration,
     /// Member names shown with each channel in `list_channels`.
     pub member_preview: usize,
     /// Characters of a channel purpose shown in `list_channels`.
@@ -376,7 +376,7 @@ impl Limits {
         default_wait: Duration::from_secs(30),
         // Common MCP clients give up on a tool call after about 60 seconds.
         max_wait: Duration::from_secs(50),
-        last_seen_interval: Duration::from_secs(60),
+        waiting_grace: Duration::from_secs(3),
         member_preview: 3,
         purpose_preview_chars: 120,
         web_session_lifetime: Duration::from_secs(12 * 60 * 60),
@@ -426,6 +426,12 @@ impl Limits {
             return Err(InvalidSetting::new(
                 "web_session_lifetime",
                 "must be at least 1 second",
+            ));
+        }
+        if self.waiting_grace > self.max_wait {
+            return Err(InvalidSetting::new(
+                "waiting_grace",
+                "must not exceed max_wait",
             ));
         }
         if self.max_wait < self.default_wait {

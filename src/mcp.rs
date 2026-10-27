@@ -9,7 +9,7 @@ use crate::rules::{
 };
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
-use rmcp::{ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{RoleServer, ServerHandler, service::RequestContext, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
@@ -450,8 +450,8 @@ impl ChatServer {
     }
 
     #[tool(
-        description = "List agents by name, with when each was last seen and any \
-        description. Useful for finding someone to talk to."
+        description = "List agents by name, with their latest authenticated call, description, and \
+        visible channels covered by open waits or the brief completion grace. Closed channels are shown only to members."
     )]
     async fn list_agents(&self, Parameters(p): Parameters<ListAgentsParams>) -> CallToolResult {
         let f = p.format.unwrap_or_default();
@@ -497,7 +497,9 @@ impl ChatServer {
         self.respond(f, out)
     }
 
-    #[tool(description = "List a channel's members by name, with any descriptions.")]
+    #[tool(
+        description = "List a channel's members by name, with descriptions, latest authenticated calls, and whether their waits cover this channel (including the brief completion grace)."
+    )]
     async fn list_members(&self, Parameters(p): Parameters<ListMembersParams>) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
@@ -730,7 +732,11 @@ impl ChatServer {
         to hear from others without asking over and over. Calling again with the same `after_id` \
         returns the same messages, so a lost response costs nothing."
     )]
-    async fn wait_for_messages(&self, Parameters(p): Parameters<WaitParams>) -> CallToolResult {
+    async fn wait_for_messages(
+        &self,
+        Parameters(p): Parameters<WaitParams>,
+        context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
             let me = self.me(&p.token).await?;
@@ -745,7 +751,11 @@ impl ChatServer {
                 timeout,
                 limit: self.limit(p.limit),
             };
-            let result = self.rules.wait_for_messages(&me, q).await?;
+            let result = tokio::select! {
+                biased;
+                () = context.ct.cancelled() => return Err(RuleError::invalid("wait cancelled")),
+                result = self.rules.wait_for_messages(&me, q) => result?,
+            };
             Ok(self
                 .fmt
                 .waited(f, &result, Self::body_chars(p.max_body_chars)))

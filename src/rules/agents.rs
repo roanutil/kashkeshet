@@ -119,18 +119,20 @@ impl Rules {
     /// Agents in name order, optionally only those whose names contain `query`.
     pub async fn list_agents(
         &self,
-        _me: &Agent,
+        me: &Agent,
         query: Option<String>,
         limit: usize,
         cursor: Option<String>,
     ) -> Result<Page<AgentInfo>> {
+        let viewer = me.name.clone();
+        let rules = self.clone();
         self.db()
             .read(move |store| {
                 let mut items: Vec<AgentInfo> = store
                     .agents(query.as_deref(), cursor.as_deref(), limit + 1)?
                     .into_iter()
-                    .map(AgentInfo::from)
-                    .collect();
+                    .map(|a| rules.observed_agent(store, a, Some(&viewer), None))
+                    .collect::<Result<Vec<_>>>()?;
                 let next_cursor = if items.len() > limit {
                     items.truncate(limit);
                     items.last().map(|a| a.name.clone())
@@ -203,6 +205,8 @@ pub struct AgentInfo {
     pub run_id: Option<i64>,
     /// What the agent says about itself, if anything.
     pub description: Option<String>,
+    pub listening: bool,
+    pub waiting_channels: Vec<String>,
 }
 
 // Agents see revoked agents like any other: their names and messages stay.
@@ -214,6 +218,8 @@ impl From<AgentRecord> for AgentInfo {
             last_seen: a.last_seen,
             run_id: a.run_id,
             description: a.description,
+            listening: false,
+            waiting_channels: Vec::new(),
         }
     }
 }

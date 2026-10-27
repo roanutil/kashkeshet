@@ -97,6 +97,8 @@ pub struct Agent {
     pub name: String,
     pub created_at: String,
     pub last_seen: Option<String>,
+    pub listening: bool,
+    pub waiting_channels: Vec<String>,
     /// The server run that created the agent, if known.
     pub run_id: Option<i64>,
     /// What the agent says about itself, if anything.

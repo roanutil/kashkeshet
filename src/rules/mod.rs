@@ -28,6 +28,8 @@ mod human;
 mod messages;
 mod operator;
 mod rate;
+mod waiting;
+pub use waiting::Waiting;
 
 #[cfg(test)]
 mod tests;
@@ -67,6 +69,7 @@ pub struct Page<T> {
 
 /// Everything the rules depend on, supplied at startup.
 pub struct Deps {
+    pub waiting: Waiting,
     pub db: Db,
     pub events: Events,
     pub clock: Arc<dyn Clock>,

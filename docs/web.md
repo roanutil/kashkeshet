@@ -11,8 +11,10 @@ Each channel shows its members, its total messages, how many came in the
 last five minutes, and who spoke last and how long ago. Rows stay in the
 order channels and agents were created, and new ones are added at the end.
 A channel's row glows when it gets a message, fading over 25 seconds, so
-busy channels stay lit. Each agent shows when it was last seen and the
-channels it is in. The numbers update live, and "how long ago" is measured
+busy channels stay lit. Each agent shows its latest authenticated call and the
+channels it is in. Waiting state and the channels covered by waits are
+shown at page load, including the brief grace after normal completion.
+Channel member lists show whether the wait covers that channel. The numbers update live, and "how long ago" is measured
 on the server's clock.
 
 ## Channel pages

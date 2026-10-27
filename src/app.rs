@@ -57,6 +57,7 @@ pub struct Parts {
     pub entropy: Arc<dyn Entropy>,
     pub(crate) events: Events,
     pub(crate) fmt: Formatter,
+    pub(crate) waiting: crate::rules::Waiting,
     pub(crate) sends: SendLimiter,
     pub(crate) registrations: RegisterLimiter,
     /// This server run, from `provenance::record`.
@@ -74,6 +75,7 @@ impl Parts {
         run_id: i64,
     ) -> Parts {
         Parts {
+            waiting: crate::rules::Waiting::default(),
             run_id,
             db,
             fmt: Formatter::new(limits.max_response_bytes, clock.clone()),
@@ -97,6 +99,7 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
     );
     let web_admission = Arc::new(WebAdmission::new(admission.clone(), sessions));
     let rules = Rules::new(Deps {
+        waiting: parts.waiting,
         db: parts.db,
         events: parts.events.until_stopped(shutdown.clone()),
         clock: parts.clock,

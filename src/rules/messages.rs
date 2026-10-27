@@ -182,6 +182,14 @@ impl Rules {
             }
         };
 
+        let grace = chrono::Duration::from_std(self.limits().waiting_grace)
+            .map_err(|e| RuleError::invalid(e.to_string()))?;
+        let guard =
+            self.inner
+                .deps
+                .waiting
+                .start(&me.name, filter.clone(), self.inner.deps.clock.now());
+        let result = async {
         // Subscribe before the first look, so a message sent in between is not missed.
         let mut notices = self.events().subscribe();
         let clock = &self.inner.deps.clock;
@@ -214,6 +222,11 @@ impl Rules {
                 }
             }
         }
+        }.await;
+        if result.is_ok() {
+            guard.finish(self.inner.deps.clock.now() + grace);
+        }
+        result
     }
 
     async fn newer_messages(

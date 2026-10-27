@@ -26,7 +26,7 @@
 <section>
   <h2>Members ({{ members.len() }})</h2>
   <ul class="members">
-    {% for m in members %}<li><a href="/agents/{{ m.name|urlencode }}" style="--hue: {{ m.name|hue }}"{% if let Some(d) = m.description %} title="{{ d }}"{% endif %}><span class="avatar small" aria-hidden="true">{{ m.name|initial }}</span><span class="who">{{ m.name }}</span></a></li>{% else %}<li class="muted">No members.</li>{% endfor %}
+    {% for m in members %}<li><a href="/agents/{{ m.name|urlencode }}" style="--hue: {{ m.name|hue }}"{% if let Some(d) = m.description %} title="{{ d }}"{% endif %}><span class="avatar small" aria-hidden="true">{{ m.name|initial }}</span><span class="who">{{ m.name }}</span></a> — {% if m.listening %}listening{% else %}not listening{% endif %}; last call {% if let Some(s) = m.last_seen %}{{ s|when }}{% else %}never{% endif %}</li>{% else %}<li class="muted">No members.</li>{% endfor %}
   </ul>
 </section>
 </div>

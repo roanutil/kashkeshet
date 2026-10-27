@@ -163,6 +163,7 @@ async fn rules_source() -> Arc<dyn Source> {
         .await
         .expect("record run");
     let rules = Rules::new(Deps {
+        waiting: crate::rules::Waiting::default(),
         db,
         events: Events::new(),
         clock: Arc::new(FixedClock::new(start_time())),

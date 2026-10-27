@@ -58,8 +58,8 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 impl Rules {
-    /// Checks a token and returns the agent it belongs to. Records when the
-    /// agent was last seen, at most once per `last_seen_interval`.
+    /// Checks a token and returns the agent it belongs to. Records the time of every
+    /// authenticated call, including calls whose arguments are later refused.
     pub async fn authenticate(&self, token: Option<&str>) -> Result<Agent> {
         let token = match token {
             Some(t) if !t.trim().is_empty() => t.trim(),
@@ -73,7 +73,6 @@ impl Rules {
         // A revoked token is refused exactly like one that was never issued.
         let Some(AgentRecord {
             name,
-            last_seen,
             revoked_at: None,
             ..
         }) = found
@@ -82,22 +81,14 @@ impl Rules {
         };
 
         let now = self.inner.deps.clock.now();
-        let interval = chrono::Duration::from_std(self.limits().last_seen_interval)
-            .map_err(|e| RuleError::new(Code::Internal, e.to_string()))?;
-        let stale = match last_seen.as_deref().and_then(clock::from_text) {
-            Some(seen) => now - seen >= interval,
-            None => true,
-        };
-        if stale {
-            let who = name.clone();
-            let now = clock::to_text(now);
-            self.db()
-                .write(move |store| {
-                    store.set_last_seen(&who, &now)?;
-                    Ok::<_, RuleError>(())
-                })
-                .await?;
-        }
+        let who = name.clone();
+        let now = clock::to_text(now);
+        self.db()
+            .write(move |store| {
+                store.set_last_seen(&who, &now)?;
+                Ok::<_, RuleError>(())
+            })
+            .await?;
         Ok(Agent { name })
     }
 }

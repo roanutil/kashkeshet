@@ -353,6 +353,8 @@ impl World {
             name: name.clone(),
             created_at: clock::to_text(now),
             last_seen: Some(clock::to_text(now)),
+            listening: false,
+            waiting_channels: Vec::new(),
             run_id: Some(RUN_ID),
             description: match e.below(DESCRIPTIONS.len() + 1) {
                 i if i < DESCRIPTIONS.len() => Some(DESCRIPTIONS[i].to_string()),

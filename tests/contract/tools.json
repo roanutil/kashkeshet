@@ -398,7 +398,7 @@
     "name": "leave_channel"
   },
   {
-    "description": "List agents by name, with when each was last seen and any description. Useful for finding someone to talk to.",
+    "description": "List agents by name, with their latest authenticated call, description, and visible channels covered by open waits or the brief completion grace. Closed channels are shown only to members.",
     "inputSchema": {
       "$defs": {
         "Format": {
@@ -554,7 +554,7 @@
     "name": "list_channels"
   },
   {
-    "description": "List a channel's members by name, with any descriptions.",
+    "description": "List a channel's members by name, with descriptions, latest authenticated calls, and whether their waits cover this channel (including the brief completion grace).",
     "inputSchema": {
       "$defs": {
         "Format": {

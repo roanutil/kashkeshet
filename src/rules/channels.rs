@@ -48,10 +48,18 @@ impl Rules {
         cursor: Option<String>,
     ) -> Result<Members> {
         let me = me.name.clone();
+        let rules = self.clone();
         self.db()
             .read(move |store| {
                 visible_channel(store, &me, &channel_id)?;
-                members_page(store, &channel_id, limit, cursor.as_deref())
+                let mut page = members_page(store, &channel_id, limit, cursor.as_deref())?;
+                for a in &mut page.page.items {
+                    let record = store
+                        .agent(&a.name)?
+                        .ok_or_else(|| RuleError::agent_not_found(&a.name))?;
+                    *a = rules.observed_agent(store, record, Some(&me), Some(&channel_id))?;
+                }
+                Ok(page)
             })
             .await
     }
