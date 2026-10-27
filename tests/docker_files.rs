@@ -1,6 +1,7 @@
 //! The Tailscale Compose setup: kkt and Tailscale are separate containers, and
 //! Tailscale Serve proxies to the kkt service by name on the port kkt binds.
-//! Only the Tailscale container may be on the tailnet.
+//! Only the Tailscale container may be on the tailnet, and kkt is published
+//! only on the host's loopback.
 
 fn read(path: &str) -> String {
     std::fs::read_to_string(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")))
@@ -50,12 +51,17 @@ fn kkt_listens_beyond_loopback_with_the_flag_that_allows_it() {
 }
 
 #[test]
-fn kkt_does_not_share_the_tailscale_network_or_publish_ports() {
+fn kkt_does_not_share_the_tailscale_network() {
+    assert!(!read("compose.tailscale.yaml").contains("network_mode"));
+}
+
+#[test]
+fn kkt_is_published_on_the_host_loopback_only() {
     let compose = read("compose.tailscale.yaml");
-    assert!(!compose.contains("network_mode"));
-    assert!(
-        !compose
-            .lines()
-            .any(|l| l.trim_start().starts_with("ports:"))
-    );
+    let published: Vec<&str> = compose
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("- \"") && line.matches(':').count() == 2)
+        .collect();
+    assert_eq!(published, ["- \"127.0.0.1:7420:7420\""]);
 }
