@@ -1,0 +1,18 @@
+# kkt in Docker, reachable from this machine only.
+#   docker compose up -d
+#   docker compose exec kkt kkt key show
+# The web page is at http://127.0.0.1:7420/ and MCP at http://127.0.0.1:7420/mcp.
+# For access over a tailnet, use compose.tailscale.yaml instead.
+
+services:
+  kkt:
+    image: ghcr.io/sam-mfb/kashkeshet:latest
+    restart: unless-stopped
+    ports:
+      # The host's loopback only. Do not drop the 127.0.0.1.
+      - "127.0.0.1:7420:7420"
+    volumes:
+      - kkt-data:/data
+
+volumes:
+  kkt-data:

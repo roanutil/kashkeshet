@@ -72,6 +72,8 @@ pub const NOTE_PREVIEW_CHARS: usize = 120;
 
 /// Address to listen on.
 pub const DEFAULT_BIND: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7420));
+/// Whether `bind` may be a non-loopback address.
+pub const DEFAULT_ALLOW_ANY_BIND: bool = false;
 /// Database file name in the per-user data directory, for `kkt serve`.
 pub const DB_FILE_NAME: &str = "kashkeshet.db";
 /// The per-user data directory on macOS, under the home directory.
@@ -473,17 +475,34 @@ impl InvalidSetting {
     }
 }
 
-/// Checks the listen address. Only loopback addresses are allowed: the server
-/// has no authentication beyond agent tokens and is meant for one machine.
-pub fn check_bind(addr: SocketAddr) -> Result<(), InvalidSetting> {
+/// Checks the listen address. Only loopback addresses are allowed unless
+/// `allow_any_bind` is set: the server is meant for one machine, and a
+/// container needs to listen on its own network interface. `has_key` says
+/// whether an access key guards the server; any other address needs one.
+pub fn check_bind(
+    addr: SocketAddr,
+    allow_any_bind: bool,
+    has_key: bool,
+) -> Result<(), InvalidSetting> {
     if addr.ip().is_loopback() {
-        Ok(())
-    } else {
-        Err(InvalidSetting::new(
-            "bind",
-            format!("must be a loopback address (such as 127.0.0.1), not {addr}"),
-        ))
+        return Ok(());
     }
+    if !allow_any_bind {
+        return Err(InvalidSetting::new(
+            "bind",
+            format!(
+                "must be a loopback address (such as 127.0.0.1), not {addr}, \
+                 unless allow_any_bind is set"
+            ),
+        ));
+    }
+    if !has_key {
+        return Err(InvalidSetting::new(
+            "allow_any_bind",
+            "needs an access key: it cannot be used with no_access_key",
+        ));
+    }
+    Ok(())
 }
 
 /// Checks an access key, as read from `--access-key-file` without
@@ -631,10 +650,21 @@ mod tests {
 
     #[test]
     fn only_loopback_addresses_may_be_bound() {
-        assert_eq!(check_bind("127.0.0.1:7420".parse().expect("addr")), Ok(()));
-        assert_eq!(check_bind("[::1]:7420".parse().expect("addr")), Ok(()));
-        let err = check_bind("0.0.0.0:7420".parse().expect("addr")).expect_err("refused");
+        let local: SocketAddr = "127.0.0.1:7420".parse().expect("addr");
+        let local6: SocketAddr = "[::1]:7420".parse().expect("addr");
+        let any: SocketAddr = "0.0.0.0:7420".parse().expect("addr");
+        assert_eq!(check_bind(local, false, true), Ok(()));
+        assert_eq!(check_bind(local6, false, false), Ok(()));
+        let err = check_bind(any, false, true).expect_err("refused");
         assert_eq!(err.name, "bind");
+    }
+
+    #[test]
+    fn any_address_may_be_bound_only_when_allowed_and_keyed() {
+        let any: SocketAddr = "0.0.0.0:7420".parse().expect("addr");
+        assert_eq!(check_bind(any, true, true), Ok(()));
+        let err = check_bind(any, true, false).expect_err("refused");
+        assert_eq!(err.name, "allow_any_bind");
     }
 
     #[test]

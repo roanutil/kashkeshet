@@ -25,6 +25,13 @@ curl -fsSL https://github.com/sam-mfb/kashkeshet/releases/download/v0.2.0/kashke
 kkt --version # kashkeshet 0.2.0
 ```
 
+## Container image
+
+Each stable or candidate tag also publishes `ghcr.io/sam-mfb/kashkeshet:X.Y.Z`
+for linux/amd64 and linux/arm64, built from the tagged commit by the
+`image-build` and `image-publish` jobs in the release workflow. Stable tags
+also move `latest`. See [Docker](docker.md).
+
 ## Verify a download
 
 The [releases](https://github.com/sam-mfb/kashkeshet/releases) contain one

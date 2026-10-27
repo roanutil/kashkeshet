@@ -34,7 +34,7 @@ impl Build {
 pub struct ServerRun {
     pub version: String,
     pub commit: String,
-    /// The settings in effect. See [`settings_text`].
+    /// The settings in effect: the `allow_any_bind` line, then [`settings_text`].
     pub settings: String,
     /// SHA-256 of the instructions text, in lowercase hex.
     pub instructions_sha256: String,
@@ -46,7 +46,8 @@ impl ServerRun {
             version: build.version.to_string(),
             commit: build.commit.to_string(),
             settings: {
-                let mut settings = settings_text(
+                let mut settings = format!("allow_any_bind={}\n", config.allow_any_bind);
+                settings.push_str(&settings_text(
                     &config.limits,
                     config.log_level,
                     config.dependency_log_level,
@@ -54,7 +55,7 @@ impl ServerRun {
                     config.allowed_hosts.extra(),
                     config.config_file.as_deref(),
                     config.admission.key_source(),
-                );
+                ));
                 if let Some(file) = &config.log_file {
                     settings.push('\n');
                     settings.push_str(&log_text(file, &LogPolicy::DEFAULT));
@@ -198,6 +199,7 @@ mod tests {
             log_file: None,
             log_level: crate::config::DEFAULT_LOG_LEVEL,
             dependency_log_level: crate::config::DEFAULT_DEPENDENCY_LOG_LEVEL,
+            allow_any_bind: crate::config::DEFAULT_ALLOW_ANY_BIND,
         }
     }
 
@@ -213,14 +215,17 @@ mod tests {
         assert_eq!(run.commit, "abc123");
         assert_eq!(
             run.settings,
-            settings_text(
-                &Limits::DEFAULT,
-                LogLevel::Info,
-                LogLevel::Warn,
-                &[],
-                &[],
-                None,
-                None
+            format!(
+                "allow_any_bind=false\n{}",
+                settings_text(
+                    &Limits::DEFAULT,
+                    LogLevel::Info,
+                    LogLevel::Warn,
+                    &[],
+                    &[],
+                    None,
+                    None
+                )
             )
         );
         // SHA-256 of the empty string.
@@ -303,6 +308,16 @@ mod tests {
         ));
         let plain = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
         assert!(!plain.settings.contains("config_file"));
+    }
+
+    #[test]
+    fn a_run_records_whether_any_address_may_be_bound() {
+        let mut open = config(Limits::DEFAULT, &[], "");
+        let closed = ServerRun::new(TEST_BUILD, &open);
+        assert!(closed.settings.starts_with("allow_any_bind=false\n"));
+        open.allow_any_bind = true;
+        let allowed = ServerRun::new(TEST_BUILD, &open);
+        assert!(allowed.settings.starts_with("allow_any_bind=true\n"));
     }
 
     #[test]
