@@ -117,8 +117,9 @@ tr.glow td { animation: glow 25s ease-out; }
   .toast, li.msg, tr.glow td { animation: none; transition: none; }
 }
 
-button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
+button, a.button { font: inherit; padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px;
          background: var(--chip); color: var(--fg); cursor: pointer; }
+a.button { display: inline-block; text-decoration: none; }
 form.change { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
 form.change input[type=text] { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px;
                                background: var(--panel); color: var(--fg); flex: 1 1 240px; min-width: 0; }
@@ -178,7 +179,8 @@ details summary { cursor: pointer; }
   function follows(list) { return list.dataset.follow !== undefined; }
 
   // Drops the oldest messages over the list's limit. On a channel page, the
-  // "show older" link then points just before the oldest one still shown.
+  // "Show previous" button then loads from just before the oldest one still
+  // shown.
   function trim(list) {
     const max = Number(list.dataset.max || 0);
     let dropped = false;
@@ -187,11 +189,57 @@ details summary { cursor: pointer; }
       dropped = true;
     }
     const first = list.querySelector("li.msg");
-    if (dropped && first && older && list.dataset.channel) {
-      older.querySelector("a").href = "/channels/" + encodeURIComponent(list.dataset.channel)
-        + "?before_id=" + first.dataset.id;
-      older.hidden = false;
-    }
+    if (dropped && first && list.dataset.channel) setOlder(list.dataset.channel, first.dataset.id);
+  }
+  // Points the "Show previous" button before message `beforeId`, or hides it
+  // at the start of the channel (`beforeId` null).
+  function setOlder(channel, beforeId) {
+    if (!older) return;
+    if (beforeId == null) { older.hidden = true; return; }
+    const a = older.querySelector("a");
+    a.dataset.before = String(beforeId);
+    a.href = "/channels/" + encodeURIComponent(channel) + "?before_id=" + beforeId;
+    older.hidden = false;
+  }
+  // "Show previous N messages" fetches the messages just before the oldest
+  // shown and adds them above it, keeping what the reader was looking at
+  // where it was on screen. Without the script, the link opens that page.
+  const channelList = document.querySelector("ol.messages[data-channel]");
+  const olderLink = older && older.querySelector("a");
+  if (olderLink && channelList) {
+    const label = olderLink.textContent;
+    olderLink.addEventListener("click", async (e) => {
+      e.preventDefault();
+      if (olderLink.dataset.loading) return;
+      olderLink.dataset.loading = "1";
+      olderLink.textContent = "Loading…";
+      const channel = channelList.dataset.channel;
+      try {
+        const res = await fetch("/channels/" + encodeURIComponent(channel)
+          + "/messages?before_id=" + encodeURIComponent(olderLink.dataset.before),
+          { headers: { Accept: "application/json" } });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const page = await res.json();
+        // Measure the oldest shown message before and after, and scroll by
+        // the difference, so it does not move on screen.
+        const anchor = channelList.querySelector("li.msg");
+        const before = anchor ? anchor.getBoundingClientRect().top : 0;
+        const items = page.messages.map((m) => {
+          const li = render(m, false);
+          li.classList.remove("new");
+          return li;
+        });
+        if (items.length) channelList.querySelector(".empty")?.remove();
+        channelList.prepend(...items);
+        setOlder(channel, page.older_before_id);
+        if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - before);
+        olderLink.textContent = label;
+      } catch (err) {
+        olderLink.textContent = "Could not load (" + err.message + "); try again";
+      } finally {
+        delete olderLink.dataset.loading;
+      }
+    });
   }
   function fade(li) { setTimeout(() => li.classList.remove("new"), 1500); }
 

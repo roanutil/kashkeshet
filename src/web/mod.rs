@@ -27,6 +27,7 @@ pub use source::{
 use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
 use crate::hosts::AllowedHosts;
 use askama::Template;
+use axum::Json;
 use axum::Router;
 use axum::extract::{FromRef, Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -36,7 +37,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use change::{Change, NoFields};
 use futures::{Stream, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -76,6 +77,7 @@ pub fn router(source: Arc<dyn Source>, hosts: AllowedHosts, gate: Arc<dyn Gate>)
     let pages = Router::new()
         .route("/", get(index))
         .route("/channels/{id}", get(channel))
+        .route("/channels/{id}/messages", get(earlier_messages))
         .route("/channels/{id}/purpose", post(set_purpose))
         .route("/channels/{id}/visibility", post(set_visibility))
         .route("/channels/{id}/members/add", post(add_member))
@@ -198,6 +200,43 @@ struct ErrorPage {
 #[derive(Deserialize)]
 struct ChannelParams {
     before_id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct EarlierParams {
+    before_id: i64,
+}
+
+/// A page of a channel's messages, as the channel page's "Show previous"
+/// button fetches them.
+#[derive(Serialize)]
+struct EarlierMessages {
+    /// Oldest first.
+    messages: Vec<Message>,
+    /// Set when there are earlier ones still: the `before_id` that reads them.
+    older_before_id: Option<i64>,
+}
+
+/// The messages just before `before_id`, as JSON, for the channel page to
+/// add above the ones it shows.
+async fn earlier_messages(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    Query(params): Query<EarlierParams>,
+) -> Response {
+    match pages.source.channel(id, Some(params.before_id)).await {
+        Ok(v) => Json(EarlierMessages {
+            messages: v.messages,
+            older_before_id: v.older_before_id,
+        })
+        .into_response(),
+        Err(SourceError::NotFound(message)) => (StatusCode::NOT_FOUND, message).into_response(),
+        Err(SourceError::Invalid(message)) => (StatusCode::BAD_REQUEST, message).into_response(),
+        Err(SourceError::Failed(message)) => {
+            tracing::error!(error = %message, "could not read earlier messages");
+            (StatusCode::INTERNAL_SERVER_ERROR, message).into_response()
+        }
+    }
 }
 
 async fn index(State(pages): State<Pages>, headers: HeaderMap) -> Response {

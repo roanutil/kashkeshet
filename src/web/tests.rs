@@ -228,6 +228,81 @@ async fn handoff_works_in_the_preview() {
     handoff_works(preview(1, clock, &Shutdown::new())).await;
 }
 
+/// What every source must do for "Show previous": from the first page of the
+/// busiest channel, the earlier pages read back every message once, oldest
+/// first, a page at a time, until there are no more.
+async fn earlier_pages_work(source: Arc<dyn Source>) -> usize {
+    let overview = source.overview().await.expect("overview");
+    let busiest = overview
+        .channels
+        .iter()
+        .max_by_key(|c| c.message_count)
+        .expect("a channel");
+    let id = busiest.channel.id.clone();
+    let site = site(source.clone());
+    let first = source.channel(id.clone(), None).await.expect("first page");
+    let (_, page) = get(&site, &format!("/channels/{id}")).await;
+    let before = first.older_before_id.expect("earlier messages to load");
+    assert!(page.contains(&format!(r#"data-before="{before}""#)));
+    assert!(page.contains(&format!(
+        "Show previous {} messages",
+        source.page_messages()
+    )));
+
+    let mut ids: Vec<i64> = first.messages.iter().map(|m| m.id).collect();
+    let mut next = Some(before);
+    let mut pages = 1;
+    while let Some(before) = next {
+        let (status, body) = get(
+            &site,
+            &format!("/channels/{id}/messages?before_id={before}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let json: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        let page: Vec<i64> = json["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["id"].as_i64().expect("id"))
+            .collect();
+        assert!(!page.is_empty() && page.len() <= source.page_messages());
+        assert!(page.iter().all(|&m| m < before), "only earlier messages");
+        ids.splice(0..0, page);
+        next = json["older_before_id"].as_i64();
+        pages += 1;
+    }
+    let mut sorted = ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(ids, sorted, "oldest first, each once");
+    assert_eq!(ids.len() as i64, busiest.message_count, "every message");
+
+    let (status, _) = get(&site, "/channels/ch_missing0/messages?before_id=1").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = get(&site, &format!("/channels/{id}/messages")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "before_id is required");
+    pages
+}
+
+#[tokio::test]
+async fn earlier_pages_work_through_the_rules() {
+    let limits = Limits {
+        web_page_messages: 2,
+        ..Limits::DEFAULT
+    };
+    let (_, source) = rules_world_with(limits).await;
+    assert!(earlier_pages_work(source).await >= 2);
+}
+
+#[tokio::test]
+async fn the_preview_has_a_channel_long_enough_to_page_back_through() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    let source = preview(1, clock, &Shutdown::new());
+    assert_eq!(source.page_messages(), Limits::DEFAULT.web_page_messages);
+    assert!(earlier_pages_work(source).await >= 3, "several pages back");
+}
+
 #[tokio::test]
 async fn changes_work_through_the_rules() {
     changes_work(rules_source().await).await;
@@ -335,6 +410,10 @@ async fn rules_source() -> Arc<dyn Source> {
 
 /// The rules behind `rules_source`, too, for checking what a change did.
 async fn rules_world() -> (Rules, Arc<dyn Source>) {
+    rules_world_with(Limits::DEFAULT).await
+}
+
+async fn rules_world_with(limits: Limits) -> (Rules, Arc<dyn Source>) {
     let db = Db::open_in_memory().expect("db");
     let run_id = db
         .write(|w| {
@@ -354,10 +433,10 @@ async fn rules_world() -> (Rules, Arc<dyn Source>) {
         events: Events::new(),
         clock: Arc::new(FixedClock::new(start_time())),
         entropy: Arc::new(SeqEntropy::new(4)),
-        sends: SendLimiter::new(Limits::DEFAULT.sends_per_minute),
-        registrations: RegisterLimiter::new(Limits::DEFAULT.registrations_per_minute),
+        sends: SendLimiter::new(limits.sends_per_minute),
+        registrations: RegisterLimiter::new(limits.registrations_per_minute),
         run_id,
-        limits: Limits::DEFAULT,
+        limits,
     });
     let mut agents = Vec::new();
     for _ in 0..2 {
@@ -442,7 +521,9 @@ async fn the_show_older_link_appears_only_when_older_messages_exist() {
             Some(before) => {
                 seen_paged = true;
                 assert!(
-                    page.contains(&format!("?before_id={before}\">Show older")),
+                    page.contains(&format!(
+                        "?before_id={before}\" data-before=\"{before}\">Show previous"
+                    )),
                     "{}",
                     c.name
                 );
