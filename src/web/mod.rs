@@ -20,8 +20,9 @@ pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
     ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel, Overview, ServerRun,
-    SignIn, Source, SourceError,
+    ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel,
+    OperatorInstructionsVersion, OperatorInstructionsView, Overview, ServerRun, SignIn, Source,
+    SourceError,
 };
 
 use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};

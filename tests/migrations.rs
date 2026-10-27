@@ -261,7 +261,7 @@ async fn existing_channels_gain_an_empty_note_and_edits_survive_reopening() {
 }
 
 #[tokio::test]
-async fn instruction_versions_survive_reopen_and_reject_update_or_delete() {
+async fn instruction_versions_survive_reopen_and_reject_mutation() {
     let dir = temp_dir("instructions");
     let path = dir.join("old.db");
     make_v1(&path);
@@ -299,6 +299,7 @@ async fn instruction_versions_survive_reopen_and_reject_update_or_delete() {
         conn.execute("UPDATE operator_instructions SET text = 'changed'", [])
             .is_err()
     );
+    assert!(conn.execute("INSERT OR REPLACE INTO operator_instructions (version, text, saved_at, run_id) SELECT version, 'replaced', saved_at, run_id FROM operator_instructions", []).is_err());
     assert!(
         conn.execute("DELETE FROM operator_instructions", [])
             .is_err()
