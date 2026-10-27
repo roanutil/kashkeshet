@@ -65,11 +65,10 @@ impl ChatServer {
         self.rules.limits().limit(requested)
     }
 
-    fn body_chars(&self, requested: Option<u32>) -> usize {
-        match requested {
-            Some(n) => (n as usize).max(1),
-            None => self.rules.limits().max_body_chars,
-        }
+    /// The body cut an agent asked for; with none, bodies are cut only to fit
+    /// the response cap.
+    fn body_chars(requested: Option<u32>) -> Option<usize> {
+        requested.map(|n| (n as usize).max(1))
     }
 }
 
@@ -257,7 +256,7 @@ pub struct ReadParams {
     pub from_agent: Option<String>,
     /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
-    /// Cut bodies longer than this many characters (default {max_body_chars}).
+    /// Cut bodies longer than this many characters. Default: no cut beyond the response size limit.
     pub max_body_chars: Option<u32>,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
@@ -311,7 +310,7 @@ pub struct WaitParams {
     pub timeout_s: Option<u32>,
     /// How many to return (default {default_limit}, up to {max_limit}).
     pub limit: Option<u32>,
-    /// Cut bodies longer than this many characters (default {max_body_chars}).
+    /// Cut bodies longer than this many characters. Default: no cut beyond the response size limit.
     pub max_body_chars: Option<u32>,
     /// `text` (default) or `json`.
     pub format: Option<Format>,
@@ -339,7 +338,6 @@ fn describe(text: &str, limits: &Limits) -> String {
     let values = [
         ("{default_limit}", limits.default_limit.to_string()),
         ("{max_limit}", limits.max_limit.to_string()),
-        ("{max_body_chars}", limits.max_body_chars.to_string()),
         ("{max_body_size}", size(limits.max_body_bytes)),
         (
             "{max_channel_name_chars}",
@@ -672,7 +670,7 @@ impl ChatServer {
             let page = self.rules.read(&me, q).await?;
             Ok(self
                 .fmt
-                .read(f, &page, position, self.body_chars(p.max_body_chars)))
+                .read(f, &page, position, Self::body_chars(p.max_body_chars)))
         }
         .await;
         self.respond(f, out)
@@ -750,7 +748,7 @@ impl ChatServer {
             let result = self.rules.wait_for_messages(&me, q).await?;
             Ok(self
                 .fmt
-                .waited(f, &result, self.body_chars(p.max_body_chars)))
+                .waited(f, &result, Self::body_chars(p.max_body_chars)))
         }
         .await;
         self.respond(f, out)
@@ -778,7 +776,6 @@ mod tests {
         Limits {
             default_limit: 7,
             max_limit: 42,
-            max_body_chars: 99,
             max_body_bytes: 3000,
             max_channel_name_chars: 33,
             max_purpose_chars: 77,
@@ -791,12 +788,12 @@ mod tests {
 
     #[test]
     fn describe_fills_every_placeholder() {
-        let text = "{default_limit} {max_limit} {max_body_chars} {max_body_size} \
+        let text = "{default_limit} {max_limit} {max_body_size} \
             {max_channel_name_chars} {max_purpose_chars} {max_description_chars} \
             {default_wait_s} {max_wait_s}";
         assert_eq!(
             describe(text, &odd_limits()),
-            "7 42 99 3000 bytes 33 77 55 5 9"
+            "7 42 3000 bytes 33 77 55 5 9"
         );
     }
 

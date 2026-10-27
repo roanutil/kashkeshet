@@ -326,8 +326,6 @@ pub struct Limits {
     pub default_limit: usize,
     /// Largest `limit` an agent may ask for.
     pub max_limit: usize,
-    /// Message bodies longer than this many characters are cut in listings.
-    pub max_body_chars: usize,
     /// Largest message body, in bytes.
     pub max_body_bytes: usize,
     /// Longest channel name, in characters.
@@ -367,7 +365,6 @@ impl Limits {
         max_response_bytes: 8 * 1024,
         default_limit: 20,
         max_limit: 100,
-        max_body_chars: 500,
         max_body_bytes: 8 * 1024,
         max_channel_name_chars: 64,
         max_purpose_chars: 500,
@@ -391,7 +388,6 @@ impl Limits {
     pub fn check(&self) -> Result<(), InvalidSetting> {
         let at_least_one = [
             ("default_limit", self.default_limit),
-            ("max_body_chars", self.max_body_chars),
             ("max_body_bytes", self.max_body_bytes),
             ("max_channel_name_chars", self.max_channel_name_chars),
             ("max_purpose_chars", self.max_purpose_chars),
@@ -548,9 +544,8 @@ mod tests {
     #[test]
     fn zero_is_refused_for_every_count() {
         type SetZero = fn(&mut Limits);
-        let cases: [(&str, SetZero); 11] = [
+        let cases: [(&str, SetZero); 10] = [
             ("default_limit", |l| l.default_limit = 0),
-            ("max_body_chars", |l| l.max_body_chars = 0),
             ("max_body_bytes", |l| l.max_body_bytes = 0),
             ("max_channel_name_chars", |l| l.max_channel_name_chars = 0),
             ("max_purpose_chars", |l| l.max_purpose_chars = 0),

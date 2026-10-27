@@ -39,7 +39,6 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
             }
             "default_limit" => options.default_limit = Some(value.count("default_limit")?),
             "max_limit" => options.max_limit = Some(value.count("max_limit")?),
-            "max_body_chars" => options.max_body_chars = Some(value.count("max_body_chars")?),
             "sends_per_minute" => options.sends_per_minute = Some(value.count("sends_per_minute")?),
             "allow_origins" => options.allow_origins = Some(value.strings("allow_origins")?),
             "allow_hosts" => options.allow_hosts = Some(value.strings("allow_hosts")?),
@@ -172,7 +171,6 @@ mod tests {
             max_response_bytes = 4096
             default_limit = 10
             max_limit = 40
-            max_body_chars = 300
             sends_per_minute = 5
             allow_origins = ["http://localhost:6274"]
             allow_hosts = ["host.docker.internal", "box.ts.net"]
@@ -193,7 +191,6 @@ mod tests {
                 max_response_bytes: Some(4096),
                 default_limit: Some(10),
                 max_limit: Some(40),
-                max_body_chars: Some(300),
                 sends_per_minute: Some(5),
                 allow_origins: Some(vec!["http://localhost:6274".into()]),
                 allow_hosts: Some(vec!["host.docker.internal".into(), "box.ts.net".into()]),

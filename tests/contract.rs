@@ -57,7 +57,6 @@ async fn descriptions_state_the_live_limits() {
     config.limits = Limits {
         default_limit: 7,
         max_limit: 42,
-        max_body_chars: 99,
         max_body_bytes: 3000,
         max_channel_name_chars: 33,
         max_purpose_chars: 77,
@@ -84,7 +83,7 @@ async fn descriptions_state_the_live_limits() {
     );
     assert_eq!(
         param("read", "max_body_chars"),
-        "Cut bodies longer than this many characters (default 99)."
+        "Cut bodies longer than this many characters. Default: no cut beyond the response size limit."
     );
     assert_eq!(
         param("set_note", "text"),

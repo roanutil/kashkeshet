@@ -4,7 +4,7 @@ use super::fit::{cut_body, cut_bytes, short_time};
 use super::*;
 use crate::clock::testing::FixedClock;
 use crate::config::Limits;
-use crate::rules::{AgentInfo, Members, Message, MessagePage, Page, Position};
+use crate::rules::{AgentInfo, Members, Message, MessagePage, Page, Position, WaitResult};
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
 
@@ -34,7 +34,7 @@ fn text_messages_look_like_the_plan() {
         ],
         more: Some(Position::Before(1201)),
     };
-    let out = formatter(8192).read(Format::Text, &page, Position::Latest, 500);
+    let out = formatter(8192).read(Format::Text, &page, Position::Latest, Some(500));
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "#general [ch_7k2m9q4x]");
     assert_eq!(
@@ -52,7 +52,7 @@ fn size_cap_keeps_newest_and_points_back() {
         messages: msgs,
         more: None,
     };
-    let out = formatter(2000).read(Format::Text, &page, Position::Latest, 500);
+    let out = formatter(2000).read(Format::Text, &page, Position::Latest, None);
     assert!(out.len() <= 2000);
     let first_id: i64 = out.lines().nth(1).unwrap()[1..]
         .split(' ')
@@ -71,7 +71,7 @@ fn size_cap_keeps_oldest_when_reading_forward() {
         messages: msgs,
         more: None,
     };
-    let out = formatter(2000).read(Format::Json, &page, Position::After(0), 500);
+    let out = formatter(2000).read(Format::Json, &page, Position::After(0), None);
     assert!(out.len() <= 2000);
     let v: Value = serde_json::from_str(&out).unwrap();
     let shown = v["messages"].as_array().unwrap();
@@ -81,14 +81,47 @@ fn size_cap_keeps_oldest_when_reading_forward() {
 }
 
 #[test]
-fn a_message_too_big_for_any_response_points_to_get_message() {
+fn a_message_too_big_for_the_cap_is_shortened_to_fit() {
     let page = MessagePage {
         messages: vec![msg(9, &"z".repeat(5000))],
         more: None,
     };
-    let out = formatter(1000).read(Format::Text, &page, Position::Latest, 8000);
-    assert!(out.len() <= 1000);
-    assert!(out.contains("get_message 9"));
+    for requested in [None, Some(4000)] {
+        let out = formatter(1000).read(Format::Text, &page, Position::Latest, requested);
+        assert!(out.len() <= 1000);
+        assert!(out.contains("zzzzzzzzzz"));
+        assert!(out.contains("(cut; get_message 9)"));
+        let out = formatter(1000).read(Format::Json, &page, Position::Latest, requested);
+        assert!(out.len() <= 1000);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["messages"][0]["id"], 9);
+        assert_eq!(v["messages"][0]["cut"], true);
+    }
+}
+
+#[test]
+fn a_waited_message_too_big_for_the_cap_is_shortened_to_fit() {
+    let waited = WaitResult {
+        messages: vec![msg(9, &"z".repeat(5000)), msg(10, "next")],
+        more_waiting: 0,
+    };
+    for f in [Format::Text, Format::Json] {
+        let out = formatter(1000).waited(f, &waited, None);
+        assert!(out.len() <= 1000);
+        assert!(out.contains("zzzzzzzzzz"));
+        assert!(out.contains("after_id=9"));
+    }
+}
+
+#[test]
+fn an_explicit_body_cut_wins_when_it_is_shorter_than_the_cap_allows() {
+    let page = MessagePage {
+        messages: vec![msg(9, &"z".repeat(5000))],
+        more: None,
+    };
+    let out = formatter(1000).read(Format::Text, &page, Position::Latest, Some(10));
+    assert!(out.contains("zzzzzzzzzz…  (cut; get_message 9)"));
+    assert!(!out.contains("zzzzzzzzzzz"));
 }
 
 #[test]
@@ -262,8 +295,35 @@ fn short_times() {
 
 #[test]
 fn cut_counts_characters() {
-    assert_eq!(cut_body("héllo", 2), ("hé…".to_string(), true));
-    assert_eq!(cut_body("hi", 2), ("hi".to_string(), false));
+    assert_eq!(cut_body("héllo", Some(2)), ("hé…".to_string(), true));
+    assert_eq!(cut_body("hi", Some(2)), ("hi".to_string(), false));
+}
+
+#[test]
+fn bodies_are_whole_when_the_response_fits() {
+    let body = "x".repeat(3000);
+    let page = MessagePage {
+        messages: vec![msg(5, &body)],
+        more: None,
+    };
+    let out = formatter(8192).read(Format::Text, &page, Position::Latest, None);
+    assert!(out.contains(&body));
+    assert!(!out.contains("(cut;"));
+}
+
+#[test]
+fn a_requested_body_cut_still_applies() {
+    let page = MessagePage {
+        messages: vec![msg(5, &"x".repeat(3000))],
+        more: None,
+    };
+    let out = formatter(8192).read(Format::Text, &page, Position::Latest, Some(10));
+    assert!(out.contains("xxxxxxxxxx…  (cut; get_message 5)"));
+}
+
+#[test]
+fn cut_body_with_no_limit_is_whole() {
+    assert_eq!(cut_body("hello", None), ("hello".to_string(), false));
 }
 
 #[test]

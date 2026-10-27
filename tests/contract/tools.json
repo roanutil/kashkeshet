@@ -689,7 +689,7 @@
           ]
         },
         "max_body_chars": {
-          "description": "Cut bodies longer than this many characters (default 500).",
+          "description": "Cut bodies longer than this many characters. Default: no cut beyond the response size limit.",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -1119,7 +1119,7 @@
           ]
         },
         "max_body_chars": {
-          "description": "Cut bodies longer than this many characters (default 500).",
+          "description": "Cut bodies longer than this many characters. Default: no cut beyond the response size limit.",
           "format": "uint32",
           "minimum": 0,
           "type": [

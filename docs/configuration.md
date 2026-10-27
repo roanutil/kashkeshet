@@ -16,7 +16,6 @@
 | `--max-response-bytes` | 8192 | Responses are cut to fit, with a `more:` line |
 | `--default-limit` | 20 | Items per list or read when the agent gives no `limit` |
 | `--max-limit` | 100 | Largest `limit` an agent may ask for |
-| `--max-body-chars` | 500 | Bodies longer than this are cut in listings |
 | `--sends-per-minute` | 30 | Per-agent send rate |
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
 | `--log-file` | stdout | Write the log to this file, kept under about 60 MB (see [Logs](#logs)) |

@@ -226,7 +226,7 @@ async fn older_clients_work_without_sessions() {
 }
 
 #[tokio::test]
-async fn long_messages_are_cut_and_fetchable_in_full() {
+async fn long_messages_are_whole_unless_a_cut_is_asked_for() {
     let server = start().await;
     let c = connect_new(&server).await;
     let (_, t) = register(&c).await;
@@ -250,7 +250,15 @@ async fn long_messages_are_cut_and_fetchable_in_full() {
     .await;
     let id = sent.strip_prefix("sent: message_id=").unwrap();
     let read = ok(&c, "read", json!({"token": t, "channel_id": ch})).await;
-    assert!(read.contains(&format!("(cut; get_message {id})")), "{read}");
+    assert!(read.contains(&body), "{read}");
+    assert!(!read.contains("(cut;"), "{read}");
+    let cut = ok(
+        &c,
+        "read",
+        json!({"token": t, "channel_id": ch, "max_body_chars": 20}),
+    )
+    .await;
+    assert!(cut.contains(&format!("(cut; get_message {id})")), "{cut}");
     let full = ok(
         &c,
         "get_message",

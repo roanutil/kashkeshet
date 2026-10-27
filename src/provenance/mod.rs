@@ -99,7 +99,6 @@ pub fn settings_text(
         max_response_bytes,
         default_limit,
         max_limit,
-        max_body_chars,
         max_body_bytes,
         max_channel_name_chars,
         max_purpose_chars,
@@ -120,7 +119,6 @@ pub fn settings_text(
         format!("max_response_bytes={max_response_bytes}"),
         format!("default_limit={default_limit}"),
         format!("max_limit={max_limit}"),
-        format!("max_body_chars={max_body_chars}"),
         format!("max_body_bytes={max_body_bytes}"),
         format!("max_channel_name_chars={max_channel_name_chars}"),
         format!("max_purpose_chars={max_purpose_chars}"),
@@ -245,7 +243,6 @@ mod tests {
             "max_response_bytes=8192\n\
              default_limit=20\n\
              max_limit=100\n\
-             max_body_chars=500\n\
              max_body_bytes=8192\n\
              max_channel_name_chars=64\n\
              max_purpose_chars=500\n\
