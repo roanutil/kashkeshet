@@ -19,6 +19,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0006_agent_descriptions.sql"),
     include_str!("../../migrations/0007_channel_notes.sql"),
     include_str!("../../migrations/0008_operator_messages.sql"),
+    include_str!("../../migrations/0009_handoff_notes.sql"),
     include_str!("../../migrations/0010_hidden_entries.sql"),
 ];
 
@@ -245,6 +246,22 @@ impl Reads for Sql<'_> {
                 &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE name = ? AND recovery_hash = ? AND hidden = 0"),
                 rusqlite::params![name, hash],
                 agent_from_row,
+            )
+            .optional()?)
+    }
+
+    fn handoff_note(&self, name: &str) -> StoreResult<Option<HandoffNoteRecord>> {
+        Ok(self
+            .0
+            .query_row(
+                "SELECT handoff_note, handoff_note_set_at FROM agents WHERE name = ?",
+                [name],
+                |r| {
+                    Ok(HandoffNoteRecord {
+                        text: r.get(0)?,
+                        set_at: r.get(1)?,
+                    })
+                },
             )
             .optional()?)
     }
@@ -711,6 +728,22 @@ impl Writes for Sql<'_> {
         self.0.execute(
             "UPDATE agents SET token_hash = ? WHERE name = ?",
             rusqlite::params![hash, name],
+        )?;
+        Ok(())
+    }
+
+    fn set_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET recovery_hash = ? WHERE name = ?",
+            rusqlite::params![hash, name],
+        )?;
+        Ok(())
+    }
+
+    fn set_handoff_note(&self, name: &str, text: &str, at: &str) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET handoff_note = ?, handoff_note_set_at = ? WHERE name = ?",
+            [text, at, name],
         )?;
         Ok(())
     }

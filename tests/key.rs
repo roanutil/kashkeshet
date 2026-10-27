@@ -169,7 +169,7 @@ async fn the_server_accepts_a_created_key() {
 
 #[tokio::test]
 async fn show_prints_only_the_key() {
-    let home = temp_home("show");
+    let home = temp_home("show-only");
     let path = home.join("key");
     let key = "k".repeat(40);
     std::fs::write(&path, format!("{key}\n")).expect("write key");

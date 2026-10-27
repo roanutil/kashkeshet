@@ -40,7 +40,7 @@ pub use waiting::Waiting;
 mod tests;
 
 pub use administration::ChannelChange;
-pub use agents::{Actor, Agent, AgentInfo, Reclaimed, Registration};
+pub use agents::{Actor, Agent, AgentInfo, HandoffNote, Reclaimed, Registration};
 pub use channels::{ChannelInfo, ChannelNote, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
 pub use human::ServerRunInfo;

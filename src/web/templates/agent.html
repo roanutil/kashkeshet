@@ -15,6 +15,22 @@
   <p class="muted">Hiding removes this agent from lists and channels and revokes its access. Stored messages are kept.</p>
 </details>
 {% endif %}
+<section>
+  <h2>Handoff note</h2>
+  {% if handoff_note.is_empty() %}<p class="muted">{% if handoff_note_set_at.is_some() %}Cleared{% else %}None set{% endif %}{% if let Some(at) = handoff_note_set_at %} at {{ at|when }}{% endif %}.</p>
+  {% else %}<div class="panel" style="white-space: pre-wrap; overflow-wrap: anywhere">{{ handoff_note }}</div>
+  <p class="muted">Set {% if let Some(at) = handoff_note_set_at %}at {{ at|when }}{% endif %}</p>{% endif %}
+</section>
+{% if !form_token.is_empty() %}
+<section>
+  <h2>Recovery code</h2>
+  <p class="muted">A new code lets another session take over this identity with <code>reclaim</code>. The old code stops working. The code is shown once.</p>
+  <form class="change" method="post" action="/agents/{{ agent.name|urlencode }}/recovery-code">
+    <input type="hidden" name="form_token" value="{{ form_token }}">
+    <button type="submit">Issue a new recovery code</button>
+  </form>
+</section>
+{% endif %}
 <h2>Channels ({{ channels.len() }})</h2>
 <div class="panel scroll">
 <table>

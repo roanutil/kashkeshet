@@ -60,6 +60,14 @@ pub struct ChannelFacts {
     pub open: bool,
 }
 
+/// The note an agent keeps for whoever next holds its identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HandoffNoteRecord {
+    pub text: String,
+    /// When it was last set, also when cleared. `None` if never.
+    pub set_at: Option<String>,
+}
+
 /// A pinned channel note, including the most recent edit (also when cleared).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelNoteRecord {
@@ -246,6 +254,9 @@ pub trait Reads {
     /// Looks up an agent by both its name and hashed recovery code.
     fn agent_by_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<Option<AgentRecord>>;
 
+    /// The agent's handoff note, or `None` if there is no such agent.
+    fn handoff_note(&self, name: &str) -> StoreResult<Option<HandoffNoteRecord>>;
+
     /// Up to `limit` agents in name order, after `after_name` if given, whose
     /// names contain `text` if given.
     fn agents(
@@ -353,6 +364,12 @@ pub trait Writes: Reads {
 
     /// Replaces the authentication token, preserving the agent's identity.
     fn set_token_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()>;
+
+    /// Replaces the hashed recovery code; the old code stops working.
+    fn set_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()>;
+
+    /// Replaces the agent's handoff note, set at `at`. Empty text clears it.
+    fn set_handoff_note(&self, name: &str, text: &str, at: &str) -> StoreResult<()>;
 
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()>;
 

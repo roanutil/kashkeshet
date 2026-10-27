@@ -2219,6 +2219,10 @@ async fn hiding_an_agent_revokes_it_announces_each_membership_and_keeps_its_name
         code(w.rules.agent_view(a.name.clone()).await),
         Code::NotFound
     );
+    assert_eq!(
+        code(w.rules.new_recovery_code(a.name.clone()).await),
+        Code::NotFound
+    );
     assert!(
         !w.rules
             .list_agents(&b, None, 100, None)
@@ -2326,4 +2330,105 @@ async fn a_hidden_channel_id_is_skipped_when_entropy_draws_it_again() {
     assert_ne!(first, second);
     assert_eq!(first, "ch_aaaaaaaa");
     assert_eq!(second, "ch_bbbbbbbb");
+}
+
+// ---- Handoff: notes and new recovery codes ----
+
+#[tokio::test]
+async fn a_handoff_note_is_set_read_back_and_cleared_by_its_identity() {
+    let w = world().await;
+    let (a, b) = (w.agent().await, w.agent().await);
+    let fresh = w.rules.handoff_note(&a).await.unwrap();
+    assert_eq!((fresh.text.as_str(), fresh.set_at), ("", None));
+
+    let set = w
+        .rules
+        .set_handoff_note(&a, "  Next: the parser.\n".into())
+        .await
+        .unwrap();
+    // Kept exactly as written; kkt doesn't define what goes in it.
+    assert_eq!(set.text, "  Next: the parser.\n");
+    assert_eq!(set.set_at, Some(w.rules.now_text()));
+    assert_eq!(w.rules.handoff_note(&a).await.unwrap(), set);
+    // Each identity reads only its own.
+    assert_eq!(w.rules.handoff_note(&b).await.unwrap().text, "");
+    // The human sees it on the agent's page.
+    let view = w.rules.agent_view(a.name.clone()).await.unwrap();
+    assert_eq!(view.handoff_note, set);
+
+    w.clock.advance(chrono::Duration::seconds(30));
+    let cleared = w.rules.set_handoff_note(&a, String::new()).await.unwrap();
+    assert_eq!(cleared.text, "");
+    assert_eq!(
+        cleared.set_at,
+        Some(w.rules.now_text()),
+        "clearing is recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_handoff_note_over_its_cap_is_refused_and_the_old_one_kept() {
+    let limits = Limits {
+        max_handoff_note_chars: 5,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let a = w.agent().await;
+    w.rules.set_handoff_note(&a, "héllo".into()).await.unwrap();
+    assert_eq!(
+        code(w.rules.set_handoff_note(&a, "héllo!".into()).await),
+        Code::InvalidArgument
+    );
+    assert_eq!(w.rules.handoff_note(&a).await.unwrap().text, "héllo");
+}
+
+#[tokio::test]
+async fn a_new_recovery_code_replaces_the_old_and_hands_over_the_identity() {
+    let w = world().await;
+    let reg = w.rules.register().await.unwrap();
+    let me = w.rules.authenticate(Some(&reg.token)).await.unwrap();
+    w.rules
+        .set_handoff_note(&me, "state for my successor".into())
+        .await
+        .unwrap();
+
+    let code_ = w.rules.new_recovery_code(reg.name.clone()).await.unwrap();
+    assert_ne!(code_, reg.recovery_code);
+    // The old code stops working; the current session keeps going.
+    assert_eq!(
+        code(
+            w.rules
+                .reclaim(reg.name.clone(), reg.recovery_code.clone())
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    w.rules.authenticate(Some(&reg.token)).await.unwrap();
+
+    // The new session takes over with the new code and reads the note.
+    let taken = w.rules.reclaim(reg.name.clone(), code_).await.unwrap();
+    assert_eq!(
+        code(w.rules.authenticate(Some(&reg.token)).await),
+        Code::Unauthenticated
+    );
+    let successor = w.rules.authenticate(Some(&taken.token)).await.unwrap();
+    assert_eq!(
+        w.rules.handoff_note(&successor).await.unwrap().text,
+        "state for my successor"
+    );
+}
+
+#[tokio::test]
+async fn no_recovery_code_for_a_missing_or_revoked_agent() {
+    let w = world().await;
+    let a = w.agent().await;
+    assert_eq!(
+        code(w.rules.new_recovery_code("nobody-here".into()).await),
+        Code::NotFound
+    );
+    w.operator.revoke(a.name.clone()).await.unwrap();
+    assert_eq!(
+        code(w.rules.new_recovery_code(a.name.clone()).await),
+        Code::InvalidArgument
+    );
 }
