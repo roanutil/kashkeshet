@@ -8,7 +8,8 @@ use super::source::{
     ChannelView, Gate, LiveEvent, Message, Overview, ServerRun, SignIn, Source, SourceError,
 };
 use crate::admission::{self, Credentials, Decision, WebAdmission};
-use crate::rules::{self, AgentInfo, ChannelInfo, Code, RuleError, Rules, ServerRunInfo};
+use crate::names;
+use crate::rules::{self, Actor, AgentInfo, ChannelInfo, Code, RuleError, Rules, ServerRunInfo};
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -37,6 +38,7 @@ impl Source for RulesSource {
                         channel: channel(c.info),
                         message_count: c.message_count,
                         last_message_at: c.last_message_at,
+                        last_from_operator: c.last_speaker.as_deref() == Some(names::OPERATOR),
                         last_speaker: c.last_speaker,
                         recent_activity: c
                             .recent_activity
@@ -100,6 +102,20 @@ impl Source for RulesSource {
         })
     }
 
+    fn set_purpose(
+        &self,
+        channel_id: String,
+        purpose: String,
+    ) -> BoxFuture<'_, Result<(), SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .set_purpose(Actor::Human, channel_id, purpose)
+                .await
+                .map(|_| ())
+                .map_err(source_error)
+        })
+    }
+
     fn live(&self) -> BoxStream<'static, LiveEvent> {
         self.rules
             .events()
@@ -141,6 +157,14 @@ impl Gate for WebAdmission {
 
     fn sign_out(&self, session_id: &str) {
         WebAdmission::sign_out(self, session_id)
+    }
+
+    fn form_token(&self, session_id: Option<&str>) -> Option<String> {
+        WebAdmission::form_token(self, session_id)
+    }
+
+    fn form_token_matches(&self, session_id: Option<&str>, presented: &str) -> bool {
+        WebAdmission::form_token_matches(self, session_id, presented)
     }
 }
 
@@ -184,6 +208,7 @@ fn message(m: rules::Message) -> Message {
         id: m.id,
         channel_id: m.channel_id,
         channel_name: m.channel_name,
+        from_operator: m.agent == names::OPERATOR,
         agent: m.agent,
         body: m.body,
         created_at: m.created_at,

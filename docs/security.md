@@ -39,6 +39,13 @@ the cookie and the login form keeps coming back.
 
 The login and logout forms are refused when sent from another site.
 
+Every web request that changes something, logging out included, is a form
+`POST` that must also carry a form token from the page. Another site can
+make your browser send a form, but cannot read the page to learn the token.
+With the access key on, each session has its own token. With
+`--no-access-key` there are no sessions, so the server uses one token per
+run; restarting it changes the token, and an open page needs a reload.
+
 ## Host and Origin checks
 
 The server refuses any request, to `/mcp` or the web page, whose `Host`

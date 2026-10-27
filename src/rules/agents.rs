@@ -176,6 +176,20 @@ fn clean_description(text: &str, max_chars: usize) -> Result<Option<String>> {
     Ok(Some(text.to_string()))
 }
 
+/// Who makes a change: an agent, or the human operator through the web
+/// page. Both go through the same rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Actor {
+    Agent(Agent),
+    Human,
+}
+
+impl From<&Agent> for Actor {
+    fn from(agent: &Agent) -> Actor {
+        Actor::Agent(agent.clone())
+    }
+}
+
 /// An agent that has proven who it is on this call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Agent {

@@ -108,6 +108,12 @@ impl Site {
         self.server.base.clone()
     }
 
+    /// The form token on the front page, as the viewer with `cookie` sees it.
+    async fn form_token(&self, cookie: Option<&str>) -> String {
+        let page = self.get("/", cookie).await.text().await.expect("page");
+        form_token_in(&page).expect("a form token on the page")
+    }
+
     /// Logs in with the right key and returns the cookie to send back.
     async fn log_in(&self) -> String {
         let response = self
@@ -123,6 +129,12 @@ impl Site {
         let set = header(&response, "set-cookie").expect("set-cookie");
         set.split(';').next().expect("name=value").to_string()
     }
+}
+
+/// The value of the first `form_token` field in `page`.
+fn form_token_in(page: &str) -> Option<String> {
+    let (_, rest) = page.split_once(r#"name="form_token" value=""#)?;
+    rest.split_once('"').map(|(token, _)| token.to_string())
 }
 
 fn header<'a>(response: &'a reqwest::Response, name: &str) -> Option<&'a str> {
@@ -231,14 +243,92 @@ async fn a_session_expires() {
 async fn logging_out_ends_the_session() {
     let site = start_keyed().await;
     let cookie = site.log_in().await;
+    // Without the page's form token, a live session is not ended.
     let response = site
         .post_form("/logout", "", Some(&cookie), Some(&site.own_origin()))
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(site.get("/", Some(&cookie)).await.status(), StatusCode::OK);
+
+    let token = site.form_token(Some(&cookie)).await;
+    let response = site
+        .post_form(
+            "/logout",
+            &format!("form_token={token}"),
+            Some(&cookie),
+            Some(&site.own_origin()),
+        )
         .await;
     assert_sent_to_login(&response);
     let cleared = header(&response, "set-cookie").expect("set-cookie");
     assert!(cleared.starts_with("kkt_session=;"), "{cleared}");
     assert!(cleared.contains("Max-Age=0"), "{cleared}");
     assert_sent_to_login(&site.get("/", Some(&cookie)).await);
+}
+
+#[tokio::test]
+async fn changes_need_the_sessions_form_token() {
+    let site = start_keyed().await;
+    let cookie = site.log_in().await;
+    let other = site.log_in().await;
+    let token = site.form_token(Some(&cookie)).await;
+    let others = site.form_token(Some(&other)).await;
+    assert_ne!(token, others, "each session has its own token");
+    let change = |body: String, cookie: Option<String>| {
+        let site = &site;
+        async move {
+            site.post_form(
+                "/channels/ch_missing0/purpose",
+                &body,
+                cookie.as_deref(),
+                Some(&site.own_origin()),
+            )
+            .await
+            .status()
+        }
+    };
+    // No token, a wrong one, or another session's: refused before anything
+    // is looked up.
+    for body in [
+        "purpose=x".to_string(),
+        "purpose=x&form_token=guess".to_string(),
+        format!("purpose=x&form_token={others}"),
+    ] {
+        assert_eq!(
+            change(body.clone(), Some(cookie.clone())).await,
+            StatusCode::FORBIDDEN,
+            "{body}"
+        );
+    }
+    // The right token gets through to the change, which finds no channel.
+    assert_eq!(
+        change(
+            format!("purpose=x&form_token={token}"),
+            Some(cookie.clone())
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    // Without a session, a change goes to the login form like any page.
+    let response = site
+        .post_form(
+            "/channels/ch_missing0/purpose",
+            &format!("purpose=x&form_token={token}"),
+            None,
+            Some(&site.own_origin()),
+        )
+        .await;
+    assert_sent_to_login(&response);
+    // A form from another site is refused even with the token.
+    let response = site
+        .post_form(
+            "/channels/ch_missing0/purpose",
+            &format!("purpose=x&form_token={token}"),
+            Some(&cookie),
+            Some("http://evil.example"),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -339,12 +429,15 @@ async fn cookies_are_secure_except_on_loopback_names() {
     assert!(set.contains("; Secure;"), "{set}");
     let cookie = set.split(';').next().expect("name=value").to_string();
 
+    let token = site.form_token(Some(&cookie)).await;
     let response = site
         .http
         .post(site.url("/logout"))
         .header("host", &host)
         .header("origin", &origin)
         .header("cookie", &cookie)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("form_token={token}"))
         .send()
         .await
         .expect("logout");

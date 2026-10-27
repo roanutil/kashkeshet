@@ -18,6 +18,10 @@
 //! To anyone outside a closed channel, it does not exist: every call answers
 //! `not_found`. Outside an open channel, calls that need membership answer
 //! `not_member`.
+//!
+//! The human, through the web page, sees every channel and may change any
+//! of them as a member could ([`Actor::Human`]). Each change the human
+//! makes to a channel is announced in it by a message from the operator.
 
 mod access;
 mod agents;
@@ -34,7 +38,7 @@ pub use waiting::Waiting;
 #[cfg(test)]
 mod tests;
 
-pub use agents::{Agent, AgentInfo, Reclaimed, Registration};
+pub use agents::{Actor, Agent, AgentInfo, Reclaimed, Registration};
 pub use channels::{ChannelInfo, ChannelNote, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
 pub use human::ServerRunInfo;
@@ -52,9 +56,9 @@ use crate::names::{self, Entropy};
 use crate::store::{
     ActivityRecord, AgentRecord, ChannelFacts, ChannelFilter, ChannelUseRecord, Db, MessageRange,
     MessageRecord, NewAgentRecord, NewChannelRecord, NewMessageRecord, NewerFilter, Reads,
-    SearchFilter, SearchHitRecord, ServerRunRecord,
+    SearchFilter, SearchHitRecord, ServerRunRecord, Writes,
 };
-use access::{Decision, Need};
+use access::{Decision, Need, Who};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -138,9 +142,22 @@ fn channel_for(
         Some(_) => store.is_member(id, agent)?,
         None => false,
     };
+    decided(facts, Who::Agent { member }, id, need).map(|facts| (facts, member))
+}
+
+/// The channel, if `actor` may change it as a member would.
+fn changeable_channel(store: &dyn Reads, actor: &Actor, id: &str) -> Result<ChannelFacts> {
+    match actor {
+        Actor::Agent(agent) => member_channel(store, &agent.name, id),
+        Actor::Human => decided(store.channel(id)?, Who::Human, id, Need::Membership),
+    }
+}
+
+/// `facts`, if `access::decide` lets `who` use the channel for `need`.
+fn decided(facts: Option<ChannelFacts>, who: Who, id: &str, need: Need) -> Result<ChannelFacts> {
     let open = facts.as_ref().is_some_and(|f| f.open);
-    match (access::decide(facts.is_some(), open, member, need), facts) {
-        (Decision::Allowed, Some(facts)) => Ok((facts, member)),
+    match (access::decide(facts.is_some(), open, who, need), facts) {
+        (Decision::Allowed, Some(facts)) => Ok(facts),
         (Decision::NotMember, _) => Err(RuleError::not_member(id)),
         _ => Err(RuleError::channel_not_found(id)),
     }

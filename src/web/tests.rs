@@ -58,6 +58,109 @@ async fn get(site: &Router, path: &str) -> (StatusCode, String) {
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// A form post to `path`, sent from this site.
+async fn post(site: &Router, path: &str, body: &str) -> (StatusCode, Option<String>) {
+    let request = HttpRequest::builder()
+        .method("POST")
+        .uri(path)
+        .header("Host", "localhost")
+        .header("Origin", "http://localhost")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(body.to_string()))
+        .expect("request");
+    let response = site.clone().oneshot(request).await.expect("response");
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|l| l.to_str().ok())
+        .map(str::to_string);
+    (response.status(), location)
+}
+
+/// The value of the first `form_token` field in `page`.
+fn form_token_in(page: &str) -> String {
+    let (_, rest) = page
+        .split_once(r#"name="form_token" value=""#)
+        .expect("a form token");
+    rest.split_once('"').expect("closing quote").0.to_string()
+}
+
+/// What every source must do for a change: refuse it without the page's
+/// form token; with it, make it, and show the operator's message saying so.
+async fn changes_work(source: Arc<dyn Source>) {
+    let overview = source.overview().await.expect("overview");
+    let id = overview
+        .channels
+        .first()
+        .expect("a channel")
+        .channel
+        .id
+        .clone();
+    let site = site(source.clone());
+    let path = format!("/channels/{id}/purpose");
+    let (_, page) = get(&site, &format!("/channels/{id}")).await;
+    assert!(page.contains(&format!(r#"action="/channels/{id}/purpose""#)));
+    let token = form_token_in(&page);
+
+    let (status, _) = post(&site, &path, "purpose=forged").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = post(&site, &path, "purpose=forged&form_token=guess").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let view = source.channel(id.clone(), None).await.expect("view");
+    assert_ne!(view.channel.purpose.as_deref(), Some("forged"));
+
+    let (status, location) = post(
+        &site,
+        &path,
+        &format!("purpose=Release+%26+prep&form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location, Some(format!("/channels/{id}")));
+    let view = source.channel(id.clone(), None).await.expect("view");
+    assert_eq!(view.channel.purpose.as_deref(), Some("Release & prep"));
+    let said = view.messages.last().expect("the operator's message");
+    assert!(said.from_operator);
+    assert_eq!(said.agent, crate::names::OPERATOR);
+    assert_eq!(
+        said.body,
+        "The operator changed the purpose to: Release & prep"
+    );
+    // The page shows the operator by name, with no link to an agent page.
+    let (_, page) = get(&site, &format!("/channels/{id}")).await;
+    assert!(page.contains(r#"<span class="who">operator</span>"#));
+    assert!(!page.contains("/agents/operator"));
+    // So does the front page, where the operator spoke last in the channel.
+    let overview = source.overview().await.expect("overview");
+    let summary = overview
+        .channels
+        .iter()
+        .find(|c| c.channel.id == id)
+        .expect("the channel");
+    assert!(summary.last_from_operator);
+    let (_, page) = get(&site, "/").await;
+    assert!(!page.contains("/agents/operator"));
+
+    let (status, _) = post(
+        &site,
+        "/channels/ch_missing0/purpose",
+        &format!("purpose=x&form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn changes_work_through_the_rules() {
+    changes_work(rules_source().await).await;
+}
+
+#[tokio::test]
+async fn changes_work_in_the_preview() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    changes_work(preview(1, clock, &Shutdown::new())).await;
+}
+
 /// What every source must do: serve each page, page back through a
 /// channel, and answer 404 for what does not exist.
 async fn pages_work(source: Arc<dyn Source>) {

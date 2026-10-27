@@ -18,6 +18,7 @@ pub use session::Sessions;
 pub use shared_key::SharedKey;
 
 use session::Lookup;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -130,6 +131,9 @@ impl Admission {
 pub struct WebAdmission {
     admission: Arc<Admission>,
     sessions: Sessions,
+    /// The form token when no sign-in is required, so there are no
+    /// sessions to tie one to. Drawn at startup; a restart changes it.
+    open_form_token: String,
 }
 
 /// The answer to a sign-in.
@@ -147,8 +151,43 @@ impl WebAdmission {
     pub fn new(admission: Arc<Admission>, sessions: Sessions) -> WebAdmission {
         WebAdmission {
             admission,
+            open_form_token: sessions.secret(),
             sessions,
         }
+    }
+
+    /// The token a page puts in its forms, so a change can be told from a
+    /// request forged by another site, which cannot read the page. With
+    /// sign-in, it belongs to the viewer's live session (a hash of the
+    /// session ID, which only the viewer's cookie holds); `None` without one.
+    /// Without sign-in, it is one token for this server run.
+    pub fn form_token(&self, session_id: Option<&str>) -> Option<String> {
+        if !self.sign_in_required() {
+            return Some(self.open_form_token.clone());
+        }
+        let id = session_id?;
+        match self.sessions.lookup(id) {
+            Lookup::Live(_) => {
+                let digest = Sha256::digest(format!("kkt-form:{id}").as_bytes());
+                Some(digest.iter().map(|b| format!("{b:02x}")).collect())
+            }
+            Lookup::Unknown => None,
+        }
+    }
+
+    /// Whether `presented` is the form token for the viewer holding
+    /// `session_id`. Takes the same time whatever `presented` is.
+    pub fn form_token_matches(&self, session_id: Option<&str>, presented: &str) -> bool {
+        let Some(expected) = self.form_token(session_id) else {
+            return false;
+        };
+        let expected: [u8; 32] = Sha256::digest(expected.as_bytes()).into();
+        let presented: [u8; 32] = Sha256::digest(presented.as_bytes()).into();
+        let diff = expected
+            .iter()
+            .zip(presented.iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        std::hint::black_box(diff) == 0
     }
 
     /// Whether viewers must sign in. When false, `decide` admits everyone.
@@ -258,11 +297,15 @@ mod tests {
     }
 
     fn web(admission: Admission) -> (Arc<FixedClock>, WebAdmission) {
+        web_with_seed(admission, 7)
+    }
+
+    fn web_with_seed(admission: Admission, seed: u64) -> (Arc<FixedClock>, WebAdmission) {
         let start = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         let clock = Arc::new(FixedClock::new(start));
         let sessions = Sessions::new(
             clock.clone(),
-            Arc::new(SeqEntropy::new(7)),
+            Arc::new(SeqEntropy::new(seed)),
             Duration::from_secs(3600),
         );
         (clock, WebAdmission::new(Arc::new(admission), sessions))
@@ -310,6 +353,45 @@ mod tests {
             web.decide(Some("guess")),
             Decision::Refused(Refusal::SessionEnded)
         );
+    }
+
+    #[test]
+    fn form_tokens_belong_to_a_live_session() {
+        let (clock, web) = web(keyed());
+        assert_eq!(web.form_token(None), None);
+        assert_eq!(web.form_token(Some("guess")), None);
+        let id = started(web.sign_in(&Credentials::from_key(KEY)));
+        let other = started(web.sign_in(&Credentials::from_key(KEY)));
+        let token = web.form_token(Some(&id)).expect("a token");
+        assert!(
+            !token.contains(&id),
+            "the token does not reveal the session"
+        );
+        assert!(web.form_token_matches(Some(&id), &token));
+        // Another session's token, a wrong one, or none at all is refused.
+        let others = web.form_token(Some(&other)).expect("a token");
+        assert_ne!(token, others);
+        assert!(!web.form_token_matches(Some(&id), &others));
+        assert!(!web.form_token_matches(Some(&id), ""));
+        assert!(!web.form_token_matches(None, &token));
+        // It ends with its session.
+        web.sign_out(&other);
+        assert!(!web.form_token_matches(Some(&other), &others));
+        clock.advance(chrono::Duration::seconds(3600));
+        assert!(!web.form_token_matches(Some(&id), &token));
+    }
+
+    #[test]
+    fn an_open_web_page_has_one_form_token_per_run() {
+        let (_, web) = web(Admission::Open);
+        let token = web.form_token(None).expect("a token");
+        assert_eq!(token.len(), crate::config::WEB_SESSION_ID_CHARS);
+        assert_eq!(web.form_token(Some("anything")), Some(token.clone()));
+        assert!(web.form_token_matches(None, &token));
+        assert!(!web.form_token_matches(None, "wrong"));
+        assert!(!web.form_token_matches(None, ""));
+        let (_, restarted) = web_with_seed(Admission::Open, 8);
+        assert_ne!(restarted.form_token(None), Some(token));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! decisions are made by the [`Gate`]; this file only reads and writes
 //! HTTP.
 
+use super::change::{Change, NoFields};
 use super::page;
 use super::source::{Admit, Gate, SignIn};
 use crate::config::WEB_SESSION_COOKIE;
@@ -28,6 +29,9 @@ const EVENTS_PATH: &str = "/events";
 struct LoginPage {
     error: Option<String>,
     sign_out: bool,
+    /// Signing in needs no form token: there is no session yet to tie one
+    /// to. The same-origin check and the key itself guard it.
+    form_token: String,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +60,7 @@ pub async fn login_form() -> Response {
     page(LoginPage {
         error: None,
         sign_out: false,
+        form_token: String::new(),
     })
 }
 
@@ -86,19 +91,32 @@ pub async fn login(
             page(LoginPage {
                 error: Some(reason),
                 sign_out: false,
+                form_token: String::new(),
             }),
         )
             .into_response(),
     }
 }
 
-/// Ends the session, clears the cookie, and goes to the login form.
-pub async fn logout(State(gate): State<Arc<dyn Gate>>, headers: HeaderMap) -> Response {
+/// Ends the session, clears the cookie, and goes to the login form. Ending
+/// a live session is a change, so it needs the form token; a session that
+/// has already ended only has its cookie cleared.
+pub async fn logout(
+    State(gate): State<Arc<dyn Gate>>,
+    headers: HeaderMap,
+    change: Result<Change<NoFields>, Response>,
+) -> Response {
     if !same_origin(&headers) {
         return cross_site();
     }
-    if let Some(id) = session_cookie(&headers) {
-        gate.sign_out(&id);
+    let session = session_cookie(&headers);
+    if gate.admits(session.as_deref()) == Admit::Yes {
+        if let Err(refusal) = change {
+            return refusal;
+        }
+        if let Some(id) = &session {
+            gate.sign_out(id);
+        }
     }
     (
         StatusCode::SEE_OTHER,
@@ -140,7 +158,7 @@ fn secure(headers: &HeaderMap) -> bool {
 }
 
 /// The session ID from the request's cookies, if it sent one.
-fn session_cookie(headers: &HeaderMap) -> Option<String> {
+pub(super) fn session_cookie(headers: &HeaderMap) -> Option<String> {
     headers
         .get_all(COOKIE)
         .iter()
@@ -154,7 +172,7 @@ fn session_cookie(headers: &HeaderMap) -> Option<String> {
 /// Whether a form post came from this site. A browser sends `Origin` with
 /// every form post; it must name the host the request was sent to. A
 /// request without `Origin` is not from a browser form and is let through.
-fn same_origin(headers: &HeaderMap) -> bool {
+pub(super) fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(ORIGIN) else {
         return true;
     };
