@@ -420,24 +420,30 @@ fn key_show(env: &Env, path: Option<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// The name of the doctor line about the service on this machine.
+const SERVICE_CHECK: &str = "this machine's kkt service";
+
 async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
     let connection = client_connection(env, flags, false)?;
     let mut checks = diagnostics::inspect(&connection.url, connection.key_file.as_deref()).await?;
+    // This line is about the kkt service installed on this machine, whatever
+    // server `--url` points at, so the name says so.
     match Manager::for_this_os(env).and_then(|manager| manager.state(&OsSystem)) {
         Ok(state) if !state.installed => checks.push(diagnostics::Check::ok(
-            "service",
+            SERVICE_CHECK,
             "not installed; optional when running `kkt serve` in a terminal",
         )),
-        Ok(state) if state.running => {
-            checks.push(diagnostics::Check::ok("service", "installed and running"))
-        }
+        Ok(state) if state.running => checks.push(diagnostics::Check::ok(
+            SERVICE_CHECK,
+            "installed and running",
+        )),
         Ok(_) => checks.push(diagnostics::Check::problem(
-            "service",
+            SERVICE_CHECK,
             "installed but not running",
             "run `kkt service start`",
         )),
         Err(error) => checks.push(diagnostics::Check::problem(
-            "service",
+            SERVICE_CHECK,
             error.to_string(),
             "check `kkt service status` and your user service manager",
         )),
