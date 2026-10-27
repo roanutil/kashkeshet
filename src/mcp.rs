@@ -8,7 +8,10 @@ use crate::rules::{
     WaitQuery,
 };
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::model::{
+    CallToolResult, ContentBlock, DiscoverResult, Implementation, InitializeRequestParams,
+    InitializeResult, ServerCapabilities, ServerConfig,
+};
 use rmcp::{RoleServer, ServerHandler, service::RequestContext, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -43,6 +46,25 @@ impl ChatServer {
             instructions,
             tool_router: tools,
         }
+    }
+
+    async fn operator_server_info(
+        &self,
+        mut info: ServerConfig,
+    ) -> Result<ServerConfig, rmcp::ErrorData> {
+        let current = self
+            .rules
+            .current_operator_instructions()
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "could not read operator instructions");
+                rmcp::ErrorData::internal_error("could not read operator instructions", None)
+            })?;
+        info.instructions = Some(
+            self.fmt
+                .with_operator_instructions(self.instructions.as_ref(), current.as_ref()),
+        );
+        Ok(info)
     }
 
     async fn me(&self, token: &Option<String>) -> rules::Result<Agent> {
@@ -346,6 +368,10 @@ fn describe(text: &str, limits: &Limits) -> String {
         ("{max_purpose_chars}", limits.max_purpose_chars.to_string()),
         ("{max_note_chars}", limits.max_note_chars.to_string()),
         (
+            "{max_operator_instructions_chars}",
+            limits.max_operator_instructions_chars.to_string(),
+        ),
+        (
             "{max_description_chars}",
             limits.max_description_chars.to_string(),
         ),
@@ -396,7 +422,9 @@ impl ChatServer {
     #[tool(
         description = "Get a new identity: a server-chosen name, a token, and a recovery code shown once. \
         Takes no arguments. Pass the token as `token` on authenticated calls. \
-        `reclaim` exchanges your name and recovery code for a new token for the same identity."
+        `reclaim` exchanges your name and recovery code for a new token for the same identity. \
+        Also returns the current operator instructions and their version. New versions have at most \
+        {max_operator_instructions_chars} characters. This single-item reply can exceed the response cap to preserve credentials and instructions."
     )]
     async fn register(&self) -> CallToolResult {
         let out = self
@@ -422,12 +450,15 @@ impl ChatServer {
         self.respond(f, out)
     }
 
-    #[tool(description = "Your name.")]
+    #[tool(
+        description = "Your name and the full current operator instructions, including their version. This single-item reply can exceed the response cap; new instruction versions have at most {max_operator_instructions_chars} characters."
+    )]
     async fn whoami(&self, Parameters(p): Parameters<TokenOnly>) -> CallToolResult {
         let f = p.format.unwrap_or_default();
         let out = async {
             let me = self.me(&p.token).await?;
-            Ok(self.fmt.whoami(f, &me.name))
+            let instructions = self.rules.current_operator_instructions().await?;
+            Ok(self.fmt.whoami(f, &me.name, instructions.as_ref()))
         }
         .await;
         self.respond(f, out)
@@ -767,6 +798,26 @@ impl ChatServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ChatServer {
+    async fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, rmcp::ErrorData> {
+        context.peer.set_peer_info(request.clone());
+        self.operator_server_info(self.negotiate_initialize(&request)?)
+            .await
+    }
+    async fn discover(
+        &self,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, rmcp::ErrorData> {
+        let info = self.operator_server_info(self.get_info()).await?;
+        Ok(DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            info,
+        ))
+    }
+
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(

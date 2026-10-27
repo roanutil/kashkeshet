@@ -231,8 +231,21 @@ pub struct MembershipRecord {
     pub agent: String,
 }
 
+/// One immutable save of the operator's instructions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperatorInstructionsRecord {
+    pub version: i64,
+    pub text: String,
+    pub saved_at: String,
+    pub run_id: i64,
+}
+
 /// Questions the rules can ask.
 pub trait Reads {
+    fn current_operator_instructions(&self) -> StoreResult<Option<OperatorInstructionsRecord>>;
+    /// Newest version first.
+    fn operator_instructions_history(&self) -> StoreResult<Vec<OperatorInstructionsRecord>>;
+
     // ---- agents ----
 
     fn agent(&self, name: &str) -> StoreResult<Option<AgentRecord>>;
@@ -342,6 +355,13 @@ pub trait Reads {
 
 /// Changes the rules can make, on top of what they can ask.
 pub trait Writes: Reads {
+    fn append_operator_instructions(
+        &self,
+        text: &str,
+        at: &str,
+        run_id: i64,
+    ) -> StoreResult<OperatorInstructionsRecord>;
+
     fn insert_agent(&self, agent: &NewAgentRecord) -> StoreResult<()>;
 
     /// Replaces the authentication token, preserving the agent's identity.

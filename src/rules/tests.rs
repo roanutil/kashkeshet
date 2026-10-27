@@ -2005,3 +2005,80 @@ async fn a_new_wait_supersedes_grace_and_disconnect_clears_it() {
     assert!(next.await.unwrap_err().is_cancelled());
     assert!(!observed(&w, &a, &a.name).await.listening);
 }
+
+#[tokio::test]
+async fn operator_instruction_saves_are_immutable_versions_with_clock_and_run() {
+    let w = world().await;
+    assert_eq!(w.rules.current_operator_instructions().await.unwrap(), None);
+    let first = w
+        .rules
+        .save_operator_instructions(Actor::Human, "  First\n😀  ".into())
+        .await
+        .unwrap();
+    assert_eq!(first.version, 1);
+    assert_eq!(first.text, "  First\n😀  ");
+    assert_eq!(first.saved_at, w.rules.now_text());
+    assert_eq!(first.run_id, w.run_id);
+    w.clock.advance(chrono::Duration::seconds(10));
+    let clear = w
+        .rules
+        .save_operator_instructions(Actor::Human, String::new())
+        .await
+        .unwrap();
+    assert_eq!(clear.version, 2);
+    assert_eq!(clear.saved_at, w.rules.now_text());
+    assert_eq!(
+        w.rules.current_operator_instructions().await.unwrap(),
+        Some(clear.clone())
+    );
+    assert_eq!(
+        w.rules.operator_instructions_history().await.unwrap(),
+        vec![clear.clone(), first]
+    );
+    let registration = w.rules.register().await.unwrap();
+    assert_eq!(registration.operator_instructions, Some(clear));
+}
+#[tokio::test]
+async fn only_the_human_can_save_and_the_character_limit_is_enforced() {
+    let limits = Limits {
+        max_operator_instructions_chars: 2,
+        ..Limits::DEFAULT
+    };
+    let w = world_with(limits, Arc::new(SeqEntropy::new(42))).await;
+    let agent = w.agent().await;
+    assert!(
+        w.rules
+            .save_operator_instructions(Actor::from(&agent), "x".into())
+            .await
+            .is_err()
+    );
+    let saved = w
+        .rules
+        .save_operator_instructions(Actor::Human, "😀é".into())
+        .await
+        .unwrap();
+    assert!(
+        w.rules
+            .save_operator_instructions(Actor::Human, "😀éx".into())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        w.rules.operator_instructions_history().await.unwrap(),
+        vec![saved]
+    );
+}
+#[tokio::test]
+async fn concurrent_instruction_saves_get_distinct_increasing_versions() {
+    let w = world().await;
+    let (a, b) = tokio::join!(
+        w.rules.save_operator_instructions(Actor::Human, "a".into()),
+        w.rules.save_operator_instructions(Actor::Human, "b".into())
+    );
+    assert_ne!(a.unwrap().version, b.unwrap().version);
+    let history = w.rules.operator_instructions_history().await.unwrap();
+    assert_eq!(
+        history.iter().map(|v| v.version).collect::<Vec<_>>(),
+        vec![2, 1]
+    );
+}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Operator instructions · Kashkeshet{% endblock %}
+{% block content %}
+<h1>Operator instructions</h1>
+<p>The current text is appended to kkt's instructions under a separate operator label. Every save creates a new version; earlier versions stay in the history.</p>
+<form method="post" action="/instructions">
+<input type="hidden" name="form_token" value="{{ form_token }}">
+<label for="instructions-text">Instructions (up to {{ max_chars }} characters)</label>
+<textarea id="instructions-text" name="text" rows="8" style="width: 100%">{{ current_text }}</textarea>
+<button type="submit">Save new version</button>
+</form>
+<h2>History</h2>
+{% for v in history %}
+<section class="panel">
+<h3>Version {{ v.version }}{% if loop.first %} · current{% endif %}</h3>
+<p class="muted">Saved {{ v.saved_at|when }} · server run {{ v.run_id }}</p>
+<pre style="white-space: pre-wrap; overflow-wrap: anywhere">{{ v.text }}</pre>
+</section>
+{% else %}<p class="muted">No versions saved.</p>{% endfor %}
+{% endblock %}

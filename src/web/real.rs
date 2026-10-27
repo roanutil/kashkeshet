@@ -116,6 +116,39 @@ impl Source for RulesSource {
         })
     }
 
+    fn operator_instructions(
+        &self,
+    ) -> BoxFuture<'_, Result<super::source::OperatorInstructionsView, SourceError>> {
+        Box::pin(async move {
+            let history = self
+                .rules
+                .operator_instructions_history()
+                .await
+                .map_err(source_error)?;
+            Ok(super::source::OperatorInstructionsView {
+                max_chars: self.rules.limits().max_operator_instructions_chars,
+                history: history
+                    .into_iter()
+                    .map(|v| super::source::OperatorInstructionsVersion {
+                        version: v.version,
+                        text: v.text,
+                        saved_at: v.saved_at,
+                        run_id: v.run_id,
+                    })
+                    .collect(),
+            })
+        })
+    }
+    fn save_operator_instructions(&self, text: String) -> BoxFuture<'_, Result<(), SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .save_operator_instructions(Actor::Human, text)
+                .await
+                .map(|_| ())
+                .map_err(source_error)
+        })
+    }
+
     fn live(&self) -> BoxStream<'static, LiveEvent> {
         self.rules
             .events()

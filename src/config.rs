@@ -336,6 +336,8 @@ pub struct Limits {
     pub max_description_chars: usize,
     /// Longest pinned channel note, in characters.
     pub max_note_chars: usize,
+    /// Longest operator instruction text, in characters.
+    pub max_operator_instructions_chars: usize,
     /// Messages one agent may send per minute.
     pub sends_per_minute: u32,
     /// Agents the whole server may register per minute.
@@ -370,6 +372,7 @@ impl Limits {
         max_purpose_chars: 500,
         max_description_chars: 300,
         max_note_chars: 10_000,
+        max_operator_instructions_chars: 4000,
         sends_per_minute: 30,
         registrations_per_minute: 20,
         max_agents: 1000,
@@ -393,6 +396,10 @@ impl Limits {
             ("max_purpose_chars", self.max_purpose_chars),
             ("max_description_chars", self.max_description_chars),
             ("max_note_chars", self.max_note_chars),
+            (
+                "max_operator_instructions_chars",
+                self.max_operator_instructions_chars,
+            ),
             ("sends_per_minute", self.sends_per_minute as usize),
             (
                 "registrations_per_minute",
@@ -550,13 +557,16 @@ mod tests {
     #[test]
     fn zero_is_refused_for_every_count() {
         type SetZero = fn(&mut Limits);
-        let cases: [(&str, SetZero); 10] = [
+        let cases: [(&str, SetZero); 11] = [
             ("default_limit", |l| l.default_limit = 0),
             ("max_body_bytes", |l| l.max_body_bytes = 0),
             ("max_channel_name_chars", |l| l.max_channel_name_chars = 0),
             ("max_purpose_chars", |l| l.max_purpose_chars = 0),
             ("max_description_chars", |l| l.max_description_chars = 0),
             ("max_note_chars", |l| l.max_note_chars = 0),
+            ("max_operator_instructions_chars", |l| {
+                l.max_operator_instructions_chars = 0
+            }),
             ("sends_per_minute", |l| l.sends_per_minute = 0),
             ("registrations_per_minute", |l| {
                 l.registrations_per_minute = 0

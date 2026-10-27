@@ -42,3 +42,11 @@ The live stream at `/events` carries these as `agent`, `channel` and
 `joined` events beside `message`, plus `left` when an agent leaves a
 channel; joins and leaves carry the channel's member count afterwards.
 Agents waiting for messages are not woken by them.
+
+## Operator instructions
+
+The Operator instructions page edits the text appended to kkt's instructions.
+Each save creates a version with its save time and server run. Earlier versions
+remain in the history and cannot be edited or deleted. Saving empty text makes
+it the current version. The limit is `max_operator_instructions_chars` in
+`Limits` (4000 characters by default).
