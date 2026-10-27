@@ -80,7 +80,11 @@ impl Formatter {
                     row
                 };
                 let mut shown = a.clone();
-                while !fits(&render(&shown, None)) && !shown.waiting_channels.is_empty() {
+                // Reserve the full description and the row continuation while
+                // reducing IDs; if no IDs remain, the description itself can be cut.
+                while !fits(&render(&shown, a.description.as_deref()))
+                    && !shown.waiting_channels.is_empty()
+                {
                     shown.waiting_channels.pop();
                 }
                 let whole = render(&shown, a.description.as_deref());

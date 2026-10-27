@@ -448,35 +448,44 @@ fn escaped_note_previews_do_not_hide_a_channel_at_the_minimum_cap() {
 }
 
 #[test]
-fn many_waiting_channels_keep_the_agent_visible_within_the_cap() {
-    let mut a = described("amber-falcon", Some("😀"));
-    a.listening = true;
-    a.waiting_channels = (0..500).map(|i| format!("ch_{i:08}")).collect();
-    let members = Members {
-        channel_id: "ch_public".into(),
-        total: 1,
-        page: Page {
-            items: vec![a],
-            next_cursor: None,
-        },
-    };
+fn many_waiting_channels_keep_paginated_agents_and_members_visible() {
     let fmt = formatter(crate::config::MIN_RESPONSE_BYTES);
-    for format in [Format::Text, Format::Json] {
-        for out in [
-            fmt.agents(format, &members.page),
-            fmt.members(format, &members),
-        ] {
-            assert!(out.len() <= crate::config::MIN_RESPONSE_BYTES);
-            assert!(out.contains("amber-falcon"));
-            if matches!(format, Format::Json) {
-                let json: Value = serde_json::from_str(&out).unwrap();
-                let key = if json.get("agents").is_some() {
-                    "agents"
+    for description in ["reviewer".into(), "😀".repeat(300), "\u{1}\n".repeat(150)] {
+        let mut a = described("amber-falcon", Some(&description));
+        a.listening = true;
+        a.waiting_channels = (0..500).map(|i| format!("ch_{i:08}")).collect();
+        let members = Members {
+            channel_id: "ch_public".into(),
+            total: 2,
+            page: Page {
+                items: vec![a],
+                next_cursor: Some("amber-falcon".into()),
+            },
+        };
+        for format in [Format::Text, Format::Json] {
+            for out in [
+                fmt.agents(format, &members.page),
+                fmt.members(format, &members),
+            ] {
+                assert!(out.len() <= crate::config::MIN_RESPONSE_BYTES);
+                assert!(!out.contains("larger than"), "{out}");
+                if matches!(format, Format::Json) {
+                    let json: Value = serde_json::from_str(&out).unwrap();
+                    let key = if json.get("agents").is_some() {
+                        "agents"
+                    } else {
+                        "members"
+                    };
+                    assert_eq!(json[key].as_array().unwrap().len(), 1);
+                    assert_eq!(json[key][0]["name"], "amber-falcon");
+                    assert!(json[key][0]["waiting_channels_more"].as_u64().unwrap() > 0);
+                    assert_eq!(json[key][0]["listening"], true);
+                    assert_eq!(json["more"], "cursor=amber-falcon");
                 } else {
-                    "members"
-                };
-                assert!(json[key][0]["waiting_channels_more"].as_u64().unwrap() > 0);
-                assert_eq!(json[key][0]["listening"], true);
+                    assert!(out.contains("amber-falcon"));
+                    assert!(out.contains("more waiting channels"));
+                    assert!(out.ends_with("more: cursor=amber-falcon"));
+                }
             }
         }
     }
