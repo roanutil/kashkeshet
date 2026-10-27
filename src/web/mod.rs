@@ -34,7 +34,7 @@ use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use change::Change;
+use change::{Change, NoFields};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
@@ -78,6 +78,7 @@ pub fn router(source: Arc<dyn Source>, hosts: AllowedHosts, gate: Arc<dyn Gate>)
         .route("/channels/{id}", get(channel))
         .route("/channels/{id}/purpose", post(set_purpose))
         .route("/agents/{name}", get(agent))
+        .route("/agents/{name}/recovery-code", post(new_recovery_code))
         .route("/events", get(events))
         .with_state(Pages {
             source,
@@ -165,6 +166,17 @@ struct AgentPage {
     agent: Agent,
     channels: Vec<Channel>,
     message_count: i64,
+    handoff_note: String,
+    handoff_note_set_at: Option<String>,
+    sign_out: bool,
+    form_token: String,
+}
+
+#[derive(Template)]
+#[template(path = "recovery.html")]
+struct RecoveryCodePage {
+    agent: String,
+    code: String,
     sign_out: bool,
     form_token: String,
 }
@@ -259,6 +271,29 @@ fn url_path(text: &str) -> String {
         .collect()
 }
 
+/// The human gives an agent a new recovery code. The page that shows it is
+/// the only place it ever appears, so the browser is told not to keep it.
+async fn new_recovery_code(
+    State(pages): State<Pages>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Change(NoFields {}): Change<NoFields>,
+) -> Response {
+    match pages.source.new_recovery_code(name.clone()).await {
+        Ok(code) => (
+            [(header::CACHE_CONTROL, "no-store")],
+            page(RecoveryCodePage {
+                agent: name,
+                code,
+                sign_out: pages.sign_out,
+                form_token: pages.form_token(&headers),
+            }),
+        )
+            .into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
 async fn agent(
     State(pages): State<Pages>,
     Path(name): Path<String>,
@@ -269,6 +304,8 @@ async fn agent(
             agent: v.agent,
             channels: v.channels,
             message_count: v.message_count,
+            handoff_note: v.handoff_note,
+            handoff_note_set_at: v.handoff_note_set_at,
             sign_out: pages.sign_out,
             form_token: pages.form_token(&headers),
         }),

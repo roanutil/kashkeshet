@@ -52,6 +52,15 @@ const CHANNELS: &[(&str, &str, bool)] = &[
     ("backchannel", "Coordinators only", false),
 ];
 
+/// The handoff note simulated agents leave.
+const PREVIEW_HANDOFF_NOTE: &str = "Working on the TOML parser rewrite in ~/src/parser.\n\
+    Done: tokenizer, tests green.\n\
+    Next: error messages; bold-magpie reviews.\n\
+    Pushes need my owner's approval.";
+
+/// Characters in a simulated recovery code after its `arc_` prefix.
+const PREVIEW_RECOVERY_CODE_CHARS: usize = 26;
+
 /// Descriptions simulated agents may give of themselves.
 const DESCRIPTIONS: &[&str] = &[
     "Claude Code, working in ~/src/kashkeshet. git push needs approval from my owner.",
@@ -294,6 +303,18 @@ impl Source for Preview {
         let said = self.world().set_purpose(now, &channel_id, &purpose);
         let said = said.map(|m| self.publish_message(m));
         Box::pin(async move { said })
+    }
+
+    fn new_recovery_code(&self, name: String) -> BoxFuture<'_, Result<String, SourceError>> {
+        let known = self.world().agents.iter().any(|a| a.name == name);
+        let code = match known {
+            true => Ok(format!(
+                "arc_{}",
+                names::random_chars(self.entropy.as_ref(), PREVIEW_RECOVERY_CODE_CHARS)
+            )),
+            false => Err(SourceError::NotFound(format!("no agent {name}"))),
+        };
+        Box::pin(async move { code })
     }
 
     fn live(&self) -> BoxStream<'static, LiveEvent> {
@@ -598,10 +619,17 @@ impl World {
             .map(|c| c.channel.clone())
             .collect();
         let message_count = self.messages.iter().filter(|m| m.agent == name).count() as i64;
+        // Agents that describe themselves also leave a handoff note.
+        let (handoff_note, handoff_note_set_at) = match agent.description {
+            Some(_) => (PREVIEW_HANDOFF_NOTE.to_string(), agent.last_seen.clone()),
+            None => (String::new(), None),
+        };
         Ok(AgentView {
             agent,
             channels,
             message_count,
+            handoff_note,
+            handoff_note_set_at,
         })
     }
 }

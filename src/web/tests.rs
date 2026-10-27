@@ -150,6 +150,84 @@ async fn changes_work(source: Arc<dyn Source>) {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// What every source must do for an agent's handoff: show its note, and give
+/// a new recovery code only to a form from the page, on a page the browser
+/// does not keep.
+async fn handoff_works(source: Arc<dyn Source>) -> (String, String) {
+    let overview = source.overview().await.expect("overview");
+    let mut noted = None;
+    for a in &overview.agents {
+        let view = source.agent(a.agent.name.clone()).await.expect("view");
+        if !view.handoff_note.is_empty() {
+            noted = Some(view);
+            break;
+        }
+    }
+    let view = noted.expect("an agent with a handoff note");
+    let name = view.agent.name.clone();
+    let site = site(source.clone());
+    let (_, page) = get(&site, &format!("/agents/{name}")).await;
+    let first_line = view.handoff_note.lines().next().expect("a line");
+    assert!(page.contains(first_line), "the page shows the note");
+    let path = format!("/agents/{name}/recovery-code");
+    assert!(page.contains(&format!(r#"action="{path}""#)));
+    let token = form_token_in(&page);
+
+    let (status, _) = post(&site, &path, "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let request = HttpRequest::builder()
+        .method("POST")
+        .uri(&path)
+        .header("Host", "localhost")
+        .header("Origin", "http://localhost")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!("form_token={token}")))
+        .expect("request");
+    let response = site.clone().oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .map(|v| v.as_bytes()),
+        Some(&b"no-store"[..])
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let page = String::from_utf8_lossy(&bytes).into_owned();
+    let (_, rest) = page
+        .split_once(r#"<p class="mono" style="overflow-wrap: anywhere">"#)
+        .expect("the code");
+    let code = rest.split_once('<').expect("end of code").0.to_string();
+    assert!(code.starts_with("arc_"), "{code}");
+
+    let (status, _) = post(
+        &site,
+        "/agents/nobody-here/recovery-code",
+        &format!("form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    (name, code)
+}
+
+#[tokio::test]
+async fn handoff_works_through_the_rules() {
+    let (rules, source) = rules_world().await;
+    let (name, code) = handoff_works(source).await;
+    // The code shown on the page is the one that now takes over the identity.
+    let taken = rules.reclaim(name, code).await.expect("reclaim");
+    rules.authenticate(Some(&taken.token)).await.expect("auth");
+}
+
+#[tokio::test]
+async fn handoff_works_in_the_preview() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    handoff_works(preview(1, clock, &Shutdown::new())).await;
+}
+
 #[tokio::test]
 async fn changes_work_through_the_rules() {
     changes_work(rules_source().await).await;
@@ -252,6 +330,11 @@ async fn pages_work(source: Arc<dyn Source>) {
 /// Rules over an in-memory database with two agents, an open and a closed
 /// channel, and a few messages.
 async fn rules_source() -> Arc<dyn Source> {
+    rules_world().await.1
+}
+
+/// The rules behind `rules_source`, too, for checking what a change did.
+async fn rules_world() -> (Rules, Arc<dyn Source>) {
     let db = Db::open_in_memory().expect("db");
     let run_id = db
         .write(|w| {
@@ -313,7 +396,14 @@ async fn rules_source() -> Arc<dyn Source> {
                 .expect("send");
         }
     }
-    Arc::new(RulesSource::new(rules))
+    rules
+        .set_handoff_note(
+            &agents[0],
+            "Next: the parser.\nOwner approves pushes.".into(),
+        )
+        .await
+        .expect("handoff note");
+    (rules.clone(), Arc::new(RulesSource::new(rules)))
 }
 
 fn preview(seed: u64, clock: Arc<FixedClock>, shutdown: &Shutdown) -> Arc<Preview> {

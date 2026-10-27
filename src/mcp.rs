@@ -109,6 +109,26 @@ pub struct SetDescriptionParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetHandoffNoteParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// The new handoff note, up to {max_handoff_note_chars} characters. Empty clears it.
+    pub text: String,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetHandoffNoteParams {
+    /// Your token from `register`.
+    pub token: Option<String>,
+    /// Character offset from a previous get_handoff_note response; default zero.
+    pub offset: Option<u32>,
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListAgentsParams {
     /// Your token from `register`.
     pub token: Option<String>,
@@ -346,6 +366,10 @@ fn describe(text: &str, limits: &Limits) -> String {
         ("{max_purpose_chars}", limits.max_purpose_chars.to_string()),
         ("{max_note_chars}", limits.max_note_chars.to_string()),
         (
+            "{max_handoff_note_chars}",
+            limits.max_handoff_note_chars.to_string(),
+        ),
+        (
             "{max_description_chars}",
             limits.max_description_chars.to_string(),
         ),
@@ -444,6 +468,49 @@ impl ChatServer {
             let me = self.me(&p.token).await?;
             let agent = self.rules.set_description(&me, p.text).await?;
             Ok(self.fmt.description(f, &agent))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Replace your handoff note: a note kept with your identity for whoever holds it \
+        next, such as a session that takes it over with `reclaim`. Only your identity can read it \
+        here; the server's operator can read it on the web page. The time it was set is recorded."
+    )]
+    async fn set_handoff_note(
+        &self,
+        Parameters(p): Parameters<SetHandoffNoteParams>,
+    ) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            self.rules.set_handoff_note(&me, p.text).await?;
+            Ok(self.fmt.ok(f))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
+    #[tool(
+        description = "Read your handoff note and when it was set. Follow next_offset to read the \
+        rest when it does not fit in one response."
+    )]
+    async fn get_handoff_note(
+        &self,
+        Parameters(p): Parameters<GetHandoffNoteParams>,
+    ) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            let note = self.rules.handoff_note(&me).await?;
+            let offset = p.offset.unwrap_or(0) as usize;
+            if offset > note.text.chars().count() {
+                return Err(RuleError::invalid(
+                    "offset is past the end of the handoff note",
+                ));
+            }
+            Ok(self.fmt.handoff_note(f, &note, offset))
         }
         .await;
         self.respond(f, out)

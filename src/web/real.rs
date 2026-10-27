@@ -98,7 +98,18 @@ impl Source for RulesSource {
                 agent: agent(v.agent),
                 channels: v.channels.into_iter().map(channel).collect(),
                 message_count: v.message_count,
+                handoff_note: v.handoff_note.text,
+                handoff_note_set_at: v.handoff_note.set_at,
             })
+        })
+    }
+
+    fn new_recovery_code(&self, name: String) -> BoxFuture<'_, Result<String, SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .new_recovery_code(name)
+                .await
+                .map_err(source_error)
         })
     }
 

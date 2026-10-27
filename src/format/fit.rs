@@ -42,6 +42,48 @@ impl Formatter {
         fit(rows.len(), self.max_bytes, render)
     }
 
+    /// As much of `text` from character `offset` on as fits in a response,
+    /// rendered by `render(part, offset, next_offset)`. `next_offset` is where
+    /// the next part starts, or `None` if this part reaches the end. The size
+    /// is measured on the rendered output, so JSON escapes count. Nothing is
+    /// lost: following `next_offset` reads the whole text.
+    pub(super) fn text_in_parts(
+        &self,
+        text: &str,
+        offset: usize,
+        render: impl Fn(&str, usize, Option<usize>) -> String,
+    ) -> String {
+        let boundaries: Vec<usize> = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        let offset = offset.min(boundaries.len() - 1);
+        let remaining = boundaries.len() - 1 - offset;
+        let part = |count: usize| {
+            let next = (count < remaining).then_some(offset + count);
+            render(
+                &text[boundaries[offset]..boundaries[offset + count]],
+                offset,
+                next,
+            )
+        };
+        let full = part(remaining);
+        if full.len() <= self.max_bytes {
+            return full;
+        }
+        let (mut low, mut high) = (0, remaining);
+        while low < high {
+            let mid = low + (high - low).div_ceil(2);
+            if part(mid).len() <= self.max_bytes {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        part(low)
+    }
+
     /// Whether `row` alone, with a `more:` line after it, fits in a response.
     pub(super) fn row_fits(
         &self,
