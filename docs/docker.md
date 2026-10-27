@@ -64,6 +64,11 @@ connect at all, use Tailscale's access controls.
 
 Either container can be restarted alone.
 
+If a machine named `TS_HOSTNAME` is already on your tailnet, Tailscale names
+the new one `<name>-1`, and kkt, which is told the name you set, refuses
+requests to the new name. Remove the old machine in the Tailscale admin
+console before starting, or set `TS_HOSTNAME` to the name the node got.
+
 Values in `.env`:
 
 | Name | Meaning |
