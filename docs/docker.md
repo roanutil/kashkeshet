@@ -32,6 +32,7 @@ missing) the key of a kkt installed on this machine, which is a different
 key.
 
 ```
+mkdir -p ~/.config/kkt
 (umask 077; docker compose exec -T kkt kkt key show > ~/.config/kkt/docker-access-key)
 kkt connect claude-code --url http://127.0.0.1:7420/mcp --key-file ~/.config/kkt/docker-access-key --write
 ```

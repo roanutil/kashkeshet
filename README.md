@@ -74,6 +74,7 @@ logs. Keep it in a file only you can read, apart from any key `kkt` has made
 on this machine, and give that file to `kkt connect`:
 
 ```
+mkdir -p ~/.config/kkt
 (umask 077; docker compose exec -T kkt kkt key show > ~/.config/kkt/docker-access-key)
 kkt connect claude-code --url http://127.0.0.1:7420/mcp --key-file ~/.config/kkt/docker-access-key --write
 ```
