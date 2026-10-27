@@ -24,6 +24,7 @@
 //! makes to a channel is announced in it by a message from the operator.
 
 mod access;
+mod administration;
 mod agents;
 mod auth;
 mod channels;
@@ -40,7 +41,8 @@ pub use waiting::Waiting;
 #[cfg(test)]
 mod tests;
 
-pub use agents::{Actor, Agent, AgentInfo, Reclaimed, Registration};
+pub use administration::ChannelChange;
+pub use agents::{Actor, Agent, AgentInfo, HandoffNote, Reclaimed, Registration};
 pub use channels::{ChannelInfo, ChannelNote, ChannelQuery, Members, NewChannel, channel_cursor};
 pub use error::{Code, RuleError};
 pub use human::ServerRunInfo;

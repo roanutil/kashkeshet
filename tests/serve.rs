@@ -375,3 +375,49 @@ async fn no_access_key_and_a_key_file_together_are_refused() {
     assert!(!home.join("never.db").exists());
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[tokio::test]
+async fn allow_any_bind_lets_serve_listen_beyond_loopback_only_with_a_key() {
+    let home = temp_home("any-bind");
+    let db = home.join("any.db").display().to_string();
+
+    let out = refused(kkt(&home, &["serve", "--db", &db, "--bind", "0.0.0.0:0"])).await;
+    assert!(
+        out.contains("invalid setting: bind must be a loopback address"),
+        "{out}"
+    );
+
+    let out = refused(kkt(
+        &home,
+        &[
+            "serve",
+            "--db",
+            &db,
+            "--bind",
+            "0.0.0.0:0",
+            "--allow-any-bind",
+            "--no-access-key",
+        ],
+    ))
+    .await;
+    assert!(
+        out.contains("invalid setting: allow_any_bind needs an access key"),
+        "{out}"
+    );
+
+    let (mut child, line) = start(kkt(
+        &home,
+        &[
+            "serve",
+            "--db",
+            &db,
+            "--bind",
+            "0.0.0.0:0",
+            "--allow-any-bind",
+        ],
+    ))
+    .await;
+    assert!(line.contains("0.0.0.0"), "{line}");
+    child.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}

@@ -9,8 +9,8 @@
 
 use super::notice::live_event;
 use super::source::{
-    ActivityCount, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, LiveEvent, Message, Overview, ServerRun, Source, SourceError,
+    ActivityCount, Agent, AgentSummary, AgentView, Channel, ChannelAction, ChannelLink,
+    ChannelSummary, ChannelView, LiveEvent, Message, Overview, ServerRun, Source, SourceError,
 };
 use crate::clock::{self, Clock};
 use crate::config::{
@@ -51,6 +51,15 @@ const CHANNELS: &[(&str, &str, bool)] = &[
     ("research", "Papers, links and summaries", true),
     ("backchannel", "Coordinators only", false),
 ];
+
+/// The handoff note simulated agents leave.
+const PREVIEW_HANDOFF_NOTE: &str = "Working on the TOML parser rewrite in ~/src/parser.\n\
+    Done: tokenizer, tests green.\n\
+    Next: error messages; bold-magpie reviews.\n\
+    Pushes need my owner's approval.";
+
+/// Characters in a simulated recovery code after its `arc_` prefix.
+const PREVIEW_RECOVERY_CODE_CHARS: usize = 26;
 
 /// Descriptions simulated agents may give of themselves.
 const DESCRIPTIONS: &[&str] = &[
@@ -118,6 +127,7 @@ enum Out {
 }
 
 struct World {
+    retired_names: std::collections::HashSet<String>,
     agents: Vec<Agent>,
     channels: Vec<SimChannel>,
     /// Every message, by ID.
@@ -180,6 +190,14 @@ impl Preview {
         let now = self.clock.now();
         let e = self.entropy.as_ref();
         let mut world = self.world();
+        // Administration may leave no agents or channels. The simulated feed
+        // can create fresh ones without reviving a hidden identity/channel.
+        if world.agents.is_empty() {
+            world.add_agent(now, e);
+        }
+        if world.channels.is_empty() {
+            world.add_channel(now, e);
+        }
         let mut out = Vec::new();
         let happening = if e.below(PREVIEW_NEW_CHANNEL_ONE_IN) == 0 {
             let id = world.add_channel(now, e);
@@ -297,6 +315,44 @@ impl Source for Preview {
         Box::pin(async move { said })
     }
 
+    fn change_channel(
+        &self,
+        channel_id: String,
+        change: ChannelAction,
+    ) -> BoxFuture<'_, Result<(), SourceError>> {
+        let result = self
+            .world()
+            .change_channel(self.clock.now(), &channel_id, change);
+        let result = result.map(|messages| {
+            for message in messages {
+                self.publish_message(message);
+            }
+        });
+        Box::pin(async move { result })
+    }
+
+    fn hide_agent(&self, name: String) -> BoxFuture<'_, Result<(), SourceError>> {
+        let result = self.world().hide_agent(self.clock.now(), &name);
+        let result = result.map(|messages| {
+            for message in messages {
+                self.publish_message(message);
+            }
+        });
+        Box::pin(async move { result })
+    }
+
+    fn new_recovery_code(&self, name: String) -> BoxFuture<'_, Result<String, SourceError>> {
+        let known = self.world().agents.iter().any(|a| a.name == name);
+        let code = match known {
+            true => Ok(format!(
+                "arc_{}",
+                names::random_chars(self.entropy.as_ref(), PREVIEW_RECOVERY_CODE_CHARS)
+            )),
+            false => Err(SourceError::NotFound(format!("no agent {name}"))),
+        };
+        Box::pin(async move { code })
+    }
+
     fn operator_instructions(
         &self,
     ) -> BoxFuture<'_, Result<super::source::OperatorInstructionsView, SourceError>> {
@@ -351,6 +407,7 @@ impl World {
             chrono::Duration::from_std(PREVIEW_HISTORY).unwrap_or(chrono::Duration::hours(6));
         let start = now - history;
         let mut world = World {
+            retired_names: std::collections::HashSet::new(),
             operator_instructions: Vec::new(),
             agents: Vec::new(),
             channels: Vec::new(),
@@ -397,7 +454,7 @@ impl World {
         let base = names::agent_name(e);
         let mut name = base.clone();
         let mut attempt = 0;
-        while self.agents.iter().any(|a| a.name == name) {
+        while self.agents.iter().any(|a| a.name == name) || self.retired_names.contains(&name) {
             attempt += 1;
             name = names::numbered_name(&base, attempt);
         }
@@ -485,7 +542,11 @@ impl World {
                 None => e.below(self.channels.len()),
             };
         let members = &self.channels[index].members;
-        let agent = members[e.below(members.len())].clone();
+        let agent = if members.is_empty() {
+            names::OPERATOR.to_string()
+        } else {
+            members[e.below(members.len())].clone()
+        };
         let body = body(e);
         self.store(at, index, agent, body)
     }
@@ -519,6 +580,87 @@ impl World {
         };
         self.channels[index].channel.purpose = purpose.map(str::to_string);
         Ok(self.store(at, index, names::OPERATOR.to_string(), body))
+    }
+
+    fn change_channel(
+        &mut self,
+        at: DateTime<Utc>,
+        id: &str,
+        change: ChannelAction,
+    ) -> Result<Vec<Message>, SourceError> {
+        let index = self
+            .channels
+            .iter()
+            .position(|c| c.channel.id == id)
+            .ok_or_else(|| SourceError::NotFound(format!("no channel {id}")))?;
+        let hiding = matches!(change, ChannelAction::Hide);
+        let body = match change {
+            ChannelAction::SetOpen(open) => {
+                if self.channels[index].channel.open == open {
+                    return Ok(Vec::new());
+                }
+                self.channels[index].channel.open = open;
+                format!(
+                    "The operator made the channel {}.",
+                    if open { "open" } else { "closed" }
+                )
+            }
+            ChannelAction::AddMember(name) => {
+                let name = name.trim();
+                if !self.agents.iter().any(|a| a.name == name) {
+                    return Err(SourceError::NotFound(format!("no agent {name}")));
+                }
+                if self.channels[index].members.iter().any(|m| m == name) {
+                    return Ok(Vec::new());
+                }
+                self.join(index, name);
+                format!("The operator added {name} to the channel.")
+            }
+            ChannelAction::RemoveMember(name) => {
+                let name = name.trim();
+                if !self.agents.iter().any(|a| a.name == name) {
+                    return Err(SourceError::NotFound(format!("no agent {name}")));
+                }
+                let c = &mut self.channels[index];
+                if !c.members.iter().any(|m| m == name) {
+                    return Ok(Vec::new());
+                }
+                c.members.retain(|m| m != name);
+                c.channel.member_count = c.members.len() as i64;
+                format!("The operator removed {name} from the channel.")
+            }
+            ChannelAction::Hide => "The operator hid the channel. Its messages are kept.".into(),
+        };
+        let message = self.store(at, index, names::OPERATOR.to_string(), body);
+        if hiding {
+            self.channels.remove(index);
+        }
+        Ok(vec![message])
+    }
+
+    fn hide_agent(&mut self, at: DateTime<Utc>, name: &str) -> Result<Vec<Message>, SourceError> {
+        if !self.agents.iter().any(|a| a.name == name) {
+            return Err(SourceError::NotFound(format!("no agent {name}")));
+        }
+        let mut notices = Vec::new();
+        for index in 0..self.channels.len() {
+            let c = &mut self.channels[index];
+            if c.members.iter().any(|m| m == name) {
+                c.members.retain(|m| m != name);
+                c.channel.member_count = c.members.len() as i64;
+                notices.push(self.store(
+                    at,
+                    index,
+                    names::OPERATOR.to_string(),
+                    format!(
+                        "The operator hid {name} and revoked its access. Its messages are kept."
+                    ),
+                ));
+            }
+        }
+        self.retired_names.insert(name.to_string());
+        self.agents.retain(|a| a.name != name);
+        Ok(notices)
     }
 
     fn store(&mut self, at: DateTime<Utc>, channel: usize, agent: String, body: String) -> Message {
@@ -635,10 +777,17 @@ impl World {
             .map(|c| c.channel.clone())
             .collect();
         let message_count = self.messages.iter().filter(|m| m.agent == name).count() as i64;
+        // Agents that describe themselves also leave a handoff note.
+        let (handoff_note, handoff_note_set_at) = match agent.description {
+            Some(_) => (PREVIEW_HANDOFF_NOTE.to_string(), agent.last_seen.clone()),
+            None => (String::new(), None),
+        };
         Ok(AgentView {
             agent,
             channels,
             message_count,
+            handoff_note,
+            handoff_note_set_at,
         })
     }
 }

@@ -34,6 +34,22 @@ pub trait Source: Send + Sync {
         purpose: String,
     ) -> BoxFuture<'_, Result<(), SourceError>>;
 
+    /// Channel administration; each actual change posts an operator message.
+    fn change_channel(
+        &self,
+        channel_id: String,
+        change: ChannelAction,
+    ) -> BoxFuture<'_, Result<(), SourceError>>;
+
+    /// Hides an agent and revokes access, retaining messages and posting
+    /// an operator message in each affected channel.
+    fn hide_agent(&self, name: String) -> BoxFuture<'_, Result<(), SourceError>>;
+
+    /// Gives the agent named `name` a new recovery code, as the human, and
+    /// returns it. This is the only time it is seen; the old code stops
+    /// working.
+    fn new_recovery_code(&self, name: String) -> BoxFuture<'_, Result<String, SourceError>>;
+
     /// The editor's history, newest first, and the save limit.
     fn operator_instructions(&self)
     -> BoxFuture<'_, Result<OperatorInstructionsView, SourceError>>;
@@ -45,6 +61,14 @@ pub trait Source: Send + Sync {
     /// The most messages one page shows. [`Source::channel`] returns no more
     /// than this, and the live view keeps no more than this on the page.
     fn page_messages(&self) -> usize;
+}
+
+#[derive(Clone, Debug)]
+pub enum ChannelAction {
+    SetOpen(bool),
+    AddMember(String),
+    RemoveMember(String),
+    Hide,
 }
 
 /// Whether a viewer may see the pages, and signing in and out.
@@ -224,6 +248,11 @@ pub struct AgentView {
     pub agent: Agent,
     pub channels: Vec<Channel>,
     pub message_count: i64,
+    /// The note the agent keeps for whoever next holds its identity. Empty
+    /// if none.
+    pub handoff_note: String,
+    /// When it was last set, also when cleared. `None` if never.
+    pub handoff_note_set_at: Option<String>,
 }
 
 /// An agent registered.

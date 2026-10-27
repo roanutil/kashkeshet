@@ -62,6 +62,7 @@ async fn descriptions_state_the_live_limits() {
         max_purpose_chars: 77,
         max_description_chars: 55,
         max_note_chars: 1234,
+        max_handoff_note_chars: 4321,
         default_wait: Duration::from_secs(5),
         max_wait: Duration::from_secs(9),
         ..Limits::DEFAULT
@@ -88,6 +89,10 @@ async fn descriptions_state_the_live_limits() {
     assert_eq!(
         param("set_note", "text"),
         "The new pinned note, up to 1234 characters. Empty clears it."
+    );
+    assert_eq!(
+        param("set_handoff_note", "text"),
+        "The new handoff note, up to 4321 characters. Empty clears it."
     );
     assert_eq!(param("send", "body"), "The message text, up to 3000 bytes.");
     assert_eq!(

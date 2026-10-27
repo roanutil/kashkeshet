@@ -150,6 +150,84 @@ async fn changes_work(source: Arc<dyn Source>) {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// What every source must do for an agent's handoff: show its note, and give
+/// a new recovery code only to a form from the page, on a page the browser
+/// does not keep.
+async fn handoff_works(source: Arc<dyn Source>) -> (String, String) {
+    let overview = source.overview().await.expect("overview");
+    let mut noted = None;
+    for a in &overview.agents {
+        let view = source.agent(a.agent.name.clone()).await.expect("view");
+        if !view.handoff_note.is_empty() {
+            noted = Some(view);
+            break;
+        }
+    }
+    let view = noted.expect("an agent with a handoff note");
+    let name = view.agent.name.clone();
+    let site = site(source.clone());
+    let (_, page) = get(&site, &format!("/agents/{name}")).await;
+    let first_line = view.handoff_note.lines().next().expect("a line");
+    assert!(page.contains(first_line), "the page shows the note");
+    let path = format!("/agents/{name}/recovery-code");
+    assert!(page.contains(&format!(r#"action="{path}""#)));
+    let token = form_token_in(&page);
+
+    let (status, _) = post(&site, &path, "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let request = HttpRequest::builder()
+        .method("POST")
+        .uri(&path)
+        .header("Host", "localhost")
+        .header("Origin", "http://localhost")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!("form_token={token}")))
+        .expect("request");
+    let response = site.clone().oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .map(|v| v.as_bytes()),
+        Some(&b"no-store"[..])
+    );
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let page = String::from_utf8_lossy(&bytes).into_owned();
+    let (_, rest) = page
+        .split_once(r#"<p class="mono" style="overflow-wrap: anywhere">"#)
+        .expect("the code");
+    let code = rest.split_once('<').expect("end of code").0.to_string();
+    assert!(code.starts_with("arc_"), "{code}");
+
+    let (status, _) = post(
+        &site,
+        "/agents/nobody-here/recovery-code",
+        &format!("form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    (name, code)
+}
+
+#[tokio::test]
+async fn handoff_works_through_the_rules() {
+    let (rules, source) = rules_world().await;
+    let (name, code) = handoff_works(source).await;
+    // The code shown on the page is the one that now takes over the identity.
+    let taken = rules.reclaim(name, code).await.expect("reclaim");
+    rules.authenticate(Some(&taken.token)).await.expect("auth");
+}
+
+#[tokio::test]
+async fn handoff_works_in_the_preview() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    handoff_works(preview(1, clock, &Shutdown::new())).await;
+}
+
 #[tokio::test]
 async fn changes_work_through_the_rules() {
     changes_work(rules_source().await).await;
@@ -252,6 +330,11 @@ async fn pages_work(source: Arc<dyn Source>) {
 /// Rules over an in-memory database with two agents, an open and a closed
 /// channel, and a few messages.
 async fn rules_source() -> Arc<dyn Source> {
+    rules_world().await.1
+}
+
+/// The rules behind `rules_source`, too, for checking what a change did.
+async fn rules_world() -> (Rules, Arc<dyn Source>) {
     let db = Db::open_in_memory().expect("db");
     let run_id = db
         .write(|w| {
@@ -313,7 +396,14 @@ async fn rules_source() -> Arc<dyn Source> {
                 .expect("send");
         }
     }
-    Arc::new(RulesSource::new(rules))
+    rules
+        .set_handoff_note(
+            &agents[0],
+            "Next: the parser.\nOwner approves pushes.".into(),
+        )
+        .await
+        .expect("handoff note");
+    (rules.clone(), Arc::new(RulesSource::new(rules)))
 }
 
 fn preview(seed: u64, clock: Arc<FixedClock>, shutdown: &Shutdown) -> Arc<Preview> {
@@ -649,6 +739,173 @@ async fn channel_page_shows_the_pinned_note_and_editor_as_escaped_text() {
     assert!(page.contains("Last edited by"));
     assert!(page.contains(ch.note_edited_by.as_deref().unwrap()));
     assert!(page.contains("2026-10-25"));
+}
+
+async fn administration_works(source: Arc<dyn Source>) {
+    let overview = source.overview().await.unwrap();
+    let id = overview.channels[0].channel.id.clone();
+    let current = source.channel(id.clone(), None).await.unwrap();
+    let name = current.members[0].name.clone();
+    let count = current.members.len();
+    let app = site(source.clone());
+    let (_, page) = get(&app, &format!("/channels/{id}")).await;
+    let token = form_token_in(&page);
+    let routes = [
+        (
+            format!("/channels/{id}/visibility"),
+            "open=false".to_string(),
+        ),
+        (
+            format!("/channels/{id}/members/add"),
+            format!("name={name}"),
+        ),
+        (
+            format!("/channels/{id}/members/remove"),
+            format!("name={name}"),
+        ),
+        (format!("/channels/{id}/hide"), String::new()),
+        (format!("/agents/{name}/hide"), String::new()),
+    ];
+    for (path, fields) in &routes {
+        assert_eq!(post(&app, path, fields).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            post(&app, path, &format!("{fields}&form_token=invalid"))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(get(&app, path).await.0, StatusCode::METHOD_NOT_ALLOWED);
+        let request = HttpRequest::builder()
+            .method("POST")
+            .uri(path)
+            .header("Host", "localhost")
+            .header("Origin", "http://other.example")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(Body::from(format!("{fields}&form_token={token}")))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    // The forged requests made no changes.
+    assert_eq!(
+        source
+            .channel(id.clone(), None)
+            .await
+            .unwrap()
+            .members
+            .len(),
+        count
+    );
+    assert!(source.agent(name.clone()).await.is_ok());
+    let open = !current.channel.open;
+    assert_eq!(
+        post(
+            &app,
+            &routes[0].0,
+            &format!("open={open}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        source.channel(id.clone(), None).await.unwrap().channel.open,
+        open
+    );
+    assert_eq!(
+        post(
+            &app,
+            &routes[2].0,
+            &format!("name={name}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        source
+            .channel(id.clone(), None)
+            .await
+            .unwrap()
+            .members
+            .len(),
+        count - 1
+    );
+    assert_eq!(
+        post(
+            &app,
+            &routes[1].0,
+            &format!("name={name}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    let view = source.channel(id.clone(), None).await.unwrap();
+    assert_eq!(view.members.len(), count);
+    assert!(view.messages.last().unwrap().from_operator);
+    assert!(view.messages.last().unwrap().body.contains("added"));
+    assert_eq!(
+        post(&app, &routes[4].0, &format!("form_token={token}"))
+            .await
+            .0,
+        StatusCode::SEE_OTHER
+    );
+    assert!(matches!(
+        source.agent(name.clone()).await,
+        Err(SourceError::NotFound(_))
+    ));
+    let view = source.channel(id.clone(), None).await.unwrap();
+    assert!(!view.members.iter().any(|m| m.name == name));
+    assert!(view.messages.last().unwrap().from_operator);
+    assert!(view.messages.last().unwrap().body.contains("hid"));
+    assert_eq!(
+        post(&app, &routes[3].0, &format!("form_token={token}")).await,
+        (StatusCode::SEE_OTHER, Some("/".into()))
+    );
+    assert!(matches!(
+        source.channel(id.clone(), None).await,
+        Err(SourceError::NotFound(_))
+    ));
+    let overview = source.overview().await.unwrap();
+    assert!(!overview.channels.iter().any(|c| c.channel.id == id));
+    assert!(!overview.agents.iter().any(|a| a.agent.name == name));
+}
+
+#[tokio::test]
+async fn administration_works_through_the_rules() {
+    administration_works(rules_source().await).await;
+}
+
+#[tokio::test]
+async fn administration_works_through_the_preview() {
+    administration_works(preview(
+        1,
+        Arc::new(FixedClock::new(start_time())),
+        &Shutdown::new(),
+    ))
+    .await;
+}
+
+#[tokio::test]
+async fn preview_feed_survives_empty_channels_and_hiding_every_entry() {
+    let p = preview(1, Arc::new(FixedClock::new(start_time())), &Shutdown::new());
+    let overview = p.overview().await.unwrap();
+    for agent in overview.agents {
+        p.hide_agent(agent.agent.name).await.unwrap();
+    }
+    // No remaining channel members must not cause an entropy-index panic.
+    p.step();
+    for channel in p.overview().await.unwrap().channels {
+        p.change_channel(channel.channel.id, ChannelAction::Hide)
+            .await
+            .unwrap();
+    }
+    assert!(p.overview().await.unwrap().channels.is_empty());
+    p.step();
+    assert!(!p.overview().await.unwrap().channels.is_empty());
 }
 
 async fn operator_editor_works(source: Arc<dyn Source>) {

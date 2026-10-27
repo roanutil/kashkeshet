@@ -2,7 +2,7 @@
 
 use super::fit::{Row, cut_bytes, one_line, short_time};
 use super::{Format, Formatter};
-use crate::rules::{AgentInfo, OperatorInstructions, Page, Reclaimed, Registration};
+use crate::rules::{AgentInfo, HandoffNote, OperatorInstructions, Page, Reclaimed, Registration};
 use serde_json::{Value, json};
 
 impl Formatter {
@@ -33,6 +33,28 @@ impl Formatter {
             ),
             Format::Json => json!({ "name": r.name, "token": r.token }).to_string(),
         }
+    }
+
+    /// A lossless part of the handoff note, as `note` gives a channel's.
+    pub fn handoff_note(&self, f: Format, note: &HandoffNote, offset: usize) -> String {
+        self.text_in_parts(&note.text, offset, |text, offset, next| match f {
+            Format::Json => json!({"name": note.name, "text": text, "set_at": note.set_at,
+                "offset": offset, "next_offset": next})
+            .to_string(),
+            Format::Text => {
+                let mut out = format!(
+                    "handoff note for {}\nset at {}\noffset: {offset}\n{text}",
+                    note.name,
+                    note.set_at.as_deref().unwrap_or("(never)")
+                );
+                if let Some(next) = next {
+                    out.push_str(&format!(
+                        "\nnext_offset: {next} (get_handoff_note offset={next})"
+                    ));
+                }
+                out
+            }
+        })
     }
 
     pub fn whoami(

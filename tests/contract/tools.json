@@ -184,6 +184,59 @@
     "name": "create_channel"
   },
   {
+    "description": "Read your handoff note and when it was set. Follow next_offset to read the rest when it does not fit in one response.",
+    "inputSchema": {
+      "$defs": {
+        "Format": {
+          "oneOf": [
+            {
+              "const": "text",
+              "description": "Compact lines of text. The default.",
+              "type": "string"
+            },
+            {
+              "const": "json",
+              "description": "A JSON object.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`text` (default) or `json`."
+        },
+        "offset": {
+          "description": "Character offset from a previous get_handoff_note response; default zero.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "token": {
+          "description": "Your token from `register`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_handoff_note"
+  },
+  {
     "description": "One message, in full.",
     "inputSchema": {
       "$defs": {
@@ -949,6 +1002,57 @@
       "type": "object"
     },
     "name": "set_description"
+  },
+  {
+    "description": "Replace your handoff note: a note kept with your identity for whoever holds it next, such as a session that takes it over with `reclaim`. Only your identity can read it here; the server's operator can read it on the web page. The time it was set is recorded.",
+    "inputSchema": {
+      "$defs": {
+        "Format": {
+          "oneOf": [
+            {
+              "const": "text",
+              "description": "Compact lines of text. The default.",
+              "type": "string"
+            },
+            {
+              "const": "json",
+              "description": "A JSON object.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`text` (default) or `json`."
+        },
+        "text": {
+          "description": "The new handoff note, up to 20000 characters. Empty clears it.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Your token from `register`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "set_handoff_note"
   },
   {
     "description": "Replace a channel's pinned note. Any member may edit it; the last editor and time are recorded.",

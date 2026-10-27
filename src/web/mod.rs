@@ -19,8 +19,8 @@ mod source;
 pub use preview::Preview;
 pub use real::RulesSource;
 pub use source::{
-    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelLink, ChannelSummary,
-    ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel,
+    ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelAction, ChannelLink,
+    ChannelSummary, ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel,
     OperatorInstructionsVersion, OperatorInstructionsView, Overview, ServerRun, SignIn, Source,
     SourceError,
 };
@@ -35,7 +35,7 @@ use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use change::Change;
+use change::{Change, NoFields};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
@@ -78,7 +78,13 @@ pub fn router(source: Arc<dyn Source>, hosts: AllowedHosts, gate: Arc<dyn Gate>)
         .route("/", get(index))
         .route("/channels/{id}", get(channel))
         .route("/channels/{id}/purpose", post(set_purpose))
+        .route("/channels/{id}/visibility", post(set_visibility))
+        .route("/channels/{id}/members/add", post(add_member))
+        .route("/channels/{id}/members/remove", post(remove_member))
+        .route("/channels/{id}/hide", post(hide_channel))
         .route("/agents/{name}", get(agent))
+        .route("/agents/{name}/hide", post(hide_agent))
+        .route("/agents/{name}/recovery-code", post(new_recovery_code))
         .route("/events", get(events))
         .route(
             "/instructions",
@@ -170,6 +176,17 @@ struct AgentPage {
     agent: Agent,
     channels: Vec<Channel>,
     message_count: i64,
+    handoff_note: String,
+    handoff_note_set_at: Option<String>,
+    sign_out: bool,
+    form_token: String,
+}
+
+#[derive(Template)]
+#[template(path = "recovery.html")]
+struct RecoveryCodePage {
+    agent: String,
+    code: String,
     sign_out: bool,
     form_token: String,
 }
@@ -252,6 +269,95 @@ async fn set_purpose(
     }
 }
 
+#[derive(Deserialize)]
+struct VisibilityForm {
+    open: String,
+}
+
+#[derive(Deserialize)]
+struct MemberForm {
+    name: String,
+}
+
+async fn channel_change(
+    pages: Pages,
+    id: String,
+    headers: HeaderMap,
+    change: ChannelAction,
+) -> Response {
+    let hidden = matches!(change, ChannelAction::Hide);
+    match pages.source.change_channel(id.clone(), change).await {
+        Ok(()) => Redirect::to(
+            if hidden {
+                "/".to_string()
+            } else {
+                format!("/channels/{}", url_path(&id))
+            }
+            .as_str(),
+        )
+        .into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
+async fn set_visibility(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<VisibilityForm>,
+) -> Response {
+    let open = match form.open.as_str() {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return pages.error(
+                SourceError::Invalid("open must be true or false".into()),
+                &headers,
+            );
+        }
+    };
+    channel_change(pages, id, headers, ChannelAction::SetOpen(open)).await
+}
+
+async fn add_member(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<MemberForm>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::AddMember(form.name)).await
+}
+
+async fn remove_member(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(form): Change<MemberForm>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::RemoveMember(form.name)).await
+}
+
+async fn hide_channel(
+    State(pages): State<Pages>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Change(_): Change<change::NoFields>,
+) -> Response {
+    channel_change(pages, id, headers, ChannelAction::Hide).await
+}
+
+async fn hide_agent(
+    State(pages): State<Pages>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Change(_): Change<change::NoFields>,
+) -> Response {
+    match pages.source.hide_agent(name).await {
+        Ok(()) => Redirect::to("/").into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
 /// `text` as one URL path segment.
 fn url_path(text: &str) -> String {
     text.bytes()
@@ -264,6 +370,29 @@ fn url_path(text: &str) -> String {
         .collect()
 }
 
+/// The human gives an agent a new recovery code. The page that shows it is
+/// the only place it ever appears, so the browser is told not to keep it.
+async fn new_recovery_code(
+    State(pages): State<Pages>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    Change(NoFields {}): Change<NoFields>,
+) -> Response {
+    match pages.source.new_recovery_code(name.clone()).await {
+        Ok(code) => (
+            [(header::CACHE_CONTROL, "no-store")],
+            page(RecoveryCodePage {
+                agent: name,
+                code,
+                sign_out: pages.sign_out,
+                form_token: pages.form_token(&headers),
+            }),
+        )
+            .into_response(),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
 async fn agent(
     State(pages): State<Pages>,
     Path(name): Path<String>,
@@ -274,6 +403,8 @@ async fn agent(
             agent: v.agent,
             channels: v.channels,
             message_count: v.message_count,
+            handoff_note: v.handoff_note,
+            handoff_note_set_at: v.handoff_note_set_at,
             sign_out: pages.sign_out,
             form_token: pages.form_token(&headers),
         }),

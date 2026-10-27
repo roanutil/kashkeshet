@@ -19,7 +19,9 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0006_agent_descriptions.sql"),
     include_str!("../../migrations/0007_channel_notes.sql"),
     include_str!("../../migrations/0008_operator_messages.sql"),
-    include_str!("../../migrations/0009_operator_instructions.sql"),
+    include_str!("../../migrations/0009_handoff_notes.sql"),
+    include_str!("../../migrations/0010_hidden_entries.sql"),
+    include_str!("../../migrations/0011_operator_instructions.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -194,6 +196,7 @@ fn message_from_row(r: &rusqlite::Row) -> rusqlite::Result<MessageRecord> {
 
 /// Which messages a `NewerFilter` covers. Uses `:after`, `:me` and `:filter`.
 const NEWER_SCOPE: &str = "m.id > :after
+    AND m.channel_id IN (SELECT id FROM channels WHERE hidden = 0)
     AND m.channel_id IN (SELECT channel_id FROM memberships WHERE agent = :me)
     AND (:filter IS NULL OR m.channel_id IN (SELECT value FROM json_each(:filter)))";
 
@@ -228,11 +231,19 @@ impl Reads for Sql<'_> {
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    fn agent_name_taken(&self, name: &str) -> StoreResult<bool> {
+        Ok(self.0.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agents WHERE name = ?)",
+            [name],
+            |r| r.get(0),
+        )?)
+    }
+
     fn agent(&self, name: &str) -> StoreResult<Option<AgentRecord>> {
         Ok(self
             .0
             .query_row(
-                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE name = ?"),
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE name = ? AND hidden = 0"),
                 [name],
                 agent_from_row,
             )
@@ -243,7 +254,7 @@ impl Reads for Sql<'_> {
         Ok(self
             .0
             .query_row(
-                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE token_hash = ?"),
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE token_hash = ? AND hidden = 0"),
                 [hash],
                 agent_from_row,
             )
@@ -254,9 +265,25 @@ impl Reads for Sql<'_> {
         Ok(self
             .0
             .query_row(
-                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE name = ? AND recovery_hash = ?"),
+                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE name = ? AND recovery_hash = ? AND hidden = 0"),
                 rusqlite::params![name, hash],
                 agent_from_row,
+            )
+            .optional()?)
+    }
+
+    fn handoff_note(&self, name: &str) -> StoreResult<Option<HandoffNoteRecord>> {
+        Ok(self
+            .0
+            .query_row(
+                "SELECT handoff_note, handoff_note_set_at FROM agents WHERE name = ?",
+                [name],
+                |r| {
+                    Ok(HandoffNoteRecord {
+                        text: r.get(0)?,
+                        set_at: r.get(1)?,
+                    })
+                },
             )
             .optional()?)
     }
@@ -269,7 +296,7 @@ impl Reads for Sql<'_> {
     ) -> StoreResult<Vec<AgentRecord>> {
         let mut stmt = self.0.prepare_cached(&format!(
             "SELECT {AGENT_COLUMNS} FROM agents
-             WHERE (:pattern IS NULL OR name LIKE :pattern ESCAPE '\\')
+             WHERE hidden = 0 AND (:pattern IS NULL OR name LIKE :pattern ESCAPE '\\')
                AND (:cursor IS NULL OR name > :cursor)
              ORDER BY name LIMIT :limit"
         ))?;
@@ -288,7 +315,7 @@ impl Reads for Sql<'_> {
 
     fn active_agent_count(&self) -> StoreResult<i64> {
         Ok(self.0.query_row(
-            "SELECT count(*) FROM agents WHERE revoked_at IS NULL",
+            "SELECT count(*) FROM agents WHERE revoked_at IS NULL AND hidden = 0",
             [],
             |r| r.get(0),
         )?)
@@ -296,7 +323,7 @@ impl Reads for Sql<'_> {
 
     fn agents_by_last_seen(&self) -> StoreResult<Vec<AgentRecord>> {
         let mut stmt = self.0.prepare_cached(&format!(
-            "SELECT {AGENT_COLUMNS} FROM agents ORDER BY coalesce(last_seen, created_at) DESC"
+            "SELECT {AGENT_COLUMNS} FROM agents WHERE hidden = 0 ORDER BY coalesce(last_seen, created_at) DESC"
         ))?;
         let agents = stmt
             .query_map([], agent_from_row)?
@@ -304,11 +331,19 @@ impl Reads for Sql<'_> {
         Ok(agents)
     }
 
+    fn channel_id_taken(&self, id: &str) -> StoreResult<bool> {
+        Ok(self.0.query_row(
+            "SELECT EXISTS(SELECT 1 FROM channels WHERE id = ?)",
+            [id],
+            |r| r.get(0),
+        )?)
+    }
+
     fn channel(&self, id: &str) -> StoreResult<Option<ChannelFacts>> {
         Ok(self
             .0
             .query_row(
-                "SELECT id, name, is_open FROM channels WHERE id = ?",
+                "SELECT id, name, is_open FROM channels WHERE id = ? AND hidden = 0",
                 [id],
                 |r| {
                     Ok(ChannelFacts {
@@ -340,7 +375,7 @@ impl Reads for Sql<'_> {
         };
         let mut stmt = self.0.prepare_cached(
             "SELECT c.id FROM channels c
-             WHERE (c.is_open = 1 OR EXISTS (SELECT 1 FROM memberships m
+             WHERE c.hidden = 0 AND (c.is_open = 1 OR EXISTS (SELECT 1 FROM memberships m
                                              WHERE m.channel_id = c.id AND m.agent = :me))
                AND (:member_only = 0 OR EXISTS (SELECT 1 FROM memberships m
                                                 WHERE m.channel_id = c.id AND m.agent = :me))
@@ -374,8 +409,8 @@ impl Reads for Sql<'_> {
     fn all_channel_ids(&self, member: Option<&str>) -> StoreResult<Vec<String>> {
         let mut stmt = self.0.prepare_cached(
             "SELECT c.id FROM channels c
-             WHERE :member IS NULL
-                OR EXISTS (SELECT 1 FROM memberships m WHERE m.channel_id = c.id AND m.agent = :member)
+             WHERE c.hidden = 0 AND (:member IS NULL
+                OR EXISTS (SELECT 1 FROM memberships m WHERE m.channel_id = c.id AND m.agent = :member))
              ORDER BY c.name, c.id",
         )?;
         let ids = stmt
@@ -399,7 +434,7 @@ impl Reads for Sql<'_> {
                         CASE WHEN :after IS NULL THEN NULL
                              ELSE (SELECT count(*) FROM messages g WHERE g.channel_id = c.id AND g.id > :after)
                         END, c.note, c.note_edited_by, c.note_edited_at
-                 FROM channels c WHERE c.id = :id",
+                 FROM channels c WHERE c.id = :id AND c.hidden = 0",
                 named_params! { ":id": id, ":viewer": viewer, ":after": after_id },
                 |r| {
                     Ok(ChannelSummary {
@@ -538,7 +573,7 @@ impl Reads for Sql<'_> {
     fn recent_messages(&self, limit: usize) -> StoreResult<Vec<MessageRecord>> {
         let mut stmt = self.0.prepare_cached(&format!(
             "SELECT {MESSAGE_COLUMNS} FROM messages m JOIN channels c ON c.id = m.channel_id
-             ORDER BY m.id DESC LIMIT ?"
+             WHERE c.hidden = 0 ORDER BY m.id DESC LIMIT ?"
         ))?;
         let messages = stmt
             .query_map([limit as i64], message_from_row)?
@@ -561,7 +596,7 @@ impl Reads for Sql<'_> {
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
              JOIN channels c ON c.id = m.channel_id
-             WHERE messages_fts MATCH :q
+             WHERE c.hidden = 0 AND messages_fts MATCH :q
                AND EXISTS (SELECT 1 FROM memberships x
                            WHERE x.channel_id = m.channel_id AND x.agent = :me)
                AND (:ch IS NULL OR m.channel_id = :ch)
@@ -597,7 +632,7 @@ impl Reads for Sql<'_> {
         let mut stmt = self.0.prepare_cached(
             "SELECT m.channel_id, c.name, count(*), max(m.id)
              FROM messages m JOIN channels c ON c.id = m.channel_id
-             WHERE m.id > :after
+             WHERE c.hidden = 0 AND m.id > :after
                AND m.channel_id IN (SELECT channel_id FROM memberships WHERE agent = :me)
              GROUP BY m.channel_id
              ORDER BY max(m.id) DESC",
@@ -737,6 +772,22 @@ impl Writes for Sql<'_> {
         Ok(())
     }
 
+    fn set_recovery_hash(&self, name: &str, hash: &[u8]) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET recovery_hash = ? WHERE name = ?",
+            rusqlite::params![hash, name],
+        )?;
+        Ok(())
+    }
+
+    fn set_handoff_note(&self, name: &str, text: &str, at: &str) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET handoff_note = ?, handoff_note_set_at = ? WHERE name = ?",
+            [text, at, name],
+        )?;
+        Ok(())
+    }
+
     fn set_last_seen(&self, name: &str, at: &str) -> StoreResult<()> {
         self.0
             .execute("UPDATE agents SET last_seen = ? WHERE name = ?", [at, name])?;
@@ -780,6 +831,32 @@ impl Writes for Sql<'_> {
             "UPDATE channels SET purpose = ? WHERE id = ?",
             rusqlite::params![purpose, channel_id],
         )?;
+        Ok(())
+    }
+
+    fn set_channel_open(&self, channel_id: &str, open: bool) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE channels SET is_open = ? WHERE id = ?",
+            rusqlite::params![open, channel_id],
+        )?;
+        Ok(())
+    }
+
+    fn hide_channel(&self, channel_id: &str) -> StoreResult<()> {
+        self.0
+            .execute("UPDATE channels SET hidden = 1 WHERE id = ?", [channel_id])?;
+        self.0
+            .execute("DELETE FROM memberships WHERE channel_id = ?", [channel_id])?;
+        Ok(())
+    }
+
+    fn hide_agent(&self, name: &str, at: &str) -> StoreResult<()> {
+        self.0.execute(
+            "UPDATE agents SET hidden = 1, revoked_at = coalesce(revoked_at, ?) WHERE name = ?",
+            [at, name],
+        )?;
+        self.0
+            .execute("DELETE FROM memberships WHERE agent = ?", [name])?;
         Ok(())
     }
 

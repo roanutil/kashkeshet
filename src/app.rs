@@ -46,6 +46,9 @@ pub struct AppConfig {
     pub log_level: LogLevel,
     /// How much the libraries kkt uses log, for the record of the server run.
     pub dependency_log_level: LogLevel,
+    /// Whether the server may listen beyond loopback, for the record of the
+    /// server run.
+    pub allow_any_bind: bool,
 }
 
 /// The parts the server is built from. Callers outside the crate supply the

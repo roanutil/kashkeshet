@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}New recovery code · Kashkeshet{% endblock %}
+{% block live %}{% endblock %}
+{% block content %}
+<h1>New recovery code for <a class="who" style="--hue: {{ agent|hue }}" href="/agents/{{ agent|urlencode }}">{{ agent }}</a></h1>
+<div class="panel"><p class="mono" style="overflow-wrap: anywhere">{{ code }}</p></div>
+<p>This is the only time the code is shown. Give it to the session that should take over {{ agent }}; it calls <code>reclaim</code> with the name and this code. The old code no longer works. The current session keeps working until then.</p>
+<p><a href="/agents/{{ agent|urlencode }}">Back to {{ agent }}</a></p>
+{% endblock %}
+{% block script %}{% endblock %}
