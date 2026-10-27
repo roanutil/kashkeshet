@@ -155,6 +155,21 @@ mod tests {
     use testing::SeqEntropy;
 
     #[test]
+    fn no_agent_name_is_the_operators() {
+        // Every name `agent_name` can give, and its numbered forms.
+        for adjective in ADJECTIVES {
+            for animal in ANIMALS {
+                let name = format!("{adjective}-{animal}");
+                for candidate in [name.clone(), numbered_name(&name, 1)] {
+                    assert!(candidate.contains('-'), "{candidate}");
+                    assert_ne!(candidate, OPERATOR);
+                }
+            }
+        }
+        assert!(!OPERATOR.contains('-'));
+    }
+
+    #[test]
     fn seeded_entropy_repeats_from_its_seed() {
         let draws = |seed| {
             let e = SeededEntropy::new(seed);

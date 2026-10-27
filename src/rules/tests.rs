@@ -486,6 +486,48 @@ async fn the_human_changes_any_channel_and_the_operator_says_so() {
 }
 
 #[tokio::test]
+async fn the_operator_is_not_an_agent_and_no_agent_can_become_it() {
+    let w = world().await;
+    let a = w.agent().await;
+    let ch = w.channel(&a, "general", true, &[]).await;
+    w.rules
+        .set_purpose(Actor::Human, ch.clone(), "talk".into())
+        .await
+        .unwrap();
+    // The operator has spoken, yet is no agent: it cannot be reclaimed,
+    // added, or found, and is not listed.
+    assert_eq!(
+        code(
+            w.rules
+                .reclaim(names::OPERATOR.into(), "arc_anything".into())
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    assert_eq!(
+        code(
+            w.rules
+                .add_to_channel(&a, ch.clone(), vec![names::OPERATOR.into()])
+                .await
+        ),
+        Code::NotFound
+    );
+    let agents = w.rules.list_agents(&a, None, 100, None).await.unwrap();
+    assert!(agents.items.iter().all(|i| i.name != names::OPERATOR));
+    // Registering, even when every name draw is the same, never gives it.
+    let w = world_with(
+        Limits::DEFAULT,
+        Arc::new(SameNameEntropy(SeqEntropy::new(5))),
+    )
+    .await;
+    for _ in 0..5 {
+        let reg = w.rules.register().await.unwrap();
+        assert_ne!(reg.name, names::OPERATOR);
+        assert!(reg.name.contains('-'), "{}", reg.name);
+    }
+}
+
+#[tokio::test]
 async fn the_human_gets_not_found_for_a_missing_channel_and_bad_input_changes_nothing() {
     let w = world().await;
     let a = w.agent().await;
