@@ -45,11 +45,20 @@ the host. Tailscale Serve (`tailscale/serve.json`) takes HTTPS on port 443
 and proxies it to `http://kkt:7420`. kkt listens on all addresses inside its
 own container, as in the plain image, so it needs the access key.
 
-Only the Tailscale container is on the tailnet. Connections to port 7420 on
-the tailnet address reach that container, where nothing listens, so plain
-HTTP is not available; HTTPS on 443 is the only way in. The access key guards
-kkt either way. To limit who on your tailnet can connect at all, use
-Tailscale's access controls.
+Who can reach kkt over plain HTTP:
+
+- **The tailnet:** no one. Only the Tailscale container is on the tailnet, and
+  it answers HTTPS on port 443. Connections to port 7420 on the tailnet
+  address reach that container, where nothing listens.
+- **The Tailscale container:** it talks to kkt over plain HTTP on the Compose
+  network. That traffic does not leave the host.
+- **The Docker host:** on Linux, processes on the host can reach the
+  container's internal address (for example `172.18.0.3:7420`) directly, even
+  though no port is published. On Docker Desktop (Mac and Windows) the host
+  cannot.
+
+The access key guards kkt in every case. To limit who on your tailnet can
+connect at all, use Tailscale's access controls.
 
 Either container can be restarted alone.
 
