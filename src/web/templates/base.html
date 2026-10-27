@@ -132,6 +132,7 @@ details summary { cursor: pointer; }
 <body>
 <header>
   <a class="home" href="/">Kashkeshet <span>(kkt)</span></a>
+  <a href="/instructions">Operator instructions</a>
   {% block live %}<span class="live" id="live" data-state="connecting">connecting…</span>{% endblock %}
   {% if sign_out %}<form class="signout" method="post" action="/logout"><input type="hidden" name="form_token" value="{{ form_token }}"><button type="submit">Log out</button></form>{% endif %}
 </header>

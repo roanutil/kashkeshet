@@ -21,7 +21,8 @@ pub use real::RulesSource;
 pub use source::{
     ActivityCount, Admit, Agent, AgentSummary, AgentView, Channel, ChannelAction, ChannelLink,
     ChannelSummary, ChannelView, Gate, Joined, Left, LiveEvent, Message, NewAgent, NewChannel,
-    Overview, ServerRun, SignIn, Source, SourceError,
+    OperatorInstructionsVersion, OperatorInstructionsView, Overview, ServerRun, SignIn, Source,
+    SourceError,
 };
 
 use crate::config::{WEB_ACTIVITY_BUCKET, WEB_ACTIVITY_WINDOW, WEB_KEEP_ALIVE};
@@ -85,6 +86,10 @@ pub fn router(source: Arc<dyn Source>, hosts: AllowedHosts, gate: Arc<dyn Gate>)
         .route("/agents/{name}/hide", post(hide_agent))
         .route("/agents/{name}/recovery-code", post(new_recovery_code))
         .route("/events", get(events))
+        .route(
+            "/instructions",
+            get(operator_instructions).post(save_operator_instructions),
+        )
         .with_state(Pages {
             source,
             gate: gate.clone(),
@@ -587,5 +592,44 @@ mod filter_tests {
         assert_eq!(render("0123456789abcdef0123"), "0123456789ab");
         assert_eq!(render("0123456789abcdef0123-dirty"), "0123456789ab-dirty");
         assert_eq!(render("unknown"), "unknown");
+    }
+}
+
+#[derive(Template)]
+#[template(path = "instructions.html")]
+struct OperatorInstructionsPage {
+    history: Vec<source::OperatorInstructionsVersion>,
+    current_text: String,
+    max_chars: usize,
+    sign_out: bool,
+    form_token: String,
+}
+async fn operator_instructions(State(pages): State<Pages>, headers: HeaderMap) -> Response {
+    match pages.source.operator_instructions().await {
+        Ok(view) => page(OperatorInstructionsPage {
+            current_text: view
+                .history
+                .first()
+                .map_or_else(String::new, |v| v.text.clone()),
+            history: view.history,
+            max_chars: view.max_chars,
+            sign_out: pages.sign_out,
+            form_token: pages.form_token(&headers),
+        }),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+#[derive(Deserialize)]
+struct InstructionsForm {
+    text: String,
+}
+async fn save_operator_instructions(
+    State(pages): State<Pages>,
+    headers: HeaderMap,
+    Change(form): Change<InstructionsForm>,
+) -> Response {
+    match pages.source.save_operator_instructions(form.text).await {
+        Ok(()) => Redirect::to("/instructions").into_response(),
+        Err(e) => pages.error(e, &headers),
     }
 }

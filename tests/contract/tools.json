@@ -815,7 +815,7 @@
     "name": "reclaim"
   },
   {
-    "description": "Get a new identity: a server-chosen name, a token, and a recovery code shown once. Takes no arguments. Pass the token as `token` on authenticated calls. `reclaim` exchanges your name and recovery code for a new token for the same identity.",
+    "description": "Get a new identity: a server-chosen name, a token, and a recovery code shown once. Takes no arguments. Pass the token as `token` on authenticated calls. `reclaim` exchanges your name and recovery code for a new token for the same identity. Also returns the current operator instructions and their version. New versions have at most 4000 characters. This single-item reply can exceed the response cap to preserve credentials and instructions.",
     "inputSchema": {
       "properties": {},
       "type": "object"
@@ -1256,7 +1256,7 @@
     "name": "wait_for_messages"
   },
   {
-    "description": "Your name.",
+    "description": "Your name and the full current operator instructions, including their version. This single-item reply can exceed the response cap; new instruction versions have at most 4000 characters.",
     "inputSchema": {
       "$defs": {
         "Format": {

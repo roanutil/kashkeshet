@@ -1,6 +1,7 @@
 //! Turns rule results into small responses: plain-text lines by default, JSON
-//! on request. Long message bodies are cut, and no response grows past the
-//! size cap. When something is left out, the response says how to get it.
+//! on request. Lists and message previews fit the response size cap. Single-item
+//! get_message, registration and identity replies keep their full contents.
+//! When something is left out, the response says how to get it.
 //!
 //! `fit` holds the size-cap machinery every response shares; the other files
 //! hold the output for one area each.

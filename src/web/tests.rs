@@ -907,3 +907,98 @@ async fn preview_feed_survives_empty_channels_and_hiding_every_entry() {
     p.step();
     assert!(!p.overview().await.unwrap().channels.is_empty());
 }
+
+async fn operator_editor_works(source: Arc<dyn Source>) {
+    let site = site(source.clone());
+    let (status, page) = get(&site, "/instructions").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("No versions saved."));
+    let token = form_token_in(&page);
+    let foreign = HttpRequest::builder()
+        .method("POST")
+        .uri("/instructions")
+        .header("Host", "localhost")
+        .header("Origin", "https://evil.example")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!("text=forged&form_token={token}")))
+        .unwrap();
+    assert_eq!(
+        site.clone().oneshot(foreign).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    assert_eq!(
+        post(&site, "/instructions", "text=forged").await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(&site, "/instructions", "text=forged&form_token=wrong")
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert!(
+        source
+            .operator_instructions()
+            .await
+            .unwrap()
+            .history
+            .is_empty()
+    );
+    assert_eq!(
+        post(
+            &site,
+            "/instructions",
+            &format!("text=%3Cscript%3E%26%0Ahello&form_token={token}")
+        )
+        .await,
+        (StatusCode::SEE_OTHER, Some("/instructions".into()))
+    );
+    let first = source.operator_instructions().await.unwrap();
+    assert_eq!(first.history[0].version, 1);
+    assert_eq!(first.history[0].text, "<script>&\nhello");
+    let (_, page) = get(&site, "/instructions").await;
+    assert!(page.contains("&#60;script&#62;&#38;"));
+    assert!(!page.contains("<script>&"));
+    assert!(page.contains("Version 1"));
+    assert_eq!(
+        post(&site, "/instructions", &format!("text=&form_token={token}"))
+            .await
+            .0,
+        StatusCode::SEE_OTHER
+    );
+    let history = source.operator_instructions().await.unwrap().history;
+    assert_eq!(history[0].text, "");
+    assert_eq!(history[0].version, 2);
+    assert_eq!(history[1], first.history[0]);
+    let too_long = "x".repeat(first.max_chars + 1);
+    assert_eq!(
+        post(
+            &site,
+            "/instructions",
+            &format!("text={too_long}&form_token={token}")
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        source.operator_instructions().await.unwrap().history,
+        history
+    );
+    // A page read cannot make another version.
+    get(&site, "/instructions?text=forged").await;
+    assert_eq!(
+        source.operator_instructions().await.unwrap().history.len(),
+        2
+    );
+}
+#[tokio::test]
+async fn operator_editor_works_through_rules() {
+    operator_editor_works(rules_source().await).await;
+}
+#[tokio::test]
+async fn operator_editor_works_in_preview() {
+    let clock = Arc::new(FixedClock::new(start_time()));
+    operator_editor_works(preview(1, clock, &Shutdown::new())).await;
+}
