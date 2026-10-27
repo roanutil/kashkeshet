@@ -26,6 +26,16 @@ kkt never prints the key in its logs. To read it:
 docker compose exec kkt kkt key show
 ```
 
+Save it to its own file, and give that file to `kkt connect` with
+`--key-file`. Without `--key-file`, `kkt connect` uses (and creates if
+missing) the key of a kkt installed on this machine, which is a different
+key.
+
+```
+(umask 077; docker compose exec -T kkt kkt key show > ~/.config/kkt/docker-access-key)
+kkt connect claude-code --url http://127.0.0.1:7420/mcp --key-file ~/.config/kkt/docker-access-key --write
+```
+
 ## With Tailscale
 
 `compose.tailscale.yaml` runs the `tailscale/tailscale` image as a separate

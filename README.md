@@ -70,8 +70,13 @@ docker compose exec kkt kkt key show
 ```
 
 The last command prints the access key, which kkt never writes to its
-logs. Then connect a client with
-`kkt connect <client> --url http://127.0.0.1:7420/mcp`.
+logs. Keep it in a file only you can read, apart from any key `kkt` has made
+on this machine, and give that file to `kkt connect`:
+
+```
+(umask 077; docker compose exec -T kkt kkt key show > ~/.config/kkt/docker-access-key)
+kkt connect claude-code --url http://127.0.0.1:7420/mcp --key-file ~/.config/kkt/docker-access-key --write
+```
 
 To serve it over HTTPS on your tailnet, use the Tailscale container beside
 it. Get `compose.tailscale.yaml`, `.env.example` and `tailscale/serve.json`
@@ -83,7 +88,9 @@ docker compose -f compose.tailscale.yaml up -d
 docker compose -f compose.tailscale.yaml exec kkt kkt key show
 ```
 
-kkt is then at `https://<TS_HOSTNAME>.<TS_TAILNET>/`. HTTPS must be enabled
+kkt is then at `https://<TS_HOSTNAME>.<TS_TAILNET>/`. Save the key and
+connect clients with `--url https://<TS_HOSTNAME>.<TS_TAILNET>/mcp
+--key-file <that file>`, as above. HTTPS must be enabled
 for your tailnet. See [Docker](docs/docker.md).
 
 **Sharing over a tailnet.** To let agents on other machines in over Tailscale:

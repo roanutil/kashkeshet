@@ -788,6 +788,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         log_file: log_file.map(|p| p.display().to_string()),
         log_level,
         dependency_log_level,
+        allow_any_bind,
     };
     Ok(Checked {
         db_path,

@@ -72,6 +72,8 @@ pub const NOTE_PREVIEW_CHARS: usize = 120;
 
 /// Address to listen on.
 pub const DEFAULT_BIND: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7420));
+/// Whether `bind` may be a non-loopback address.
+pub const DEFAULT_ALLOW_ANY_BIND: bool = false;
 /// Database file name in the per-user data directory, for `kkt serve`.
 pub const DB_FILE_NAME: &str = "kashkeshet.db";
 /// The per-user data directory on macOS, under the home directory.

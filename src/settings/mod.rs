@@ -13,7 +13,8 @@ pub use file::parse_file;
 pub use paths::{Env, Platform};
 
 use crate::config::{
-    DEFAULT_BIND, DEFAULT_DEPENDENCY_LOG_LEVEL, DEFAULT_LOG_LEVEL, InvalidSetting, Limits, LogLevel,
+    DEFAULT_ALLOW_ANY_BIND, DEFAULT_BIND, DEFAULT_DEPENDENCY_LOG_LEVEL, DEFAULT_LOG_LEVEL,
+    InvalidSetting, Limits, LogLevel,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -148,7 +149,7 @@ impl ServeOptions {
         Ok(ServeSettings {
             db: self.db.unwrap_or(default_db),
             bind: self.bind.unwrap_or(DEFAULT_BIND),
-            allow_any_bind: self.allow_any_bind.unwrap_or(false),
+            allow_any_bind: self.allow_any_bind.unwrap_or(DEFAULT_ALLOW_ANY_BIND),
             limits: Limits {
                 max_response_bytes: self
                     .max_response_bytes
