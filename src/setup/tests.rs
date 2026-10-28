@@ -160,6 +160,7 @@ fn with_no_one_to_ask_a_question_names_its_flag() {
     let q = Question {
         text: "What is this machine for?",
         flag: "--mode",
+        default: None,
     };
     assert_eq!(
         unanswered(q),
@@ -187,6 +188,7 @@ mod flow {
     struct Script {
         replies: RefCell<VecDeque<Reply>>,
         asked: RefCell<Vec<String>>,
+        defaults: RefCell<Vec<Option<bool>>>,
         told: RefCell<Vec<String>>,
     }
 
@@ -200,6 +202,7 @@ mod flow {
 
         fn next(&self, question: Question) -> Reply {
             self.asked.borrow_mut().push(question.flag.to_string());
+            self.defaults.borrow_mut().push(question.default);
             self.replies
                 .borrow_mut()
                 .pop_front()
@@ -423,9 +426,20 @@ mod flow {
     }
 
     #[test]
+    fn docker_is_offered_first_and_recommended() {
+        assert_eq!(
+            Purpose::ALL,
+            [Purpose::Docker, Purpose::Service, Purpose::Client]
+        );
+        assert!(Purpose::Docker.describe().ends_with("(Recommended)"));
+        assert!(!Purpose::Service.describe().contains("Recommended"));
+        assert!(!Purpose::Client.describe().contains("Recommended"));
+    }
+
+    #[test]
     fn every_question_comes_before_anything_changes() {
         let ask = Script::with(vec![
-            Reply::Choose(0),
+            Reply::Choose(1),
             Reply::Confirm(true),
             Reply::Confirm(true),
             Reply::Confirm(true),
@@ -437,6 +451,10 @@ mod flow {
         };
         let record = run(&Answers::default(), "0.4.0", &ask, &steps).expect("setup");
         assert_eq!(record.mode, Mode::Service { tailscale: true });
+        assert_eq!(
+            *ask.defaults.borrow(),
+            [None, None, None, Some(true), Some(true)]
+        );
         assert_eq!(
             *ask.asked.borrow(),
             [

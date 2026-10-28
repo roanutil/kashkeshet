@@ -16,7 +16,7 @@ pub enum Purpose {
 }
 
 impl Purpose {
-    pub const ALL: [Purpose; 3] = [Purpose::Service, Purpose::Docker, Purpose::Client];
+    pub const ALL: [Purpose; 3] = [Purpose::Docker, Purpose::Service, Purpose::Client];
 
     /// The `--mode` value.
     pub fn name(self) -> &'static str {
@@ -31,10 +31,10 @@ impl Purpose {
         Purpose::ALL.into_iter().find(|p| p.name() == name)
     }
 
-    fn describe(self) -> &'static str {
+    pub(super) fn describe(self) -> &'static str {
         match self {
             Purpose::Service => "Run the kkt server here, as a service that starts when you log in",
-            Purpose::Docker => "Run the kkt server here, in Docker",
+            Purpose::Docker => "Run the kkt server here, in Docker (Recommended)",
             Purpose::Client => "Connect this machine's clients to a kkt server elsewhere",
         }
     }
@@ -109,25 +109,30 @@ pub trait Steps {
 const MODE: Question = Question {
     text: "What is this machine for?",
     flag: "--mode",
+    default: None,
 };
 const TAILSCALE: Question = Question {
     text: "Share the server over Tailscale, so your other machines can reach it?",
     flag: "--tailscale or --no-tailscale",
+    default: None,
 };
 const CONTAINERS: Question = Question {
     text: "Will agents in Docker containers on this machine use this server? They reach it as \
            host.docker.internal.",
     flag: "--allow-host host.docker.internal, or --allow-host none",
+    default: None,
 };
 /// The name Docker gives containers for the machine they run on.
 const DOCKER_HOST: &str = "host.docker.internal";
 const URL: Question = Question {
     text: "The server's MCP address, such as https://kkt.tail1234.ts.net/mcp:",
     flag: "--url",
+    default: None,
 };
 const KEY: Question = Question {
     text: "The server's access key (run `kkt key show` there), or nothing if it has none:",
     flag: "--key-file",
+    default: None,
 };
 
 /// Runs `kkt setup`: asks what `answers` leaves open, sets the machine up,
@@ -380,6 +385,7 @@ fn choose_clients(
         let question = Question {
             text: &format!("Connect {} to kkt?", client.display_name()),
             flag: "--clients",
+            default: Some(true),
         };
         if answers.yes || ask.confirm(question)? {
             chosen.push(client);

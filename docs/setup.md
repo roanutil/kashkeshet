@@ -6,20 +6,15 @@ After installing the `kkt` program, run:
 kkt setup
 ```
 
-Choose a server as a service, a server in Docker, or a client-only
-machine. Setup offers the clients it detects, checks the server connection
-with `kkt doctor`, then applies the chosen clients' settings through
-`kkt connect`.
+Choose a server in Docker (recommended), a server as a service, or a
+client-only machine. Setup offers the clients it detects, checks the server
+connection with `kkt doctor`, then applies the chosen clients' settings
+through `kkt connect`.
 If a step fails, the report explains what to fix; setup may already have
 started a server or changed a client configuration. Restart connected
 clients so they load their settings.
 
 ## Server on this machine
-
-**Service** uses launchd on macOS or a systemd user service on Linux,
-with the usual config file, database and key paths. It starts now and at
-login; see [service](service.md) for logs and start/stop commands. A Linux
-user service normally stops at logout unless lingering is enabled.
 
 **Docker** needs the Docker daemon and Compose. Setup keeps its Compose
 files and settings in a managed `docker` folder under kkt's data directory:
@@ -30,6 +25,11 @@ creates the backups folder, handles its permissions, starts the containers
 and saves their key in `~/.config/kkt/docker-access-key`, readable only by
 you. No Compose download, version entry or manual key copy is needed.
 [Docker](docker.md) describes the separate manual setup.
+
+**Service** uses launchd on macOS or a systemd user service on Linux,
+with the usual config file, database and key paths. It starts now and at
+login; see [service](service.md) for logs and start/stop commands. A Linux
+user service normally stops at logout unless lingering is enabled.
 
 Without Tailscale, the web page is at <http://127.0.0.1:7420/> and clients
 use `http://127.0.0.1:7420/mcp`.
@@ -97,6 +97,9 @@ with `kkt key show` on a service host, or the manual container command in
 [Docker](docker.md#the-access-key).
 
 ## Flags and unattended setup
+
+At a terminal, "Connect <client> to kkt?" shows `[Y/n]`: press Enter to
+connect, or type `n` to skip it. Other yes/no questions require an answer.
 
 Each setup question has a flag. Without a terminal, an unanswered question
 is an error naming the flag to supply.
