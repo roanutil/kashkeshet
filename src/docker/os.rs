@@ -9,10 +9,7 @@ pub struct OsHost;
 
 impl Host for OsHost {
     fn run(&self, command: &Command) -> io::Result<Finished> {
-        let output = std::process::Command::new(command.program)
-            .args(&command.args)
-            .stdin(Stdio::null())
-            .output()?;
+        let output = process(command).stdin(Stdio::null()).output()?;
         Ok(Finished {
             code: output.status.code(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -21,10 +18,7 @@ impl Host for OsHost {
     }
 
     fn run_attached(&self, command: &Command) -> io::Result<Finished> {
-        let status = std::process::Command::new(command.program)
-            .args(&command.args)
-            .stdin(Stdio::null())
-            .status()?;
+        let status = process(command).stdin(Stdio::null()).status()?;
         Ok(Finished {
             code: status.code(),
             ..Finished::default()
@@ -50,6 +44,16 @@ impl Host for OsHost {
     fn say(&self, line: &str) {
         println!("{line}");
     }
+}
+
+/// The process for `command`, without the variables it must not see.
+fn process(command: &Command) -> std::process::Command {
+    let mut process = std::process::Command::new(command.program);
+    process.args(&command.args);
+    for name in &command.unset {
+        process.env_remove(name);
+    }
+    process
 }
 
 #[cfg(unix)]

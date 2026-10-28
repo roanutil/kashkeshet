@@ -635,3 +635,67 @@ fn a_test_setup_can_use_its_own_project_name_and_port() {
     assert!(env.contains("COMPOSE_PROJECT_NAME=kkt-test\n"), "{env}");
     assert!(env.contains("KKT_PORT=7421\n"), "{env}");
 }
+
+#[test]
+fn commands_run_without_the_variables_that_would_override_the_settings_file() {
+    let command = super::compose::compose(&folder(), &["up", "-d"]);
+    for name in [
+        "COMPOSE_FILE",
+        "COMPOSE_PROJECT_NAME",
+        "KKT_VERSION",
+        "KKT_PORT",
+        "TS_HOSTNAME",
+        "TS_TAILNET",
+        "TS_AUTHKEY",
+    ] {
+        assert!(command.unset.iter().any(|v| v == name), "{name}");
+    }
+    assert!(
+        super::compose::version()
+            .unset
+            .iter()
+            .any(|v| v == "COMPOSE_FILE")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_real_host_leaves_unset_variables_out_of_a_commands_environment() {
+    // Cargo sets CARGO_MANIFEST_DIR for every test run.
+    let print = |unset: Vec<String>| {
+        OsHost
+            .run(&Command {
+                program: "sh",
+                args: vec![
+                    "-c".into(),
+                    "printf %s \"${CARGO_MANIFEST_DIR-unset}\"".into(),
+                ],
+                unset,
+            })
+            .unwrap()
+            .stdout
+    };
+    assert_ne!(print(vec![]), "unset");
+    assert_eq!(print(vec!["CARGO_MANIFEST_DIR".into()]), "unset");
+}
+
+#[test]
+fn status_does_not_call_a_container_stopped_when_compose_failed() {
+    let host = FakeHost::new(|command| {
+        if command.contains("ps --status") {
+            failed("Cannot connect to the Docker daemon")
+        } else {
+            ok("")
+        }
+    });
+    host.files.borrow_mut().insert(
+        PathBuf::from("/data/docker/.env"),
+        (env_text(&plain(), None), true),
+    );
+    let err = status(&host, &folder()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Cannot connect to the Docker daemon"),
+        "{err}"
+    );
+}

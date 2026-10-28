@@ -48,13 +48,21 @@ pub trait Host {
 pub struct Command {
     pub program: &'static str,
     pub args: Vec<String>,
+    /// Environment variables the command must run without.
+    pub unset: Vec<String>,
 }
 
 impl Command {
+    /// A `docker` command that does not see the variables Compose would let
+    /// override the managed folder's settings file.
     fn docker(args: Vec<String>) -> Command {
         Command {
             program: "docker",
             args,
+            unset: crate::config::DOCKER_MANAGED_VARIABLES
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
         }
     }
 }

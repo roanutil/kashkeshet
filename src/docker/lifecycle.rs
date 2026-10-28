@@ -33,13 +33,18 @@ pub fn status(host: &dyn Host, folder: &Folder) -> Result<State, DockerError> {
     let env = host
         .read_file(&env_path)
         .map_err(|e| DockerError::io(format!("could not read {}", env_path.display()), e))?;
-    let done = run(
-        host,
-        &compose(folder, &["ps", "--status", "running", "--services"]),
-    )?;
+    let ps = compose(folder, &["ps", "--status", "running", "--services"]);
+    let done = run(host, &ps)?;
+    if !done.success() {
+        // Not knowing is not the same as stopped.
+        return Err(DockerError::Command {
+            command: ps.to_string(),
+            detail: done.detail(),
+        });
+    }
     Ok(State {
         files_present: true,
-        running: done.success() && done.stdout.lines().any(|l| l.trim() == "kkt"),
+        running: done.stdout.lines().any(|l| l.trim() == "kkt"),
         version: version_in_env(&env),
         tailscale: env
             .lines()
