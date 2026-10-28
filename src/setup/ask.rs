@@ -7,6 +7,9 @@ pub struct Question<'a> {
     pub text: &'a str,
     /// Such as `--mode`.
     pub flag: &'static str,
+    /// The answer Enter accepts for a yes/no question at a terminal.
+    /// This never answers a question when there is no terminal.
+    pub default: Option<bool>,
 }
 
 /// Asks questions and says what happened. The terminal implementation is in
