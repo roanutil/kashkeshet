@@ -140,6 +140,8 @@ struct FakeLogin {
     /// What `open_requested` answers, one per ask; false when it runs out.
     requests: RefCell<std::collections::VecDeque<bool>>,
     open_fails: Cell<bool>,
+    /// What `open_failure` answers once, after an open.
+    later_failure: RefCell<Option<String>>,
 }
 
 impl LoginLink for FakeLogin {
@@ -158,6 +160,10 @@ impl LoginLink for FakeLogin {
         } else {
             Ok(())
         }
+    }
+
+    fn open_failure(&self) -> Option<String> {
+        self.later_failure.borrow_mut().take()
     }
 }
 
@@ -911,7 +917,7 @@ async fn the_link_is_opened_when_asked_and_setup_goes_on_watching_for_the_login(
         host.said
             .borrow()
             .iter()
-            .any(|l| l.contains("Opened the link"))
+            .any(|l| l.contains("Opening the link"))
     );
 }
 
@@ -966,4 +972,43 @@ async fn no_link_is_shown_when_no_login_is_needed() {
     .await
     .unwrap();
     assert!(login.shown.borrow().is_empty());
+}
+
+#[tokio::test]
+async fn an_opener_that_fails_after_starting_is_said_while_setup_goes_on_waiting() {
+    let polls = Cell::new(0);
+    let host = FakeHost::new(move |command| {
+        if command.contains("tailscale status") {
+            polls.set(polls.get() + 1);
+            return ok(if polls.get() < 5 {
+                NEEDS_LOGIN
+            } else {
+                RUNNING
+            });
+        }
+        working("")(command)
+    });
+    let login = FakeLogin::default();
+    login.requests.borrow_mut().extend([true]);
+    *login.later_failure.borrow_mut() = Some("the opener ended with exit status: 7".into());
+    provision(
+        &host,
+        &*host.clock,
+        &login,
+        &folder(),
+        &with_tailscale(None),
+        Path::new("/keys/docker"),
+    )
+    .await
+    .unwrap();
+    let said = host.said.borrow();
+    assert!(
+        said.iter().any(|l| l.contains("Opening the link")),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|l| l.contains("Could not open a browser") && l.contains("exit status: 7")),
+        "{said:?}"
+    );
 }

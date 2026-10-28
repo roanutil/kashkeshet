@@ -136,11 +136,16 @@ async fn log_in(
                     }
                     if login.open_requested() {
                         match login.open(url) {
-                            Ok(()) => host.say("Opened the link in your browser."),
+                            Ok(()) => host.say("Opening the link in your browser..."),
                             Err(e) => host.say(&format!(
                                 "Could not open a browser ({e}); open the link above yourself."
                             )),
                         }
+                    }
+                    if let Some(why) = login.open_failure() {
+                        host.say(&format!(
+                            "Could not open a browser ({why}); open the link above yourself."
+                        ));
                     }
                 }
                 Ok(None)

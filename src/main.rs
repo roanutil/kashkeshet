@@ -1,3 +1,5 @@
+mod browser_login;
+
 use clap::{Args, Parser, Subcommand};
 use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::app::{self, AppConfig, Parts};
@@ -1018,7 +1020,7 @@ impl setup::Steps for OsSteps<'_> {
             .block_on(docker::provision(
                 &docker::OsHost,
                 &SystemClock,
-                &docker::TerminalLink::new(),
+                &browser_login::TerminalLink::new(),
                 &docker::Folder(folder.clone()),
                 &inputs,
                 &key_file,
