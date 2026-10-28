@@ -162,9 +162,39 @@ struct SetupFlags {
     /// Connect every client found without asking.
     #[arg(long)]
     yes: bool,
+    /// For Docker over Tailscale: the machine name to ask for on the
+    /// tailnet. (The service uses this machine's own Tailscale name.)
+    #[arg(long, default_value = config::DEFAULT_TS_HOSTNAME)]
+    ts_hostname: String,
+    /// For Docker over Tailscale: a file holding a Tailscale auth key, to log
+    /// in with instead of a link.
+    #[arg(long)]
+    ts_authkey_file: Option<PathBuf>,
+    /// For testing: the kkt version whose image Docker runs.
+    #[arg(long, hide = true, default_value = Build::CURRENT.version)]
+    kkt_version: String,
+    /// For testing beside a real setup: the Compose project name.
+    #[arg(long, hide = true, default_value = config::DOCKER_PROJECT)]
+    docker_project: String,
+    /// For testing beside a real setup: the port on 127.0.0.1 Docker
+    /// publishes kkt on.
+    #[arg(long, hide = true, default_value_t = DEFAULT_BIND.port())]
+    docker_port: u16,
 }
 
 impl SetupFlags {
+    /// The settings for a Docker or Tailscale install, which the flow passes
+    /// through without asking about.
+    fn install_options(&self) -> InstallOptions {
+        InstallOptions {
+            ts_hostname: self.ts_hostname.clone(),
+            ts_authkey_file: self.ts_authkey_file.clone(),
+            kkt_version: self.kkt_version.clone(),
+            docker_project: self.docker_project.clone(),
+            docker_port: self.docker_port,
+        }
+    }
+
     fn answers(self) -> Result<setup::Answers, String> {
         let clients = match self.clients.as_deref() {
             None => None,
@@ -457,11 +487,21 @@ fn client_connection(
     create: bool,
 ) -> Result<Connection, String> {
     // With nothing given, clients use the server `kkt setup` recorded.
-    let nothing_given = flags.url.is_none() && flags.key_file.is_none() && flags.config.is_none();
-    if nothing_given && let Some(record) = read_setup(env)? {
+    // Without --config, clients use the server `kkt setup` recorded; --url
+    // and --key-file each replace only their own part of it.
+    if flags.config.is_none()
+        && let Some(record) = read_setup(env)?
+    {
+        let key_file = match flags.key_file {
+            Some(path) => Some(
+                std::path::absolute(&path)
+                    .map_err(|e| format!("could not resolve key path: {e}"))?,
+            ),
+            None => record.key_file,
+        };
         return Ok(Connection {
-            url: record.url,
-            key_file: record.key_file,
+            url: flags.url.unwrap_or(record.url),
+            key_file,
         });
     }
     serve_connection(env, flags, create)
@@ -713,11 +753,12 @@ fn process_env() -> Env {
 /// `kkt setup`: asks on the terminal if there is one, and does the work
 /// through [`OsSteps`].
 async fn run_setup(env: &Env, flags: SetupFlags) -> Result<(), String> {
+    let options = flags.install_options();
     let answers = flags.answers()?;
     let ask = TerminalAsk {
         interactive: std::io::stdin().is_terminal(),
     };
-    let steps = OsSteps { env };
+    let steps = OsSteps { env, options };
     // Steps are synchronous; doctor's checks are async, so they block on
     // this runtime from inside.
     tokio::task::block_in_place(|| {
@@ -787,17 +828,68 @@ impl setup::Ask for TerminalAsk {
     }
 }
 
+/// How to install, beyond what setup asks.
+struct InstallOptions {
+    ts_hostname: String,
+    ts_authkey_file: Option<PathBuf>,
+    kkt_version: String,
+    docker_project: String,
+    docker_port: u16,
+}
+
 /// What `kkt setup` does to this machine.
 struct OsSteps<'a> {
     env: &'a Env,
+    options: InstallOptions,
+}
+
+/// The address `kkt serve` would listen on with the default config file.
+fn serve_bind(env: &Env) -> Result<SocketAddr, String> {
+    let loaded = load_serve_options(env, None, ServeOptions::NONE)?;
+    let sources = loaded.sources();
+    let settings = loaded
+        .flags
+        .over(loaded.from_file)
+        .resolve(
+            env.default_db(Platform::CURRENT).unwrap_or_default(),
+            env.access_key_file(),
+        )
+        .map_err(|e| sources.invalid(e))?;
+    Ok(settings.bind)
+}
+
+/// Adds `host` to `allow_hosts` in the default config file, making the file
+/// if there is none.
+fn allow_host_in_config(env: &Env, host: &str) -> Result<(), String> {
+    let path = env
+        .config_file()
+        .ok_or("set HOME to keep kkt's config file")?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("could not read {}: {e}", path.display())),
+    };
+    let updated = settings::with_allowed_host(&text, host)
+        .map_err(|e| format!("invalid setting: {e} (in {})", path.display()))?;
+    if updated == text {
+        return Ok(());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    }
+    std::fs::write(&path, updated).map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 impl setup::Steps for OsSteps<'_> {
     fn install_service(&self, tailscale: bool) -> Result<setup::Installed, String> {
-        if tailscale {
-            return Err("sharing the service over Tailscale is not available yet; \
-                 run `kkt setup --no-tailscale`"
-                .to_string());
+        // Before anything changes: Tailscale must be logged in, with HTTPS.
+        let node = match tailscale {
+            true => Some(tailscale::prepare(&tailscale::OsHost)?),
+            false => None,
+        };
+        if let Some(node) = &node {
+            allow_host_in_config(self.env, &node.dns_name)?;
         }
         service(
             self.env,
@@ -815,19 +907,85 @@ impl setup::Steps for OsSteps<'_> {
             key_file: None,
         };
         let connection = serve_connection(self.env, no_flags, false)?;
+        let url = match &node {
+            Some(node) => {
+                tailscale::serve(&tailscale::OsHost, serve_bind(self.env)?)?;
+                format!("https://{}/mcp", node.dns_name)
+            }
+            None => connection.url,
+        };
         Ok(setup::Installed {
-            url: connection.url,
+            url,
             key_file: connection.key_file,
         })
     }
 
     fn install_docker(
         &self,
-        _tailscale: bool,
+        tailscale: bool,
     ) -> Result<(setup::Installed, setup::DockerSetup), String> {
-        Err("setting up the server in Docker is not available yet; \
-             see docs/docker.md to do it by hand"
-            .to_string())
+        let options = &self.options;
+        let folder = self
+            .env
+            .data_dir(Platform::CURRENT)
+            .ok_or("set HOME to keep kkt's Docker files")?
+            .join(config::DOCKER_FOLDER);
+        let key_file = self
+            .env
+            .config_dir()
+            .ok_or("set HOME to keep the access key")?
+            .join(config::DOCKER_KEY_FILE_NAME);
+        let auth_key = match &options.ts_authkey_file {
+            Some(path) => Some(
+                std::fs::read_to_string(path)
+                    .map_err(|e| format!("could not read {}: {e}", path.display()))?
+                    .trim()
+                    .to_string(),
+            ),
+            None => None,
+        };
+        let inputs = docker::Inputs {
+            version: options.kkt_version.clone(),
+            project: options.docker_project.clone(),
+            port: options.docker_port,
+            tailscale: tailscale.then(|| docker::Tailscale {
+                hostname: options.ts_hostname.clone(),
+                auth_key,
+            }),
+        };
+        let provisioned = tokio::runtime::Handle::current()
+            .block_on(docker::provision(
+                &docker::OsHost,
+                &SystemClock,
+                &docker::Folder(folder.clone()),
+                &inputs,
+                &key_file,
+            ))
+            .map_err(|e| e.to_string())?;
+        let (url, hostname, tailnet) = match provisioned.node {
+            Some((hostname, tailnet)) => (
+                format!("https://{hostname}.{tailnet}/mcp"),
+                Some(hostname),
+                Some(tailnet),
+            ),
+            None => (
+                format!("http://127.0.0.1:{}/mcp", options.docker_port),
+                None,
+                None,
+            ),
+        };
+        Ok((
+            setup::Installed {
+                url,
+                key_file: Some(key_file),
+            },
+            setup::DockerSetup {
+                folder,
+                tailscale,
+                hostname,
+                tailnet,
+            },
+        ))
     }
 
     fn stage_key(&self, key: &str) -> Result<PathBuf, String> {

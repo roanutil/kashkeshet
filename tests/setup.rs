@@ -348,3 +348,45 @@ async fn a_client_that_cannot_be_configured_leaves_the_earlier_setup() {
     server.kill().await.expect("stop kkt");
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[tokio::test]
+async fn url_and_key_file_each_replace_only_their_part_of_the_record() {
+    let (mut server, url, key) = keyed_server("override-server").await;
+    let home = temp_home("override");
+    let unreachable = format!("http://{}/mcp", free_bind());
+    write_record(
+        &home,
+        &format!(
+            "format = 1\nmode = \"client\"\nwritten_by = \"0.4.0\"\nurl = \"{unreachable}\"\n\
+             key_file = \"{}\"\n",
+            key.display()
+        ),
+    );
+    // --url alone: the given server, with the recorded key.
+    let (_, said) = kkt(&home, &["doctor", "--url", &url]).await;
+    assert!(
+        said.contains(&format!("ok: server: reachable at {url}")),
+        "{said}"
+    );
+    assert!(said.contains("ok: key accepted"), "{said}");
+    // --key-file alone: the recorded server, with the given key.
+    let other = home.join("other-key");
+    let (made, made_said) = kkt(
+        &home,
+        &["key", "create", "--path", other.to_str().expect("utf-8")],
+    )
+    .await;
+    assert!(made, "{made_said}");
+    let (_, said) = kkt(
+        &home,
+        &["doctor", "--key-file", other.to_str().expect("utf-8")],
+    )
+    .await;
+    assert!(
+        said.contains(&format!("key file: {}", other.display())),
+        "{said}"
+    );
+    assert!(said.contains(&unreachable), "{said}");
+    server.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}

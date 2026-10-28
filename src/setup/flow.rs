@@ -207,8 +207,9 @@ pub fn run(
     }
 
     steps.write_record(&record)?;
+    let web = record.url.strip_suffix("/mcp").unwrap_or(&record.url);
     ask.tell(&format!(
-        "This machine is set up as {}; clients use {}.",
+        "This machine is set up as {}; clients use {}, and the web page is at {web}/.",
         record.mode.name(),
         record.url
     ));

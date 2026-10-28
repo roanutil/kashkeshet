@@ -9,7 +9,7 @@
 mod file;
 mod paths;
 
-pub use file::parse_file;
+pub use file::{parse_file, with_allowed_host};
 pub use paths::{Env, Platform};
 
 use crate::config::{
