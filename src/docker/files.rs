@@ -35,6 +35,12 @@ pub fn env_text(inputs: &Inputs, node: Option<(&str, &str)>) -> String {
     text.push_str(&format!("KKT_VERSION={}\n", inputs.version));
     text.push_str(&format!("COMPOSE_PROJECT_NAME={}\n", inputs.project));
     text.push_str(&format!("KKT_PORT={}\n", inputs.port));
+    if !inputs.allow_hosts.is_empty() {
+        text.push_str(&format!(
+            "KKT_ALLOW_HOSTS={}\n",
+            inputs.allow_hosts.join(",")
+        ));
+    }
     if let Some(tailscale) = &inputs.tailscale {
         let (hostname, tailnet) = node.unwrap_or((&tailscale.hostname, DOCKER_PENDING_TAILNET));
         text.push_str("COMPOSE_FILE=compose.tailscale.yaml\n");

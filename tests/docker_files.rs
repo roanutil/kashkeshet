@@ -89,6 +89,55 @@ fn both_compose_files_run_the_version_set_in_env_and_never_latest() {
     assert!(read(".env.example").lines().any(|l| l == "KKT_VERSION="));
 }
 
+/// The values kkt's command passes after each `--allow-host` in `file`.
+fn allowed_hosts(file: &str) -> Vec<String> {
+    let compose = read(file);
+    let lines: Vec<&str> = compose.lines().map(str::trim).collect();
+    lines
+        .windows(2)
+        .filter(|pair| pair[0] == "- --allow-host")
+        .filter_map(|pair| pair[1].strip_prefix("- ").map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn both_compose_files_take_extra_host_names_from_env() {
+    // localhost is always allowed, so the default adds nothing.
+    assert_eq!(
+        allowed_hosts("compose.yaml"),
+        ["${KKT_ALLOW_HOSTS:-localhost}"]
+    );
+    assert_eq!(
+        allowed_hosts("compose.tailscale.yaml"),
+        [
+            "${TS_HOSTNAME}.${TS_TAILNET:?set TS_TAILNET in .env}",
+            "${KKT_ALLOW_HOSTS:-localhost}"
+        ]
+    );
+    assert!(
+        read(".env.example")
+            .lines()
+            .any(|l| l == "# KKT_ALLOW_HOSTS=host.docker.internal")
+    );
+}
+
+#[test]
+fn compose_yaml_runs_kkt_as_the_image_does() {
+    // compose.yaml gives kkt a command, to add the host names; it must keep
+    // the image's own bind and the flag that allows it.
+    let compose = read("compose.yaml");
+    let dockerfile = read("Dockerfile");
+    assert!(dockerfile.contains(r#"CMD ["serve", "--bind", "0.0.0.0:7420", "--allow-any-bind"]"#));
+    for line in [
+        "- serve",
+        "- --bind",
+        "- 0.0.0.0:7420",
+        "- --allow-any-bind",
+    ] {
+        assert!(compose.lines().any(|l| l.trim() == line), "{line}");
+    }
+}
+
 #[test]
 fn both_compose_files_mount_the_backups_folder() {
     for file in ["compose.yaml", "compose.tailscale.yaml"] {

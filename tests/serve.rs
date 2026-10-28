@@ -160,6 +160,39 @@ async fn serve_reads_the_default_config_file_and_keeps_data_per_user() {
 }
 
 #[tokio::test]
+async fn allow_host_takes_a_comma_separated_list_as_well_as_repeats() {
+    // The Compose files pass KKT_ALLOW_HOSTS, a comma-separated list, as one
+    // --allow-host value beside the Tailscale name's own --allow-host.
+    let home = temp_home("allow-list");
+    let bind = free_bind();
+    let (mut child, _) = start(kkt(
+        &home,
+        &[
+            "serve",
+            "--bind",
+            &bind,
+            "--allow-host",
+            "box.tail1234.ts.net",
+            "--allow-host",
+            "host.docker.internal,other.example",
+        ],
+    ))
+    .await;
+
+    for host in [
+        "box.tail1234.ts.net",
+        "host.docker.internal",
+        "other.example",
+    ] {
+        assert_eq!(status_for_host(&bind, host).await, 200, "{host}");
+    }
+    assert_eq!(status_for_host(&bind, "evil.example").await, 403);
+
+    child.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
 async fn a_bad_config_file_stops_serve_naming_the_setting() {
     let home = temp_home("bad");
     let cases = [

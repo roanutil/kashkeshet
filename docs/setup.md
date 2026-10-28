@@ -110,12 +110,31 @@ kkt setup --mode docker --tailscale --clients none
 | `--yes` | Connect every detected client without asking |
 | `--ts-hostname NAME` | Docker Tailscale node name to request (default `kkt`) |
 | `--ts-authkey-file PATH` | Docker Tailscale auth key file instead of an interactive login link |
+| `--allow-host NAME` | Another host name the server answers to, such as `host.docker.internal`; repeat for more, or `none` |
 
 `--yes` does not choose the server mode, Tailscale setting, or a remote
 URL/key for you. A Docker Tailscale login may still need a person to open
 the link. For unattended Docker login, pass `--ts-authkey-file` with a
 private file holding an auth key; keep that file out of shared logs and
 repositories.
+
+## Agents in containers
+
+kkt answers only to the host names it knows: `localhost`, `127.0.0.1` and
+`::1`, plus its tailnet name with Tailscale. Agents running in Docker
+containers on the same machine reach it as `host.docker.internal`. Setup
+asks whether such agents will use the server and, if so, allows that name.
+To answer with flags, or to allow other names:
+
+```sh
+kkt setup --allow-host host.docker.internal
+```
+
+For a service, setup adds the names to `allow_hosts` in the config file. For
+Docker, it writes them to `KKT_ALLOW_HOSTS` in the managed `.env`, which
+`kkt upgrade` keeps. Run setup again with the full list to change them.
+Clients in those containers then use `http://host.docker.internal:7420/mcp`
+with a copy of the access key.
 
 ## Managing the saved setup
 
