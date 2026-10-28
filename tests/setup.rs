@@ -132,3 +132,158 @@ async fn with_no_record_serve_runs_as_before() {
     starts(serve(&home, &[])).await;
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// `kkt` with `args`, `home` as its only home directory, no terminal, and
+/// an empty PATH so no real client is found.
+async fn kkt(home: &Path, args: &[&str]) -> (bool, String) {
+    let out = Command::new(KKT)
+        .args(args)
+        .env("HOME", home)
+        .env("PATH", "")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(TIMEOUT, out)
+        .await
+        .expect("kkt should finish")
+        .expect("run kkt");
+    (
+        out.status.success(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+/// A server with an access key, in its own home; returns it, its MCP URL
+/// and its key file.
+async fn keyed_server(name: &str) -> (tokio::process::Child, String, PathBuf) {
+    let home = temp_home(name);
+    let key = home.join("server-key");
+    let (made, said) = kkt(
+        &home,
+        &["key", "create", "--path", key.to_str().expect("utf-8")],
+    )
+    .await;
+    assert!(made, "{said}");
+    let bind = free_bind();
+    let mut command = Command::new(KKT);
+    command
+        .args(["serve", "--bind", &bind, "--access-key-file"])
+        .arg(&key)
+        .arg("--db")
+        .arg(home.join("kkt.db"))
+        .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .stdout(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command.spawn().expect("start kkt");
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    tokio::time::timeout(TIMEOUT, async {
+        while let Some(line) = lines.next_line().await.expect("read stdout") {
+            if line.contains("listening") {
+                return;
+            }
+        }
+        panic!("kkt exited before listening");
+    })
+    .await
+    .expect("kkt did not start in time");
+    tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
+    (child, format!("http://{bind}/mcp"), key)
+}
+
+#[tokio::test]
+async fn a_client_machine_is_set_up_from_flags_alone() {
+    let (mut server, url, key) = keyed_server("client-server").await;
+    let home = temp_home("client-setup");
+    let key_arg = key.to_str().expect("utf-8");
+    let (ok, said) = kkt(
+        &home,
+        &[
+            "setup",
+            "--mode",
+            "client",
+            "--url",
+            &url,
+            "--key-file",
+            key_arg,
+            "--clients",
+            "codex",
+        ],
+    )
+    .await;
+    assert!(ok, "{said}");
+    assert!(said.contains("set up as client"), "{said}");
+    assert!(said.contains("ok: key accepted"), "doctor ran: {said}");
+
+    let record = std::fs::read_to_string(home.join(".config/kkt/setup.toml")).expect("record");
+    assert!(record.contains("mode = \"client\""), "{record}");
+    assert!(record.contains(&format!("url = \"{url}\"")), "{record}");
+    let codex = std::fs::read_to_string(home.join(".codex/config.toml")).expect("codex config");
+    assert!(codex.contains(&url), "{codex}");
+
+    // Doctor, with nothing given, checks the recorded server with the
+    // recorded key. (Its last line, about this machine's service, depends on
+    // the machine, so only the connection checks are asserted.)
+    let (_, said) = kkt(&home, &["doctor"]).await;
+    assert!(
+        said.contains(&format!("ok: server: reachable at {url}")),
+        "{said}"
+    );
+    assert!(said.contains("ok: key accepted"), "{said}");
+    server.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn with_no_terminal_a_missing_answer_names_its_flag() {
+    let home = temp_home("no-terminal");
+    let (ok, said) = kkt(&home, &["setup"]).await;
+    assert!(!ok);
+    assert!(said.contains("pass --mode"), "{said}");
+    let (ok, said) = kkt(&home, &["setup", "--mode", "client"]).await;
+    assert!(!ok);
+    assert!(said.contains("pass --url"), "{said}");
+    assert!(!home.join(".config/kkt/setup.toml").exists());
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn a_wrong_key_fails_the_check_but_keeps_the_setup() {
+    let (mut server, url, _) = keyed_server("wrong-key-server").await;
+    let home = temp_home("wrong-key");
+    let wrong = home.join("wrong-key");
+    let (made, said) = kkt(
+        &home,
+        &["key", "create", "--path", wrong.to_str().expect("utf-8")],
+    )
+    .await;
+    assert!(made, "{said}");
+    let (ok, said) = kkt(
+        &home,
+        &[
+            "setup",
+            "--mode",
+            "client",
+            "--url",
+            &url,
+            "--key-file",
+            wrong.to_str().expect("utf-8"),
+            "--clients",
+            "none",
+        ],
+    )
+    .await;
+    assert!(!ok, "{said}");
+    assert!(said.contains("problem: "), "{said}");
+    assert!(said.contains("connection check found problems"), "{said}");
+    assert!(home.join(".config/kkt/setup.toml").exists());
+    server.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}
