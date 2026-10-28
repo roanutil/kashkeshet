@@ -57,7 +57,7 @@ fn a_v1_database_gains_server_runs_and_keeps_its_rows() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let runs: i64 = conn
         .query_row("SELECT count(*) FROM server_runs", [], |r| r.get(0))
         .expect("server_runs exists");
@@ -387,5 +387,105 @@ async fn instruction_versions_survive_reopen_and_reject_mutation() {
         "hello from v1"
     );
     drop(conn);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn operator_channel_migration_preserves_references_and_checks_creators() {
+    let dir = temp_dir("operator-channel");
+    let path = dir.join("old.db");
+    make_v1(&path);
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("INSERT INTO memberships VALUES ('ch_1', 'amber-falcon', 't')")
+            .unwrap();
+        for migration in [
+            include_str!("../migrations/0002_server_runs.sql"),
+            include_str!("../migrations/0003_revoked_agents.sql"),
+            include_str!("../migrations/0004_identity_recovery.sql"),
+            include_str!("../migrations/0005_messages_by_time.sql"),
+            include_str!("../migrations/0006_agent_descriptions.sql"),
+            include_str!("../migrations/0007_channel_notes.sql"),
+            include_str!("../migrations/0008_operator_messages.sql"),
+            include_str!("../migrations/0009_handoff_notes.sql"),
+            include_str!("../migrations/0010_hidden_entries.sql"),
+            include_str!("../migrations/0011_operator_instructions.sql"),
+        ] {
+            conn.execute_batch(migration).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 11).unwrap();
+        conn.execute_batch("UPDATE channels SET note='keep this note', note_edited_by='amber-falcon', note_edited_at='t', hidden=1 WHERE id='ch_1'").unwrap();
+    }
+    drop(Db::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT body FROM messages WHERE channel_id='ch_1'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "hello from v1"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT agent FROM memberships WHERE channel_id='ch_1'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "amber-falcon"
+    );
+    assert!(
+        !conn
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap()
+    );
+    let retained: (String, String, String, i64) = conn
+        .query_row(
+            "SELECT note, note_edited_by, note_edited_at, hidden FROM channels WHERE id='ch_1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        retained,
+        (
+            "keep this note".into(),
+            "amber-falcon".into(),
+            "t".into(),
+            1
+        )
+    );
+    conn.execute_batch("INSERT INTO channels(id,name,is_open,created_by,created_at) VALUES ('ch_op','help',0,'operator','t')").unwrap();
+    assert!(conn.execute_batch("INSERT INTO channels(id,name,is_open,created_by,created_at) VALUES ('ch_bad','bad',1,'absent','t')").is_err());
+    assert!(
+        conn.execute_batch("UPDATE channels SET created_by='absent' WHERE id='ch_op'")
+            .is_err()
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM agents WHERE name='operator'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    drop(conn);
+    drop(Db::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT created_by FROM channels WHERE id='ch_op'",
+            [],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "operator"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

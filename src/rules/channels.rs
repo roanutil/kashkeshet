@@ -111,6 +111,73 @@ impl Rules {
         Ok(created)
     }
 
+    /// The operator creates a channel without becoming a member. Creation,
+    /// initial memberships and the explanation are one transaction.
+    pub async fn create_channel_as_operator(
+        &self,
+        actor: Actor,
+        new: NewChannel,
+    ) -> Result<ChannelInfo> {
+        super::administration::human_only(&actor)?;
+        let limits = self.limits().clone();
+        let name = clean_name(&new.name, limits.max_channel_name_chars)?;
+        let purpose = clean_purpose(new.purpose.as_deref(), limits.max_purpose_chars)?;
+        if !new.open && new.members.is_empty() {
+            return Err(RuleError::invalid(
+                "a closed channel needs at least one initial member",
+            ));
+        }
+        let rules = self.clone();
+        let now = self.now_text();
+        let (created, notice) = self
+            .db()
+            .write(move |store| {
+                let mut members = Vec::new();
+                for name in &new.members {
+                    let name = name.trim();
+                    if !agent_exists(store, name)? {
+                        return Err(RuleError::agent_not_found(name));
+                    }
+                    if !members.iter().any(|m| m == name) {
+                        members.push(name.to_string());
+                    }
+                }
+                let id = free_channel_id(store, rules.inner.deps.entropy.as_ref())?;
+                store.insert_channel(&NewChannelRecord {
+                    id: id.clone(),
+                    name,
+                    purpose,
+                    open: new.open,
+                    created_by: names::OPERATOR.into(),
+                    created_at: now.clone(),
+                })?;
+                for member in members {
+                    store.add_member(&id, &member, &now)?;
+                }
+                let channel = changeable_channel(store, &actor, &id)?;
+                let notice = rules.post_as_operator(
+                    store,
+                    &channel,
+                    "The operator created the channel.".into(),
+                )?;
+                Ok((
+                    channel_info(store, &id, None, None, limits.member_preview)?,
+                    notice,
+                ))
+            })
+            .await?;
+        self.events().publish_channel(NewChannelEvent {
+            id: created.id.clone(),
+            name: created.name.clone(),
+            open: created.open,
+            created_by: created.created_by.clone(),
+            created_at: created.created_at.clone(),
+            member_count: created.member_count,
+        });
+        self.publish_message(&notice);
+        Ok(created)
+    }
+
     /// Joins an open channel. Joining a channel you are already in does nothing.
     pub async fn join_channel(&self, me: &Agent, channel_id: String) -> Result<ChannelInfo> {
         let me = me.name.clone();

@@ -304,6 +304,36 @@ impl Source for Preview {
         Box::pin(async move { view })
     }
 
+    fn create_channel(
+        &self,
+        name: String,
+        purpose: String,
+        open: bool,
+        members: Vec<String>,
+    ) -> BoxFuture<'_, Result<String, SourceError>> {
+        let result = self.world().create_channel(
+            self.clock.now(),
+            self.entropy.as_ref(),
+            name,
+            purpose,
+            open,
+            members,
+        );
+        let result = result.map(|(channel, notice)| {
+            self.events.publish_channel(NewChannel {
+                id: channel.id.clone(),
+                name: channel.name,
+                open: channel.open,
+                created_by: channel.created_by,
+                created_at: channel.created_at,
+                member_count: channel.member_count,
+            });
+            self.publish_message(notice);
+            channel.id
+        });
+        Box::pin(async move { result })
+    }
+
     fn set_purpose(
         &self,
         channel_id: String,
@@ -482,6 +512,75 @@ impl World {
             self.join(i, &name);
         }
         name
+    }
+
+    fn create_channel(
+        &mut self,
+        now: DateTime<Utc>,
+        e: &dyn Entropy,
+        name: String,
+        purpose: String,
+        open: bool,
+        members: Vec<String>,
+    ) -> Result<(Channel, Message), SourceError> {
+        let name = name.trim();
+        let purpose = purpose.trim();
+        let limits = crate::config::Limits::DEFAULT;
+        if name.is_empty()
+            || name.chars().any(char::is_control)
+            || name.chars().count() > limits.max_channel_name_chars
+        {
+            return Err(SourceError::Invalid("invalid channel name".into()));
+        }
+        if purpose.chars().count() > limits.max_purpose_chars {
+            return Err(SourceError::Invalid("purpose is too long".into()));
+        }
+        if !open && members.is_empty() {
+            return Err(SourceError::Invalid(
+                "a closed channel needs at least one initial member".into(),
+            ));
+        }
+        let mut selected = Vec::new();
+        for member in members {
+            let member = member.trim();
+            if !self.agents.iter().any(|a| a.name == member) {
+                return Err(SourceError::NotFound(format!("no agent {member}")));
+            }
+            if !selected.iter().any(|m| m == member) {
+                selected.push(member.to_string());
+            }
+        }
+        let id = (0..crate::config::MAX_CHANNEL_ID_ATTEMPTS)
+            .map(|_| names::channel_id(e))
+            .find(|id| {
+                !self.channels.iter().any(|c| c.channel.id == *id)
+                    && !self.messages.iter().any(|m| m.channel_id == *id)
+            })
+            .ok_or_else(|| SourceError::Failed("could not choose a channel ID".into()))?;
+        let channel = Channel {
+            id,
+            name: name.into(),
+            purpose: (!purpose.is_empty()).then(|| purpose.into()),
+            open,
+            created_by: names::OPERATOR.into(),
+            created_at: clock::to_text(now),
+            member_count: selected.len() as i64,
+            note: String::new(),
+            note_edited_by: None,
+            note_edited_at: None,
+        };
+        self.channels.push(SimChannel {
+            channel: channel.clone(),
+            members: selected,
+        });
+        let index = self.channels.len() - 1;
+        let notice = self.store(
+            now,
+            index,
+            names::OPERATOR.into(),
+            "The operator created the channel.".into(),
+        );
+        Ok((channel, notice))
     }
 
     fn add_channel(&mut self, now: DateTime<Utc>, e: &dyn Entropy) -> String {
