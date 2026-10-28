@@ -65,6 +65,27 @@ pub const BACKUP_FOLDER_MODE: u32 = 0o700;
 /// The folder, beside the database file, where the server keeps the backups
 /// of the database it makes before upgrading it.
 pub const UPGRADE_BACKUP_FOLDER: &str = "upgrade-backups";
+/// The Compose project name for kkt in Docker, so the containers and volumes
+/// are named the same whatever the folder holding the Compose files is called.
+pub const DOCKER_PROJECT: &str = "kkt";
+/// The user ID the kkt image runs as. A host folder it writes backups to
+/// must belong to it.
+pub const DOCKER_IMAGE_USER_ID: u32 = 10001;
+/// The folder inside the managed Docker folder that is mounted at
+/// [`DOCKER_BACKUPS_MOUNT`] in the container.
+pub const DOCKER_BACKUPS_DIR: &str = "backups";
+/// Where the Compose file mounts the backups folder in the container.
+pub const DOCKER_BACKUPS_MOUNT: &str = "/backups";
+/// How long to wait for someone to log the Tailscale container in.
+pub const DOCKER_LOGIN_WAIT: Duration = Duration::from_secs(10 * 60);
+/// How long to wait for the kkt container to start and make its access key.
+pub const DOCKER_START_WAIT: Duration = Duration::from_secs(2 * 60);
+/// How often to ask while waiting for the Tailscale login or for kkt.
+pub const DOCKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// What `TS_TAILNET` is set to until the Tailscale container has logged in
+/// and the real name is known. The Compose file needs some value to start
+/// the Tailscale container alone; kkt does not run with it.
+pub const DOCKER_PENDING_TAILNET: &str = "pending.invalid";
 /// Smallest allowed `max_response_bytes`. A smaller cap could cut a
 /// registration answer, and with it the agent's token.
 pub const MIN_RESPONSE_BYTES: usize = 1024;
