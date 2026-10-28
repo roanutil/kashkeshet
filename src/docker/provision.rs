@@ -4,7 +4,7 @@
 use super::compose::{compose, version};
 use super::files::{create_dir, env_text, write_embedded, write_env};
 use super::tailscale::{parse_status, split_name};
-use super::{DockerError, Folder, Host, Inputs};
+use super::{DockerError, Folder, Host, Inputs, LoginLink};
 use crate::clock::Clock;
 use crate::config::{
     DOCKER_BACKUPS_MOUNT, DOCKER_IMAGE_USER_ID, DOCKER_LOGIN_WAIT, DOCKER_POLL_INTERVAL,
@@ -27,6 +27,7 @@ pub struct Provisioned {
 pub async fn provision(
     host: &dyn Host,
     clock: &dyn Clock,
+    login: &dyn LoginLink,
     folder: &Folder,
     inputs: &Inputs,
     key_file: &Path,
@@ -42,7 +43,7 @@ pub async fn provision(
     let node = if tailscale {
         host.say("Starting Tailscale...");
         run_attached(host, &compose(folder, &["up", "-d", "tailscale"]))?;
-        let node = log_in(host, clock, folder).await?;
+        let node = log_in(host, clock, login, folder).await?;
         write_env(host, folder, &env_text(inputs, Some((&node.0, &node.1))))?;
         host.say(&format!("Logged in to Tailscale as {}.{}.", node.0, node.1));
         Some(node)
@@ -109,6 +110,7 @@ fn own_backups(host: &dyn Host, folder: &Folder) -> Result<(), DockerError> {
 async fn log_in(
     host: &dyn Host,
     clock: &dyn Clock,
+    login: &dyn LoginLink,
     folder: &Folder,
 ) -> Result<(String, String), DockerError> {
     let status = compose(
@@ -126,10 +128,20 @@ async fn log_in(
         match node.backend_state.as_str() {
             "Running" => Ok(Some(node)),
             "NeedsLogin" => {
-                if let (Some(url), false) = (&node.auth_url, said_link) {
-                    host.say(&format!("Log in to Tailscale by opening: {url}"));
-                    host.say("Waiting for you to log in...");
-                    said_link = true;
+                if let Some(url) = &node.auth_url {
+                    if !said_link {
+                        login.show(url);
+                        host.say("Waiting for you to log in...");
+                        said_link = true;
+                    }
+                    if login.open_requested() {
+                        match login.open(url) {
+                            Ok(()) => host.say("Opened the link in your browser."),
+                            Err(e) => host.say(&format!(
+                                "Could not open a browser ({e}); open the link above yourself."
+                            )),
+                        }
+                    }
                 }
                 Ok(None)
             }

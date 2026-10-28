@@ -10,6 +10,7 @@
 mod compose;
 mod files;
 mod lifecycle;
+mod login;
 mod os;
 mod provision;
 mod tailscale;
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 pub use files::{ENV_FILE, env_text, version_in_env};
 pub use lifecycle::{State, backup, down, status, up, upgrade};
+pub use login::{LoginLink, PrintedLink, TerminalLink};
 pub use os::OsHost;
 pub use provision::{Provisioned, provision};
 

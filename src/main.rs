@@ -1018,6 +1018,7 @@ impl setup::Steps for OsSteps<'_> {
             .block_on(docker::provision(
                 &docker::OsHost,
                 &SystemClock,
+                &docker::TerminalLink::new(),
                 &docker::Folder(folder.clone()),
                 &inputs,
                 &key_file,

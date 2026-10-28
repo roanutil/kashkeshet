@@ -29,7 +29,8 @@ Setup asks what this machine is for:
   give it that server's MCP URL and access key.
 
 For either server mode, setup offers to share over Tailscale. With Docker,
-open the login link it prints; there is no auth key to create or tailnet
+sign in with the login link it shows (at a terminal, Enter opens it in your
+browser); there is no auth key to create or tailnet
 name to type. Service mode uses Tailscale installed and logged in on the
 host. HTTPS certificates must be enabled for your tailnet; setup explains
 how if they aren't.
