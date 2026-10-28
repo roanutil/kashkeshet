@@ -156,7 +156,28 @@ pub fn unreachable(checks: &[Check]) -> bool {
 pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, String> {
     let mut checks = Vec::new();
     let key = key_file(key_path, &mut checks);
-    let client = Client::builder()
+    probe(url, key.as_deref(), checks).await
+}
+
+/// The name of the check that the server accepted the key.
+pub const KEY_CHECK: &str = "key accepted";
+
+/// Checks that a server answers at `url`, accepts its host name, and serves
+/// MCP there, without a key: a server that asks for one passes.
+pub async fn inspect_address(url: &str) -> Result<Vec<Check>, String> {
+    let mut checks = probe(url, None, Vec::new()).await?;
+    checks.retain(|check| check.name != KEY_CHECK);
+    Ok(checks)
+}
+
+/// Checks a server as [`inspect`] does, with the key given as text (`None`
+/// for no key) rather than in a file.
+pub async fn inspect_with_key(url: &str, key: Option<&str>) -> Result<Vec<Check>, String> {
+    probe(url, key, Vec::new()).await
+}
+
+fn http_client() -> Result<Client, String> {
+    Client::builder()
         .timeout(DOCTOR_TIMEOUT)
         .connect_timeout(DOCTOR_TIMEOUT)
         .redirect(Policy::none())
@@ -164,8 +185,12 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
         .https_only(false)
         .user_agent(concat!("kkt-doctor/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|e| format!("could not construct the diagnostic HTTP client: {e}"))?;
-    let url = Url::parse(url).map_err(|_| "invalid diagnostic URL")?;
+        .map_err(|e| format!("could not construct the diagnostic HTTP client: {e}"))
+}
+
+/// Adds whether the server answers at `url` and accepts its host name to
+/// `checks`. Returns whether both did.
+async fn reach(client: &Client, url: &Url, checks: &mut Vec<Check>) -> bool {
     let response = match client.get(url.clone()).send().await {
         Ok(response) => response,
         Err(e) => {
@@ -174,7 +199,7 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
                 e.to_string(),
                 "run `kkt service start` or `kkt serve`, and check --url and the bind setting",
             ));
-            return Ok(checks);
+            return false;
         }
     };
     checks.push(Check::ok(SERVER_CHECK, format!("reachable at {url}")));
@@ -187,10 +212,19 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
                 url.host_str().unwrap_or("")
             ),
         ));
-        return Ok(checks);
+        return false;
     }
     checks.push(Check::ok("Host", "accepted"));
-    drop(response);
+    true
+}
+
+/// Adds the server checks for `url`, using `key`, to `checks`.
+async fn probe(url: &str, key: Option<&str>, mut checks: Vec<Check>) -> Result<Vec<Check>, String> {
+    let client = http_client()?;
+    let url = Url::parse(url).map_err(|_| "invalid diagnostic URL")?;
+    if !reach(&client, &url, &mut checks).await {
+        return Ok(checks);
+    }
     let request = json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
         "protocolVersion": DOCTOR_PROTOCOL_VERSION,
         "capabilities": {}, "clientInfo":{"name":"kkt-doctor", "version":env!("CARGO_PKG_VERSION")}
@@ -200,7 +234,7 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
         .header("Accept", "application/json, text/event-stream")
         .header("Content-Type", "application/json")
         .body(request.to_string());
-    if let Some(key) = &key {
+    if let Some(key) = key {
         post = post.bearer_auth(key);
     }
     let response = match post.send().await {
@@ -215,7 +249,7 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
         }
     };
     if response.status().as_u16() == 401 {
-        checks.push(Check::problem("key accepted", "server returned 401", "pass --key-file with the key used by the running server, or restart it after changing keys"));
+        checks.push(Check::problem(KEY_CHECK, "server returned 401", "pass --key-file with the key used by the running server, or restart it after changing keys"));
         return Ok(checks);
     }
     if response.status().as_u16() != 200 {
@@ -233,7 +267,7 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
             .delete(url)
             .header("mcp-session-id", session)
             .header("MCP-Protocol-Version", DOCTOR_PROTOCOL_VERSION);
-        if let Some(key) = &key {
+        if let Some(key) = key {
             delete = delete.bearer_auth(key);
         }
         match delete.send().await {
@@ -253,7 +287,7 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
     match initialized {
         Ok(value) => match value.get("result").and_then(|r| r.get("serverInfo")) {
             Some(info) => {
-                checks.push(Check::ok("key accepted", "MCP initialize returned 200"));
+                checks.push(Check::ok(KEY_CHECK, "MCP initialize returned 200"));
                 let version = info
                     .get("version")
                     .and_then(Value::as_str)

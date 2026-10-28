@@ -15,7 +15,7 @@ mod tests;
 mod upgrade;
 
 pub use ask::{Ask, Question, unanswered};
-pub use flow::{Answers, Installed, Purpose, Steps, run};
+pub use flow::{Answers, ClientKey, Installed, Purpose, Steps, run};
 pub use guard::guard;
 pub use record::{DockerSetup, Mode, Record};
 pub use upgrade::{Upgrade, upgrade};
