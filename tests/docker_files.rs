@@ -60,13 +60,14 @@ fn kkt_does_not_share_the_tailscale_network() {
 
 #[test]
 fn kkt_is_published_on_the_host_loopback_only() {
+    // The host port can be changed in `.env`, but never the address.
     let compose = read("compose.tailscale.yaml");
     let published: Vec<&str> = compose
         .lines()
         .map(str::trim)
-        .filter(|line| line.starts_with("- \"") && line.matches(':').count() == 2)
+        .filter(|line| line.starts_with("- \"") && line.contains(":7420\""))
         .collect();
-    assert_eq!(published, ["- \"127.0.0.1:7420:7420\""]);
+    assert_eq!(published, ["- \"127.0.0.1:${KKT_PORT:-7420}:7420\""]);
 }
 
 #[test]
