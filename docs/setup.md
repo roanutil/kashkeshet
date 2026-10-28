@@ -7,11 +7,12 @@ kkt setup
 ```
 
 Choose a server as a service, a server in Docker, or a client-only
-machine. Setup offers the clients it detects, checks the server connection with
-`kkt doctor`, then applies the chosen clients' settings through `kkt connect`.
+machine. Setup offers the clients it detects, checks the server connection
+with `kkt doctor`, then applies the chosen clients' settings through
+`kkt connect`.
 If a step fails, the report explains what to fix; setup may already have
-started a server or changed a client configuration. Restart connected clients so they
-load their settings.
+started a server or changed a client configuration. Restart connected
+clients so they load their settings.
 
 ## Server on this machine
 
@@ -103,12 +104,22 @@ kkt uninstall
 ```
 
 `status` reports the selected setup. `backup` acts on that server, exporting
-Docker backups into the host folder you name. Install a new version of the
-program before `upgrade`: a Docker setup backs up, updates its managed
+Docker backups into the host folder you name. In Docker mode the folder
+argument is optional: `kkt backup` alone leaves the backup in the managed
+`docker/backups` folder. Service mode still requires a destination.
+
+Install a new version of the program before `upgrade`: a Docker setup
+backs up, updates its managed
 files to that version's image and starts it; a service backs up and
 reinstalls the service using the installed program. See
 [backups](backup.md) for restoring an older database when rolling back.
-Client-only mode reports that backup and upgrade belong on the server.
+The installed version is the upgrade target. If it is already selected,
+`upgrade` reports that and makes no changes. It refuses a lower version or
+an image tag it cannot compare unless you pass `--allow-downgrade`.
+That flag only overrides the version check: to roll back across database
+schema changes, restore a compatible backup while the server is stopped
+(see [restoring](backup.md#restoring)). Client-only mode reports that backup
+and upgrade belong on the server.
 
 `uninstall` removes the managed service or containers and the setup record,
 keeping data, keys and client settings. It leaves the `kkt` executable
@@ -117,8 +128,8 @@ entries and saved data too.
 
 The setup record is `~/.config/kkt/setup.toml` (`$XDG_CONFIG_HOME/kkt/`
 if set). It records the mode, connection URL, key path, and the Docker
-folder when applicable. The record is written only after setup succeeds; failure leaves the
-previous record in place. Follow the reported fixes and rerun setup.
+folder when applicable. The record is written only after setup succeeds;
+failure leaves the previous record in place. Follow the reported fixes and rerun setup.
 
 `kkt connect` and `kkt doctor` default to this record's URL and key path;
 `--url` and `--key-file` override them. See [clients](clients.md).

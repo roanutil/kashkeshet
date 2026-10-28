@@ -48,7 +48,12 @@ enum Command {
     Status,
     /// Upgrade the configured server to this installed kkt version, backing
     /// it up first. Install the new kkt binary before running this command.
-    Upgrade,
+    Upgrade {
+        /// Allow replacing a newer server or an image tag whose version
+        /// cannot be compared. Same-version upgrades still do nothing.
+        #[arg(long)]
+        allow_downgrade: bool,
+    },
     /// Stop and remove this machine's setup. Data, keys, backups and client
     /// configurations stay; remove the kkt binary separately if wanted.
     Uninstall,
@@ -97,8 +102,10 @@ enum Command {
     /// kkt-20261028T131500.123Z-v0.3.0, so backups sort by time. It and the
     /// key in it are readable only by you.
     Backup {
-        /// Where to put the backup. Created if missing.
-        folder: PathBuf,
+        /// Where to copy the backup. Created if missing. In Docker mode,
+        /// omit it to keep only the copy in the managed backups folder.
+        /// Required for a local service or an unrecorded local database.
+        folder: Option<PathBuf>,
         /// The server's database file. By default the one `kkt serve` uses:
         /// the config file's `db`, else kashkeshet.db in the per-user data
         /// directory.
@@ -594,27 +601,17 @@ const SERVICE_CHECK: &str = "this machine's kkt service";
 async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
     let connection = client_connection(env, flags, false)?;
     let mut checks = diagnostics::inspect(&connection.url, connection.key_file.as_deref()).await?;
-    // This line is about the kkt service installed on this machine, whatever
-    // server `--url` points at, so the name says so.
-    match Manager::for_this_os(env).and_then(|manager| manager.state(&OsSystem)) {
-        Ok(state) if !state.installed => checks.push(diagnostics::Check::ok(
-            SERVICE_CHECK,
-            "not installed; optional when running `kkt serve` in a terminal",
-        )),
-        Ok(state) if state.running => checks.push(diagnostics::Check::ok(
-            SERVICE_CHECK,
-            "installed and running",
-        )),
-        Ok(_) => checks.push(diagnostics::Check::problem(
-            SERVICE_CHECK,
-            "installed but not running",
-            "run `kkt service start`",
-        )),
-        Err(error) => checks.push(diagnostics::Check::problem(
-            SERVICE_CHECK,
-            error.to_string(),
-            "check `kkt service status` and your user service manager",
-        )),
+    // The last line is about this machine, whatever server `--url` points
+    // at: how `kkt setup` set it up, or else its kkt service.
+    match read_setup(env)?.map(|record| record.mode) {
+        // The server is elsewhere; the lines above are about it.
+        Some(setup::Mode::Client) => {}
+        Some(setup::Mode::Docker(install)) => {
+            let folder = docker::Folder(install.folder);
+            let state = docker::status(&docker::OsHost, &folder);
+            checks.push(docker_check(state, &folder));
+        }
+        Some(setup::Mode::Service { .. }) | None => checks.push(service_check(env)),
     }
     let (report, all_ok) = doctor_report(checks);
     print!("{report}");
@@ -622,6 +619,68 @@ async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
         Ok(())
     } else {
         Err("doctor found problems; see the fixes above".into())
+    }
+}
+
+/// The doctor's line about the kkt service on this machine.
+fn service_check(env: &Env) -> diagnostics::Check {
+    match Manager::for_this_os(env).and_then(|manager| manager.state(&OsSystem)) {
+        Ok(state) if !state.installed => diagnostics::Check::ok(
+            SERVICE_CHECK,
+            "not installed; optional when running `kkt serve` in a terminal",
+        ),
+        Ok(state) if state.running => {
+            diagnostics::Check::ok(SERVICE_CHECK, "installed and running")
+        }
+        Ok(_) => diagnostics::Check::problem(
+            SERVICE_CHECK,
+            "installed but not running",
+            "run `kkt service start`",
+        ),
+        Err(error) => diagnostics::Check::problem(
+            SERVICE_CHECK,
+            error.to_string(),
+            "check `kkt service status` and your user service manager",
+        ),
+    }
+}
+
+/// The name of the doctor line about kkt in Docker on this machine.
+const DOCKER_CHECK: &str = "this machine's kkt in Docker";
+
+/// The doctor's line about kkt in Docker, from what `docker::status` found
+/// in the managed `folder`.
+fn docker_check(
+    state: Result<docker::State, docker::DockerError>,
+    folder: &docker::Folder,
+) -> diagnostics::Check {
+    let shown = folder.path().display().to_string();
+    match state {
+        Ok(state) if !state.files_present => diagnostics::Check::problem(
+            DOCKER_CHECK,
+            format!("its files are missing from {shown}"),
+            "run `kkt setup` again",
+        ),
+        Ok(state) if state.running => diagnostics::Check::ok(
+            DOCKER_CHECK,
+            format!(
+                "running kkt {}",
+                state.version.as_deref().unwrap_or("(version unknown)")
+            ),
+        ),
+        Ok(_) => diagnostics::Check::problem(
+            DOCKER_CHECK,
+            "not running",
+            format!(
+                "start it with `docker compose --project-directory {} up -d`",
+                clients::shell_word(&shown)
+            ),
+        ),
+        Err(error) => diagnostics::Check::problem(
+            DOCKER_CHECK,
+            error.to_string(),
+            "check that Docker is running, then run `kkt status`",
+        ),
     }
 }
 
@@ -666,9 +725,9 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
             config,
         } => agent(env, command, db, config).await,
         Command::Service { command } => service(env, command),
-        Command::Backup { folder, db, config } => mode_backup(env, &folder, db, config),
+        Command::Backup { folder, db, config } => mode_backup(env, folder.as_deref(), db, config),
         Command::Status => mode_status(env),
-        Command::Upgrade => mode_upgrade(env),
+        Command::Upgrade { allow_downgrade } => mode_upgrade(env, allow_downgrade),
         Command::Uninstall => mode_uninstall(env),
         Command::Key {
             command: KeyCommand::Header { key_file, json },
@@ -1032,18 +1091,7 @@ impl setup::Steps for OsSteps<'_> {
     }
 
     fn write_record(&self, record: &setup::Record) -> Result<(), String> {
-        let path = setup::record_path(self.env).ok_or("set HOME to keep the setup record")?;
-        let text = record.render()?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-        }
-        // Written whole, then renamed over the old one, so a failure leaves
-        // the earlier record.
-        let partial = path.with_extension("toml.partial");
-        std::fs::write(&partial, text)
-            .and_then(|()| std::fs::rename(&partial, &path))
-            .map_err(|e| format!("could not write {}: {e}", path.display()))
+        write_setup_record(self.env, record)
     }
 
     fn connect(&self, client: Client, record: &setup::Record) -> Result<String, String> {
@@ -1279,9 +1327,23 @@ fn existing_db(
 
 /// Resolve lifecycle commands through the setup record. An unrecorded
 /// machine still supports the original local-database backup command.
+fn write_setup_record(env: &Env, record: &setup::Record) -> Result<(), String> {
+    let path = setup::record_path(env).ok_or("set HOME to keep the setup record")?;
+    let text = record.render()?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    }
+    // Written whole, then renamed, so a failure leaves the earlier record.
+    let partial = path.with_extension("toml.partial");
+    std::fs::write(&partial, text)
+        .and_then(|()| std::fs::rename(&partial, &path))
+        .map_err(|e| format!("could not write {}: {e}", path.display()))
+}
+
 fn mode_backup(
     env: &Env,
-    folder: &Path,
+    folder: Option<&Path>,
     db: Option<PathBuf>,
     config: Option<PathBuf>,
 ) -> Result<(), String> {
@@ -1298,7 +1360,10 @@ fn mode_backup(
         Some(setup::Mode::Client) => {
             Err("this machine is a client; back up the server on the machine where it runs".into())
         }
-        Some(setup::Mode::Service { .. }) | None => backup(env, folder, db, config),
+        Some(setup::Mode::Service { .. }) | None => {
+            let folder = folder.ok_or("a local backup needs FOLDER; run `kkt backup <folder>`")?;
+            backup(env, folder, db, config)
+        }
     }
 }
 
@@ -1336,18 +1401,33 @@ fn recorded_setup(env: &Env) -> Result<setup::Record, String> {
     read_setup(env)?.ok_or_else(|| "this machine has no setup record; run `kkt setup` first".into())
 }
 
-fn mode_upgrade(env: &Env) -> Result<(), String> {
-    let record = recorded_setup(env)?;
-    match record.mode {
+fn mode_upgrade(env: &Env, allow_downgrade: bool) -> Result<(), String> {
+    let mut record = recorded_setup(env)?;
+    let current = match &record.mode {
         setup::Mode::Client => {
             return Err(
                 "this machine is a client; upgrade the server on the machine where it runs".into(),
             );
         }
         setup::Mode::Docker(install) => {
+            let path = install.folder.join(docker::ENV_FILE);
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+            docker::version_in_env(&text)
+                .ok_or_else(|| format!("{} has no KKT_VERSION", path.display()))?
+        }
+        setup::Mode::Service { .. } => record.written_by.clone(),
+    };
+    if setup::upgrade(&current, Build::CURRENT.version, allow_downgrade)? == setup::Upgrade::Already
+    {
+        println!("Server is already at kkt {}", Build::CURRENT.version);
+        return Ok(());
+    }
+    match &record.mode {
+        setup::Mode::Docker(install) => {
             docker::upgrade(
                 &docker::OsHost,
-                &docker::Folder(install.folder),
+                &docker::Folder(install.folder.clone()),
                 Build::CURRENT.version,
             )
             .map_err(|e| e.to_string())?;
@@ -1369,7 +1449,14 @@ fn mode_upgrade(env: &Env) -> Result<(), String> {
                 println!("{line}");
             }
         }
+        setup::Mode::Client => {
+            return Err(
+                "this machine is a client; upgrade the server on the machine where it runs".into(),
+            );
+        }
     }
+    record.written_by = Build::CURRENT.version.to_string();
+    write_setup_record(env, &record)?;
     println!("Upgraded the server to kkt {}", Build::CURRENT.version);
     Ok(())
 }
