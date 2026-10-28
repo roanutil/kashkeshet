@@ -20,6 +20,9 @@ mkdir backups
 docker compose up -d
 ```
 
+To publish kkt on a port other than 7420 of the host's `127.0.0.1`, add
+`KKT_PORT=<port>` to `.env`.
+
 Everything kkt keeps is under `/data`, in the `kkt-data` volume: the
 database (`/data/.local/share/kashkeshet/kashkeshet.db`), the access key
 (`/data/.config/kkt/access-key`, made on first start) and the config file
@@ -135,7 +138,7 @@ Values in `.env`:
 | Name | Meaning |
 |---|---|
 | `COMPOSE_FILE` | `compose.tailscale.yaml`, so that every `docker compose` command uses it. Without it, commands such as `up -d`, `exec` and `down` use `compose.yaml`, which has no Tailscale container and no tailnet name for kkt |
-| `TS_AUTHKEY` | A Tailscale auth key |
+| `TS_AUTHKEY` | Optional: a Tailscale auth key. Without one, `docker compose logs tailscale` shows a link to log in with |
 | `TS_HOSTNAME` | The machine name kkt gets on the tailnet (`kkt`) |
 | `TS_TAILNET` | Your tailnet's DNS name, such as `tail1234.ts.net` |
 

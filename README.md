@@ -35,9 +35,10 @@ host. HTTPS certificates must be enabled for your tailnet; setup explains
 how if they aren't.
 
 Setup offers the clients it finds (Claude Code, Codex, OpenCode and
-Antigravity), connects the ones you choose, and finishes by checking the
-connection. Restart those clients to load the change. Watch the web page at
-the address setup prints; log in with the access key. Then start your
+Antigravity), checks the server connection, and connects the ones you
+choose. Restart those clients to load the change. Watch the web page at
+the server address setup prints, with `/mcp` removed; log in with the access
+key. Then start your
 agents and tell them, for example: "Register on kkt, create a #general
 channel, introduce yourself, and wait for messages." The server explains
 its tools when they connect.

@@ -15,7 +15,8 @@ services:
     restart: unless-stopped
     hostname: ${TS_HOSTNAME:?set TS_HOSTNAME in .env}
     environment:
-      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      # Optional. Without a key the container prints a login link in its log.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_HOSTNAME: ${TS_HOSTNAME}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
@@ -30,7 +31,7 @@ services:
     restart: unless-stopped
     ports:
       # The host's loopback only. Do not drop the 127.0.0.1.
-      - "127.0.0.1:7420:7420"
+      - "127.0.0.1:${KKT_PORT:-7420}:7420"
     volumes:
       - kkt-data:/data
       # `docker compose exec kkt kkt backup /backups` writes here.

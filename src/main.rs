@@ -9,6 +9,7 @@ use kashkeshet::config::{
     LOG_OWN_TARGETS, Limits, LogLevel, LogPolicy,
 };
 use kashkeshet::diagnostics;
+use kashkeshet::docker;
 use kashkeshet::hosts::AllowedHosts;
 use kashkeshet::logs::RotatingFile;
 use kashkeshet::names::OsEntropy;
@@ -18,6 +19,7 @@ use kashkeshet::settings::{self, AccessKey, Env, Platform, ServeOptions, ServeSe
 use kashkeshet::setup;
 use kashkeshet::shutdown::{Shutdown, StopSignals};
 use kashkeshet::store::{self, Db};
+use kashkeshet::tailscale;
 use kashkeshet::{Operator, Revoked};
 use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
@@ -41,6 +43,14 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Show the service, Docker server, or remote server this machine uses.
+    Status,
+    /// Upgrade the configured server to this installed kkt version, backing
+    /// it up first. Install the new kkt binary before running this command.
+    Upgrade,
+    /// Stop and remove this machine's setup. Data, keys, backups and client
+    /// configurations stay; remove the kkt binary separately if wanted.
+    Uninstall,
     /// Run the server, with settings from a config file as well as flags.
     ///
     /// Flags win over the file, and the file over the defaults. Without
@@ -521,7 +531,10 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
             config,
         } => agent(env, command, db, config).await,
         Command::Service { command } => service(env, command),
-        Command::Backup { folder, db, config } => backup(env, &folder, db, config),
+        Command::Backup { folder, db, config } => mode_backup(env, &folder, db, config),
+        Command::Status => mode_status(env),
+        Command::Upgrade => mode_upgrade(env),
+        Command::Uninstall => mode_uninstall(env),
         Command::Key {
             command: KeyCommand::Header { key_file, json },
         } => key_header(env, key_file, json),
@@ -807,6 +820,135 @@ fn existing_db(
         ));
     }
     Ok(path)
+}
+
+/// Resolve lifecycle commands through the setup record. An unrecorded
+/// machine still supports the original local-database backup command.
+fn mode_backup(
+    env: &Env,
+    folder: &Path,
+    db: Option<PathBuf>,
+    config: Option<PathBuf>,
+) -> Result<(), String> {
+    match read_setup(env)?.map(|record| record.mode) {
+        Some(setup::Mode::Docker(install)) => {
+            if db.is_some() || config.is_some() {
+                return Err("Docker backup uses the configured container; --db and --config apply only to a local service".into());
+            }
+            let written = docker::backup(&docker::OsHost, &docker::Folder(install.folder), folder)
+                .map_err(|e| e.to_string())?;
+            println!("Backed up to {}", written.display());
+            Ok(())
+        }
+        Some(setup::Mode::Client) => {
+            Err("this machine is a client; back up the server on the machine where it runs".into())
+        }
+        Some(setup::Mode::Service { .. }) | None => backup(env, folder, db, config),
+    }
+}
+
+fn mode_status(env: &Env) -> Result<(), String> {
+    let Some(record) = read_setup(env)? else {
+        println!(
+            "No setup record; checking this machine's kkt service. Run `kkt setup` to configure this machine."
+        );
+        return service(env, ServiceCommand::Status);
+    };
+    println!("Mode: {}\nServer: {}", record.mode.name(), record.url);
+    match record.mode {
+        setup::Mode::Service { .. } => service(env, ServiceCommand::Status),
+        setup::Mode::Docker(install) => {
+            let folder = docker::Folder(install.folder);
+            let state = docker::status(&docker::OsHost, &folder).map_err(|e| e.to_string())?;
+            println!("Docker folder: {}", folder.path().display());
+            println!(
+                "Settings present: {}\nRunning: {}\nVersion: {}\nTailscale: {}",
+                state.files_present,
+                state.running,
+                state.version.as_deref().unwrap_or("unknown"),
+                state.tailscale
+            );
+            Ok(())
+        }
+        setup::Mode::Client => {
+            println!("Client only; the server runs on another machine.");
+            Ok(())
+        }
+    }
+}
+
+fn recorded_setup(env: &Env) -> Result<setup::Record, String> {
+    read_setup(env)?.ok_or_else(|| "this machine has no setup record; run `kkt setup` first".into())
+}
+
+fn mode_upgrade(env: &Env) -> Result<(), String> {
+    let record = recorded_setup(env)?;
+    match record.mode {
+        setup::Mode::Client => {
+            return Err(
+                "this machine is a client; upgrade the server on the machine where it runs".into(),
+            );
+        }
+        setup::Mode::Docker(install) => {
+            docker::upgrade(
+                &docker::OsHost,
+                &docker::Folder(install.folder),
+                Build::CURRENT.version,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        setup::Mode::Service { .. } => {
+            // Validate the replacement service before doing anything. Its
+            // program is current_exe, i.e. the binary just installed by the user.
+            let plan = service_plan(env, None, None, None, false)?;
+            let folder = env
+                .config_dir()
+                .ok_or("set HOME to find the backup folder")?
+                .join(config::SERVICE_BACKUP_FOLDER);
+            backup(env, &folder, None, None)?;
+            let manager = Manager::for_this_os(env).map_err(|e| e.to_string())?;
+            for line in manager
+                .install(&OsSystem, &plan.spec)
+                .map_err(|e| e.to_string())?
+            {
+                println!("{line}");
+            }
+        }
+    }
+    println!("Upgraded the server to kkt {}", Build::CURRENT.version);
+    Ok(())
+}
+
+fn mode_uninstall(env: &Env) -> Result<(), String> {
+    let record = recorded_setup(env)?;
+    match record.mode {
+        setup::Mode::Docker(install) => {
+            docker::down(&docker::OsHost, &docker::Folder(install.folder), false)
+                .map_err(|e| e.to_string())?;
+        }
+        setup::Mode::Service { tailscale: shared } => {
+            if shared {
+                let loaded = load_serve_options(env, None, ServeOptions::NONE)?;
+                let sources = loaded.sources();
+                let settings = loaded
+                    .from_file
+                    .resolve(
+                        env.default_db(Platform::CURRENT).unwrap_or_default(),
+                        env.access_key_file(),
+                    )
+                    .map_err(|e| sources.invalid(e))?;
+                tailscale::stop(&tailscale::OsHost, settings.bind)?;
+            }
+            service(env, ServiceCommand::Uninstall)?;
+        }
+        setup::Mode::Client => {}
+    }
+    let path = setup::record_path(env).ok_or("set HOME to find the setup record")?;
+    std::fs::remove_file(&path).map_err(|e| format!("could not remove {}: {e}", path.display()))?;
+    println!(
+        "Removed this machine's setup. Data, keys, backups and client configurations were kept."
+    );
+    Ok(())
 }
 
 /// `kkt backup`: backs up the database `kkt serve` would use (or `db`),

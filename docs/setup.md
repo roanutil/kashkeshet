@@ -7,8 +7,8 @@ kkt setup
 ```
 
 Choose a server as a service, a server in Docker, or a client-only
-machine. Setup offers the clients it detects, applies their connection
-settings through `kkt connect`, and checks the connection with `kkt doctor`.
+machine. Setup offers the clients it detects, checks the server connection with
+`kkt doctor`, then applies the chosen clients' settings through `kkt connect`.
 If a step fails, the report explains what to fix; setup may already have
 started a server or changed a client configuration. Restart connected clients so they
 load their settings.
