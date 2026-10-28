@@ -109,6 +109,11 @@ pub const DOCKER_MANAGED_VARIABLES: &[&str] = &[
 pub const DOCKER_LOGIN_WAIT: Duration = Duration::from_secs(10 * 60);
 /// How long to wait for the kkt container to start and make its access key.
 pub const DOCKER_START_WAIT: Duration = Duration::from_secs(2 * 60);
+/// How many checks to wait for a login link from a Tailscale container that
+/// needs a login before restarting it. A node whose key expired, or that was
+/// logged out, is not asking for a login, so it shows no link until it is
+/// restarted; a new one shows its link within a few seconds.
+pub const DOCKER_LINK_WAIT_POLLS: u32 = 5;
 /// How often to ask while waiting for the Tailscale login or for kkt.
 pub const DOCKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// What `TS_TAILNET` is set to until the Tailscale container has logged in

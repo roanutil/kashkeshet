@@ -611,7 +611,7 @@ async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
         Some(setup::Mode::Docker(install)) => {
             let folder = docker::Folder(install.folder);
             let state = docker::status(&docker::OsHost, &folder);
-            checks.push(docker_check(state, &folder));
+            checks.extend(docker_checks(state, &folder));
         }
         Some(setup::Mode::Service { .. }) | None => checks.push(service_check(env)),
     }
@@ -649,6 +649,50 @@ fn service_check(env: &Env) -> diagnostics::Check {
 
 /// The name of the doctor line about kkt in Docker on this machine.
 const DOCKER_CHECK: &str = "this machine's kkt in Docker";
+
+/// The name of the doctor line about the Tailscale login of kkt in Docker.
+const DOCKER_TAILSCALE_CHECK: &str = "this machine's Tailscale login";
+
+/// The doctor's lines about kkt in Docker, from what `docker::status` found
+/// in the managed `folder`: kkt itself, then, if it is served over Tailscale,
+/// the Tailscale login.
+fn docker_checks(
+    state: Result<docker::State, docker::DockerError>,
+    folder: &docker::Folder,
+) -> Vec<diagnostics::Check> {
+    let login = match &state {
+        Ok(state) => state.login.clone(),
+        Err(_) => None,
+    };
+    let mut checks = vec![docker_check(state, folder)];
+    checks.extend(login.map(|login| tailscale_login_check(&login, folder)));
+    checks
+}
+
+/// The doctor's line about the Tailscale container's login.
+fn tailscale_login_check(login: &docker::Login, folder: &docker::Folder) -> diagnostics::Check {
+    match login {
+        docker::Login::LoggedIn => diagnostics::Check::ok(DOCKER_TAILSCALE_CHECK, "logged in"),
+        docker::Login::NeedsLogin => diagnostics::Check::problem(
+            DOCKER_TAILSCALE_CHECK,
+            "not logged in: the machine's key expired, or it was logged out, so it is off the tailnet and its HTTPS address does not answer",
+            "run `kkt setup` again and log in with the link it shows",
+        ),
+        docker::Login::Unreachable => diagnostics::Check::problem(
+            DOCKER_TAILSCALE_CHECK,
+            "the Tailscale container does not answer",
+            format!(
+                "start it with `cd {} && docker compose up -d`",
+                clients::shell_word(&folder.path().display().to_string())
+            ),
+        ),
+        docker::Login::Other(state) => diagnostics::Check::problem(
+            DOCKER_TAILSCALE_CHECK,
+            format!("Tailscale says: {state}"),
+            "check the machine in the Tailscale admin console, or run `kkt setup` again",
+        ),
+    }
+}
 
 /// The doctor's line about kkt in Docker, from what `docker::status` found
 /// in the managed `folder`.
@@ -1431,6 +1475,17 @@ fn mode_status(env: &Env) -> Result<(), String> {
                 state.version.as_deref().unwrap_or("unknown"),
                 state.tailscale
             );
+            match &state.login {
+                Some(docker::Login::LoggedIn) => println!("Tailscale login: logged in"),
+                Some(docker::Login::NeedsLogin) => println!(
+                    "Tailscale login: needed. The machine's key expired, or it was logged out, so it is off the tailnet. Run `kkt setup` to log in again."
+                ),
+                Some(docker::Login::Unreachable) => {
+                    println!("Tailscale login: unknown; the Tailscale container does not answer")
+                }
+                Some(docker::Login::Other(state)) => println!("Tailscale login: {state}"),
+                None => {}
+            }
             Ok(())
         }
         setup::Mode::Client => {

@@ -48,6 +48,23 @@ timed out, run setup again to resume with the saved container state. It
 reads the node's actual DNS name, including any suffix Tailscale adds when
 a name is already taken, and configures kkt to accept it.
 
+### When the machine needs to log in again
+
+A Tailscale machine's key expires after 180 days unless expiry is turned off
+for it in the Tailscale admin console (see [Docker](docker.md#with-tailscale)).
+When the key expires, or the machine is logged out, it drops off the tailnet,
+and its HTTPS address stops answering, while kkt keeps running on this
+machine. `kkt status` then prints `Tailscale login: needed`, and `kkt doctor`
+reports a problem on the line "this machine's Tailscale login". A Tailscale
+container that does not answer at all is reported as unknown, not as logged
+out.
+
+To log in again, run `kkt setup` again with the same answers. Setup notices
+the machine is logged out, restarts the Tailscale container to get a fresh
+login link, shows it as above (Enter opens it), and waits for you to log in.
+It is the same machine: the same name, the same address, and nothing is
+lost. There is no separate command for this.
+
 For a service, install Tailscale on the host and log in there first. Setup
 uses that login and `tailscale serve`; it does not log you out or replace
 the host's Tailscale settings.

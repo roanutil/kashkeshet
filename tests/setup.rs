@@ -652,3 +652,122 @@ async fn setup_waits_for_a_server_it_set_up_that_answers_late() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+const LOGGED_IN: &str = r#"{"BackendState":"Running","Self":{"DNSName":"kkt.tail1.ts.net."},"CertDomains":["kkt.tail1.ts.net"]}"#;
+const LOGIN_NEEDED: &str = r#"{"BackendState":"NeedsLogin","AuthURL":"","Self":{"DNSName":""}}"#;
+
+/// Runs `kkt <command>` on a machine set up as Docker with Tailscale, where
+/// the Tailscale container says `tailscale_status`, or does not answer if
+/// that is `None`. Returns what it printed.
+async fn tailscale_docker_output(
+    name: &str,
+    command: &str,
+    tailscale_status: Option<&str>,
+) -> String {
+    let home = temp_home(name);
+    let folder = home.join("docker");
+    std::fs::create_dir_all(&folder).expect("folder");
+    std::fs::write(
+        folder.join(".env"),
+        "KKT_VERSION=0.4.0\nCOMPOSE_FILE=compose.tailscale.yaml\n",
+    )
+    .expect("env");
+    write_record(
+        &home,
+        &format!(
+            "format = 1\nmode = \"docker\"\nwritten_by = \"0.4.0\"\n\
+             url = \"https://kkt.tail1.ts.net/mcp\"\n\n[docker]\nfolder = \"{}\"\n\
+             tailscale = true\nhostname = \"kkt\"\ntailnet = \"tail1.ts.net\"\n",
+            folder.display()
+        ),
+    );
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).expect("bin");
+    let docker = bin.join("docker");
+    std::fs::write(
+        &docker,
+        "#!/bin/sh\ncase \"$*\" in\n\
+         *\"tailscale status --json\"*) [ -n \"$FAKE_TS_STATUS\" ] && { echo \"$FAKE_TS_STATUS\"; exit 0; } || exit 1 ;;\n\
+         *\"ps --status running --services\"*) echo kkt ;;\n\
+         esac\nexit 0\n",
+    )
+    .expect("fake docker");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755))
+            .expect("make it runnable");
+    }
+    let output = || async {
+        let mut run = Command::new(KKT);
+        run.arg(command)
+            .env("HOME", &home)
+            .env("PATH", &bin)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("FAKE_TS_STATUS")
+            .kill_on_drop(true);
+        if let Some(status) = tailscale_status {
+            run.env("FAKE_TS_STATUS", status);
+        }
+        let out = tokio::time::timeout(TIMEOUT, run.output())
+            .await
+            .expect("kkt should finish")
+            .expect("run kkt");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    // Another test's process starting can briefly hold the script open for
+    // writing, so that running it fails with "Text file busy": try again.
+    let mut printed = output().await;
+    for _ in 0..20 {
+        if !printed.contains("Text file busy") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        printed = output().await;
+    }
+    let _ = std::fs::remove_dir_all(&home);
+    printed
+}
+
+#[tokio::test]
+async fn status_and_doctor_say_when_the_tailscale_machine_needs_a_login() {
+    let said = tailscale_docker_output("ts-status-login", "status", Some(LOGIN_NEEDED)).await;
+    assert!(said.contains("Tailscale login: needed"), "{said}");
+    assert!(said.contains("kkt setup"), "{said}");
+    let said = tailscale_docker_output("ts-doctor-login", "doctor", Some(LOGIN_NEEDED)).await;
+    assert!(
+        said.contains("problem: this machine's Tailscale login: not logged in"),
+        "{said}"
+    );
+    assert!(said.contains("fix: run `kkt setup` again"), "{said}");
+}
+
+#[tokio::test]
+async fn status_and_doctor_are_quiet_about_tailscale_when_it_is_logged_in() {
+    let said = tailscale_docker_output("ts-status-ok", "status", Some(LOGGED_IN)).await;
+    assert!(said.contains("Tailscale login: logged in"), "{said}");
+    let said = tailscale_docker_output("ts-doctor-ok", "doctor", Some(LOGGED_IN)).await;
+    assert!(
+        said.contains("ok: this machine's Tailscale login: logged in"),
+        "{said}"
+    );
+}
+
+#[tokio::test]
+async fn a_silent_tailscale_container_is_not_called_logged_out() {
+    let said = tailscale_docker_output("ts-status-down", "status", None).await;
+    assert!(said.contains("Tailscale login: unknown"), "{said}");
+    assert!(!said.contains("needed"), "{said}");
+    let said = tailscale_docker_output("ts-doctor-down", "doctor", None).await;
+    assert!(
+        said.contains(
+            "problem: this machine's Tailscale login: the Tailscale container does not answer"
+        ),
+        "{said}"
+    );
+}

@@ -558,7 +558,8 @@ fn status_says_whether_it_is_set_up_and_running() {
             files_present: false,
             running: false,
             version: None,
-            tailscale: false
+            tailscale: false,
+            login: None
         }
     );
     assert!(host.ran.borrow().is_empty());
@@ -570,7 +571,9 @@ fn status_says_whether_it_is_set_up_and_running() {
             files_present: true,
             running: true,
             version: Some("0.4.0".into()),
-            tailscale: true
+            tailscale: true,
+            // This fake host's Tailscale container answers nothing readable.
+            login: Some(Login::Other("an unreadable answer".into()))
         }
     );
     let stopped = FakeHost::new(|_| ok(""));
@@ -1011,4 +1014,160 @@ async fn an_opener_that_fails_after_starting_is_said_while_setup_goes_on_waiting
             .any(|l| l.contains("Could not open a browser") && l.contains("exit status: 7")),
         "{said:?}"
     );
+}
+
+const NEEDS_LOGIN_NO_LINK: &str =
+    r#"{"BackendState":"NeedsLogin","AuthURL":"","Self":{"DNSName":""}}"#;
+
+fn tailscale_env() -> String {
+    env_text(&with_tailscale(None), Some(("kkt", "tail1.ts.net")))
+}
+
+/// A machine set up with Tailscale, whose Tailscale container answers
+/// `tailscale status --json` with `status`.
+fn with_tailscale_status(status: Option<&'static str>) -> FakeHost {
+    let host = FakeHost::new(move |command| {
+        if command.contains("tailscale status --json") {
+            return match status {
+                Some(json) => ok(json),
+                None => failed("no such container"),
+            };
+        }
+        if command.contains("ps --status running") {
+            return ok("kkt\ntailscale\n");
+        }
+        ok("")
+    });
+    host.files
+        .borrow_mut()
+        .insert(PathBuf::from("/data/docker/.env"), (tailscale_env(), true));
+    host
+}
+
+#[test]
+fn status_reports_the_tailscale_login() {
+    for (status, expected) in [
+        (Some(RUNNING), Login::LoggedIn),
+        (Some(NEEDS_LOGIN_NO_LINK), Login::NeedsLogin),
+        (None, Login::Unreachable),
+        (
+            Some(r#"{"BackendState":"Stopped"}"#),
+            Login::Other("Stopped".into()),
+        ),
+        (Some("garbage"), Login::Other("an unreadable answer".into())),
+    ] {
+        let host = with_tailscale_status(status);
+        assert_eq!(status_of(&host).login, Some(expected), "{status:?}");
+    }
+}
+
+fn status_of(host: &FakeHost) -> State {
+    status(host, &folder()).unwrap()
+}
+
+#[test]
+fn a_setup_without_tailscale_has_no_login_to_report() {
+    let host = installed(&env_text(&plain(), None));
+    assert_eq!(status_of(&host).login, None);
+    assert!(!host.ran_any("tailscale status"));
+}
+
+#[tokio::test]
+async fn a_machine_that_needs_a_login_again_gets_its_container_restarted_for_a_link() {
+    // Logged out with no link until the container is restarted, as after an
+    // expired key or a `tailscale logout`.
+    let restarted = Cell::new(false);
+    let after_restart = Cell::new(0);
+    let host = FakeHost::new(move |command| {
+        if command.contains("restart tailscale") {
+            restarted.set(true);
+            return ok("");
+        }
+        if command.contains("tailscale status") {
+            if !restarted.get() {
+                return ok(NEEDS_LOGIN_NO_LINK);
+            }
+            after_restart.set(after_restart.get() + 1);
+            return ok(if after_restart.get() < 3 {
+                NEEDS_LOGIN
+            } else {
+                RUNNING
+            });
+        }
+        working("")(command)
+    });
+    let login = FakeLogin::default();
+    let done = provision(
+        &host,
+        &*host.clock,
+        &login,
+        &folder(),
+        &with_tailscale(None),
+        Path::new("/keys/docker"),
+    )
+    .await
+    .unwrap();
+    assert!(done.node.is_some());
+    let restarts = host
+        .ran
+        .borrow()
+        .iter()
+        .filter(|c| c.ends_with(" restart tailscale"))
+        .count();
+    assert_eq!(restarts, 1, "{:?}", host.ran.borrow());
+    assert_eq!(
+        *login.shown.borrow(),
+        ["https://login.tailscale.com/a/abc123"]
+    );
+    assert!(
+        host.said
+            .borrow()
+            .iter()
+            .any(|l| l.contains("log in again"))
+    );
+}
+
+#[tokio::test]
+async fn a_new_machine_whose_link_comes_within_a_few_seconds_is_not_restarted() {
+    let polls = Cell::new(0);
+    let host = FakeHost::new(move |command| {
+        if command.contains("tailscale status") {
+            polls.set(polls.get() + 1);
+            return ok(match polls.get() {
+                1 | 2 => NEEDS_LOGIN_NO_LINK,
+                3 | 4 => NEEDS_LOGIN,
+                _ => RUNNING,
+            });
+        }
+        working("")(command)
+    });
+    provision(
+        &host,
+        &*host.clock,
+        &FakeLogin::default(),
+        &folder(),
+        &with_tailscale(None),
+        Path::new("/keys/docker"),
+    )
+    .await
+    .unwrap();
+    assert!(!host.ran_any(" restart "));
+}
+
+#[tokio::test]
+async fn a_machine_that_is_already_logged_in_is_not_restarted_or_shown_a_link() {
+    let host = FakeHost::new(working(RUNNING));
+    let login = FakeLogin::default();
+    provision(
+        &host,
+        &*host.clock,
+        &login,
+        &folder(),
+        &with_tailscale(None),
+        Path::new("/keys/docker"),
+    )
+    .await
+    .unwrap();
+    assert!(!host.ran_any(" restart "));
+    assert!(login.shown.borrow().is_empty());
 }
