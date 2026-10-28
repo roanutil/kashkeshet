@@ -50,9 +50,12 @@ pub async fn provision(
         None
     };
 
-    host.say("Starting kkt (the first time, the image is downloaded)...");
+    host.say("Starting kkt (this takes a minute if the image has to be downloaded)...");
     run_attached(host, &compose(folder, &["up", "-d"]))?;
     let key = wait_for_key(host, clock, folder).await?;
+    if let Some(parent) = key_file.parent() {
+        create_dir(host, parent)?;
+    }
     host.write_file(key_file, &key, true)
         .map_err(|e| DockerError::io(format!("could not write {}", key_file.display()), e))?;
     host.say(&format!(
