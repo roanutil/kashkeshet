@@ -101,7 +101,7 @@ enum Command {
     /// folder inside FOLDER. Safe while the server runs.
     ///
     /// The new folder is named for the time and this kkt's version, such as
-    /// kkt-20261028T131500.123Z-v0.3.0, so backups sort by time. It and the
+    /// kkt-20261028T131500.123Z-v0.4.0, so backups sort by time. It and the
     /// key in it are readable only by you.
     Backup {
         /// Where to copy the backup. Created if missing. In Docker mode,

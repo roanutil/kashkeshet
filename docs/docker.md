@@ -13,13 +13,14 @@ Tailscale container.
 ## Setup
 
 Choose a [published release](https://github.com/sam-mfb/kashkeshet/releases)
-and download its files into a new folder. Replace `X.Y.Z` below with that
-version, without the `v`. Keep the files and image on the same release;
-the backup commands in this guide need 0.4.0 or later.
+and download its files into a new folder. The commands below use 0.4.0;
+for another release, change `KKT_VERSION` (without the `v`). Keep the files
+and image on the same release; the backup commands in this guide need 0.4.0
+or later.
 
 ```sh
 mkdir kkt && cd kkt
-KKT_VERSION=X.Y.Z
+KKT_VERSION=0.4.0
 curl -fsSLO "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/compose.yaml"
 curl -fsSL "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/.env.example" -o .env
 mkdir backups
@@ -130,14 +131,14 @@ Set `KKT_VERSION` back to the old version, then put back a database made by
 that version or before: a backup made before the upgrade has the database
 as the old version left it. Remove the database's `-wal` and `-shm` files
 too; they belong to the database being replaced. For a backup in `backups`
-named `kkt-20261028T131500.123Z-v0.3.0`:
+named `kkt-20261028T131500.123Z-v0.4.0`:
 
 ```
 docker compose stop kkt
 docker compose run --rm --no-deps --entrypoint sh kkt -c '
   cd /data/.local/share/kashkeshet &&
   rm -f kashkeshet.db-wal kashkeshet.db-shm &&
-  cp /backups/kkt-20261028T131500.123Z-v0.3.0/kashkeshet.db kashkeshet.db'
+  cp /backups/kkt-20261028T131500.123Z-v0.4.0/kashkeshet.db kashkeshet.db'
 docker compose up -d
 ```
 

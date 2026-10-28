@@ -8,7 +8,7 @@ kkt backup ~/kkt-backups
 
 This writes a new folder inside `~/kkt-backups` (created if missing), named
 for the time and the kkt version that wrote it, such as
-`kkt-20261028T131500.123Z-v0.3.0`. Names sort by time. The folder holds:
+`kkt-20261028T131500.123Z-v0.4.0`. Names sort by time. The folder holds:
 
 - `kashkeshet.db`: a copy of the database
 - `config.toml`: a copy of the config file, if there is one
