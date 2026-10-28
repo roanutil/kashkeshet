@@ -77,6 +77,7 @@ pub fn router(source: Arc<dyn Source>, hosts: AllowedHosts, gate: Arc<dyn Gate>)
     let sign_in_required = gate.sign_in_required();
     let pages = Router::new()
         .route("/", get(index))
+        .route("/channels/create", post(create_channel))
         .route("/channels/{id}", get(channel))
         .route("/channels/{id}/messages", get(earlier_messages))
         .route("/channels/{id}/purpose", post(set_purpose))
@@ -285,6 +286,46 @@ async fn channel(
             sign_out: pages.sign_out,
             form_token: pages.form_token(&headers),
         }),
+        Err(e) => pages.error(e, &headers),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateChannelForm {
+    name: String,
+    #[serde(default)]
+    purpose: String,
+    open: String,
+    #[serde(flatten)]
+    members: std::collections::HashMap<String, String>,
+}
+
+async fn create_channel(
+    State(pages): State<Pages>,
+    headers: HeaderMap,
+    Change(form): Change<CreateChannelForm>,
+) -> Response {
+    let open = match form.open.as_str() {
+        "true" => true,
+        "false" => false,
+        _ => {
+            return pages.error(
+                SourceError::Invalid("choose open or closed".into()),
+                &headers,
+            );
+        }
+    };
+    let members = form
+        .members
+        .keys()
+        .filter_map(|name| name.strip_prefix("member_").map(str::to_string))
+        .collect();
+    match pages
+        .source
+        .create_channel(form.name, form.purpose, open, members)
+        .await
+    {
+        Ok(id) => Redirect::to(&format!("/channels/{}", url_path(&id))).into_response(),
         Err(e) => pages.error(e, &headers),
     }
 }
