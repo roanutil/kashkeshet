@@ -13,7 +13,7 @@ fn home(name: &str) -> PathBuf {
 fn record(home: &Path, mode: Mode) {
     let record = Record {
         mode,
-        written_by: "old-version".into(),
+        written_by: "0.0.0".into(),
         url: "https://node.tail.ts.net/mcp".into(),
         key_file: Some(home.join("key")),
     };
@@ -110,7 +110,7 @@ fn fake(home: &Path, name: &str, body: &str) {
 fn docker_record(home: &Path) -> PathBuf {
     let folder = home.join("managed-docker");
     std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(folder.join(".env"), "KKT_VERSION=old\nCOMPOSE_FILE=compose.yaml\nCOMPOSE_PROJECT_NAME=isolated\nKKT_PORT=7421\n").unwrap();
+    std::fs::write(folder.join(".env"), "KKT_VERSION=0.0.0\nCOMPOSE_FILE=compose.yaml\nCOMPOSE_PROJECT_NAME=isolated\nKKT_PORT=7421\n").unwrap();
     record(
         home,
         Mode::Docker(DockerSetup {
@@ -234,11 +234,107 @@ fn service_upgrade_backs_up_configured_database_then_uninstall_keeps_it() {
     let text_unit = std::fs::read_to_string(&unit).unwrap();
     assert!(text_unit.contains(env!("CARGO_BIN_EXE_kkt")));
     assert!(text_unit.contains("--ignore-setup"));
+    let log_before = std::fs::read(home.join("commands")).unwrap();
+    let out = run(&home, &["upgrade"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("already at"));
+    assert_eq!(std::fs::read(home.join("commands")).unwrap(), log_before);
+    assert_eq!(
+        std::fs::read_dir(home.join(".config/kkt/backups"))
+            .unwrap()
+            .count(),
+        1
+    );
     let out = run(&home, &["uninstall"]);
     assert!(out.status.success(), "{}", text(&out));
     assert!(!unit.exists());
     assert!(!home.join(".config/kkt/setup.toml").exists());
     assert!(database.exists());
     assert!(saved.exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn docker_backup_without_a_folder_does_not_copy_out() {
+    let home = home("docker-no-dest");
+    let folder = docker_record(&home);
+    fake(
+        &home,
+        "docker",
+        "echo 'Backed up to /backups/kkt-fixture'\nexit 0",
+    );
+    let out = run(&home, &["backup"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains(folder.join("backups/kkt-fixture").to_str().unwrap()));
+    let log = std::fs::read_to_string(home.join("commands")).unwrap();
+    assert_eq!(log.lines().count(), 1);
+    assert!(log.contains("exec -T kkt kkt backup /backups"));
+    assert!(!log.contains(" cp "));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn a_local_backup_still_requires_a_folder() {
+    let home = home("local-dest");
+    for mode in [None, Some(Mode::Service { tailscale: false })] {
+        if let Some(mode) = mode {
+            record(&home, mode);
+        }
+        let out = run(&home, &["backup"]);
+        assert!(!out.status.success());
+        assert!(text(&out).contains("a local backup needs FOLDER"));
+    }
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn same_version_is_a_noop_and_downgrade_requires_an_override() {
+    let home = home("versions");
+    let folder = docker_record(&home);
+    fake(
+        &home,
+        "docker",
+        "echo 'Backed up to /backups/kkt-fixture'\nexit 0",
+    );
+    for (version, success, expected) in [
+        (env!("CARGO_PKG_VERSION"), true, "already at"),
+        ("9999.0.0", false, "refusing to downgrade"),
+        ("local-test", false, "cannot compare"),
+    ] {
+        let env_text = format!("KKT_VERSION={version}\nCOMPOSE_FILE=compose.yaml\n");
+        std::fs::write(folder.join(".env"), &env_text).unwrap();
+        let before = std::fs::read(home.join(".config/kkt/setup.toml")).unwrap();
+        let out = run(&home, &["upgrade"]);
+        assert_eq!(out.status.success(), success, "{}", text(&out));
+        assert!(text(&out).contains(expected), "{}", text(&out));
+        assert!(
+            !home.join("commands").exists(),
+            "no backup/pull/restart for skipped or refused upgrades"
+        );
+        assert_eq!(
+            std::fs::read_to_string(folder.join(".env")).unwrap(),
+            env_text
+        );
+        assert_eq!(
+            std::fs::read(home.join(".config/kkt/setup.toml")).unwrap(),
+            before
+        );
+    }
+    std::fs::write(
+        folder.join(".env"),
+        "KKT_VERSION=9999.0.0\nCOMPOSE_FILE=compose.yaml\n",
+    )
+    .unwrap();
+    let out = run(&home, &["upgrade", "--allow-downgrade"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let log = std::fs::read_to_string(home.join("commands")).unwrap();
+    assert!(log.contains("kkt backup /backups"));
+    assert!(log.contains("pull"));
+    let out = run(&home, &["upgrade", "--allow-downgrade"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("already at"));
+    assert_eq!(std::fs::read_to_string(home.join("commands")).unwrap(), log);
     std::fs::remove_dir_all(home).unwrap();
 }

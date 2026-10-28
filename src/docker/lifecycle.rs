@@ -69,11 +69,18 @@ pub fn down(host: &dyn Host, folder: &Folder, remove_data: bool) -> Result<(), D
 }
 
 /// Backs kkt up with `kkt backup` inside the container, then copies the new
-/// backup folder into `dest` on the host, owned by the person running this.
-/// Returns where the backup is. The folder in the managed backups folder
-/// stays too.
-pub fn backup(host: &dyn Host, folder: &Folder, dest: &Path) -> Result<PathBuf, DockerError> {
+/// backup folder into `dest`, if given, owned by the person running this.
+/// Without a destination, returns the path in the managed backups folder.
+/// The managed copy stays in either case.
+pub fn backup(
+    host: &dyn Host,
+    folder: &Folder,
+    dest: Option<&Path>,
+) -> Result<PathBuf, DockerError> {
     let name = backup_in_container(host, folder)?;
+    let Some(dest) = dest else {
+        return Ok(folder.backups().join(name));
+    };
     host.create_dir_all(dest)
         .map_err(|e| DockerError::io(format!("could not create {}", dest.display()), e))?;
     let from = format!("kkt:{DOCKER_BACKUPS_MOUNT}/{name}");
@@ -103,8 +110,18 @@ pub fn upgrade(host: &dyn Host, folder: &Folder, new_version: &str) -> Result<()
         .any(|l| l.trim() == "COMPOSE_FILE=compose.tailscale.yaml");
     write_embedded(host, folder, tailscale)?;
     write_env(host, folder, &set_version(&env, new_version))?;
-    run_attached(host, &compose(folder, &["pull"]))?;
-    run_attached(host, &compose(folder, &["up", "-d"]))
+    let result = run_attached(host, &compose(folder, &["pull"]))
+        .and_then(|()| run_attached(host, &compose(folder, &["up", "-d"])));
+    if let Err(error) = result {
+        // Do not leave the selected version claiming that a failed upgrade
+        // succeeded: the caller's version check must allow a later retry.
+        write_env(host, folder, &env).map_err(|restore| DockerError::Unexpected {
+            what: "upgrade recovery",
+            detail: format!("{error}; could not restore the previous settings: {restore}"),
+        })?;
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Runs `kkt backup` in the container and returns the new folder's name.

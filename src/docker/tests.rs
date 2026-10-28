@@ -538,7 +538,7 @@ fn status_says_whether_it_is_set_up_and_running() {
 #[test]
 fn a_backup_is_copied_to_the_host_folder_it_was_asked_for() {
     let host = installed(&env_text(&plain(), None));
-    let made = backup(&host, &folder(), Path::new("/home/me/kkt-backups")).unwrap();
+    let made = backup(&host, &folder(), Some(Path::new("/home/me/kkt-backups"))).unwrap();
     assert_eq!(
         made,
         PathBuf::from("/home/me/kkt-backups/kkt-20261029T120000.000Z-v0.4.0")
@@ -555,6 +555,19 @@ fn a_backup_is_copied_to_the_host_folder_it_was_asked_for() {
 }
 
 #[test]
+fn a_backup_without_a_destination_stays_in_the_managed_folder() {
+    let host = installed(&env_text(&plain(), None));
+    let made = backup(&host, &folder(), None).unwrap();
+    assert_eq!(
+        made,
+        folder().backups().join("kkt-20261029T120000.000Z-v0.4.0")
+    );
+    let ran = host.ran.borrow();
+    assert_eq!(ran.len(), 1);
+    assert!(ran[0].ends_with("exec -T kkt kkt backup /backups"));
+}
+
+#[test]
 fn a_failed_backup_copies_nothing() {
     let host = FakeHost::new(|command| {
         if command.contains("kkt backup") {
@@ -563,9 +576,41 @@ fn a_failed_backup_copies_nothing() {
             ok("")
         }
     });
-    let err = backup(&host, &folder(), Path::new("/home/me/b")).unwrap_err();
+    let err = backup(&host, &folder(), Some(Path::new("/home/me/b"))).unwrap_err();
     assert!(err.to_string().contains("disk full"), "{err}");
     assert!(!host.ran_any(" cp "));
+}
+
+#[test]
+fn a_failed_image_pull_restores_the_selected_version_for_a_retry() {
+    let original = env_text(&plain(), None);
+    let host = FakeHost::new(|command| {
+        if command.ends_with(" pull") {
+            failed("registry unavailable")
+        } else if command.contains("kkt backup") {
+            ok("Backed up to /backups/kkt-before-upgrade\n")
+        } else {
+            ok("")
+        }
+    });
+    host.files
+        .borrow_mut()
+        .insert(folder().path().join(ENV_FILE), (original.clone(), true));
+    assert!(
+        upgrade(&host, &folder(), "0.5.0")
+            .unwrap_err()
+            .to_string()
+            .contains("registry unavailable")
+    );
+    assert_eq!(
+        host.files
+            .borrow()
+            .get(&folder().path().join(ENV_FILE))
+            .unwrap()
+            .0,
+        original
+    );
+    assert!(!host.ran_any(" up -d"));
 }
 
 #[test]
