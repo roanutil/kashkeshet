@@ -144,6 +144,15 @@ async fn initialize_response(mut response: Response) -> Result<Value, String> {
 
 /// Check a server without registering an agent or changing its database.
 /// The caller adds the platform's service state using the service part.
+/// The name of the check that the server answered at all.
+pub const SERVER_CHECK: &str = "server";
+
+/// Whether `checks` found the server not answering at all, as opposed to
+/// answering with a problem.
+pub fn unreachable(checks: &[Check]) -> bool {
+    checks.iter().any(|c| c.name == SERVER_CHECK && !c.ok)
+}
+
 pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, String> {
     let mut checks = Vec::new();
     let key = key_file(key_path, &mut checks);
@@ -161,14 +170,14 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
         Ok(response) => response,
         Err(e) => {
             checks.push(Check::problem(
-                "server",
+                SERVER_CHECK,
                 e.to_string(),
                 "run `kkt service start` or `kkt serve`, and check --url and the bind setting",
             ));
             return Ok(checks);
         }
     };
-    checks.push(Check::ok("server", format!("reachable at {url}")));
+    checks.push(Check::ok(SERVER_CHECK, format!("reachable at {url}")));
     if response.status().as_u16() == 403 {
         checks.push(Check::problem(
             "Host",

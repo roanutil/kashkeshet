@@ -44,6 +44,9 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
                 options.waiting_grace_seconds = Some(value.count("waiting_grace_seconds")?)
             }
             "sends_per_minute" => options.sends_per_minute = Some(value.count("sends_per_minute")?),
+            "upgrade_backups_kept" => {
+                options.upgrade_backups_kept = Some(value.count("upgrade_backups_kept")?)
+            }
             "allow_origins" => options.allow_origins = Some(value.strings("allow_origins")?),
             "allow_hosts" => options.allow_hosts = Some(value.strings("allow_hosts")?),
             "instructions" => options.instructions = Some(value.path("instructions", dir, env)?),
@@ -65,6 +68,27 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
         }
     }
     Ok(options)
+}
+
+/// The config file `text` with `host` added to `allow_hosts`, keeping the
+/// rest of the file, comments included, as it was. Unchanged if the host is
+/// already there. Empty `text` makes a file with only that line.
+pub fn with_allowed_host(text: &str, host: &str) -> Result<String, InvalidSetting> {
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| {
+        InvalidSetting::new(
+            "config",
+            format!("is not valid TOML: {}", e.message().trim()),
+        )
+    })?;
+    let hosts = doc
+        .entry("allow_hosts")
+        .or_insert_with(|| toml_edit::value(toml_edit::Array::new()))
+        .as_array_mut()
+        .ok_or_else(|| InvalidSetting::new("allow_hosts", "in the config file must be a list"))?;
+    if !hosts.iter().any(|h| h.as_str() == Some(host)) {
+        hosts.push(host);
+    }
+    Ok(doc.to_string())
 }
 
 /// One value from the file.
@@ -192,6 +216,7 @@ mod tests {
             options,
             ServeOptions {
                 waiting_grace_seconds: None,
+                upgrade_backups_kept: None,
                 db: Some(PathBuf::from("/home/sam/data/kkt.db")),
                 bind: Some("127.0.0.1:9000".parse().expect("addr")),
                 allow_any_bind: Some(true),
@@ -260,5 +285,25 @@ mod tests {
         let err =
             parse_file("db = \"~/x.db\"", Path::new("/etc/kkt"), &no_home).expect_err("no home");
         assert_eq!(err.name, "db");
+    }
+
+    #[test]
+    fn an_allowed_host_is_added_keeping_the_rest_of_the_file() {
+        let text = "# my settings\nbind = \"127.0.0.1:7420\" # local\n";
+        let added = with_allowed_host(text, "box.tail1234.ts.net").expect("added");
+        assert_eq!(
+            added,
+            "# my settings\nbind = \"127.0.0.1:7420\" # local\nallow_hosts = [\"box.tail1234.ts.net\"]\n"
+        );
+        let again = with_allowed_host(&added, "box.tail1234.ts.net").expect("again");
+        assert_eq!(again, added);
+        let more = with_allowed_host("allow_hosts = [\"a\"]\n", "b").expect("more");
+        assert_eq!(more, "allow_hosts = [\"a\", \"b\"]\n");
+        assert_eq!(
+            with_allowed_host("", "b").expect("new"),
+            "allow_hosts = [\"b\"]\n"
+        );
+        let bad = with_allowed_host("allow_hosts = \"a\"\n", "b").expect_err("not a list");
+        assert_eq!(bad.name, "allow_hosts");
     }
 }

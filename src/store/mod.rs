@@ -7,13 +7,24 @@
 //! [`Db`] is the one implementation, over SQLite. Each call to [`Db::read`] or
 //! [`Db::write`] runs one closure, and a write closure is one transaction: its
 //! changes all commit together, or not at all.
+//!
+//! [`pending_upgrade`] and [`copy_database`] work on a database file without
+//! opening it as a [`Db`], for backups.
 
 mod sqlite;
 
 #[cfg(test)]
 mod tests;
 
-pub use sqlite::Db;
+pub use sqlite::{Db, copy_database, pending_upgrade};
+
+/// A database whose tables are at schema version `from`, which this version
+/// of kkt brings up to `to` when it opens it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SchemaUpgrade {
+    pub from: usize,
+    pub to: usize,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

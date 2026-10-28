@@ -5,18 +5,22 @@
 
 pub mod admission;
 pub mod app;
+pub mod backup;
 pub mod clients;
 pub mod clock;
 pub mod config;
 pub mod diagnostics;
+pub mod docker;
 pub mod hosts;
 pub mod logs;
 pub mod names;
 pub mod provenance;
 pub mod service;
 pub mod settings;
+pub mod setup;
 pub mod shutdown;
 pub mod store;
+pub mod tailscale;
 pub mod web;
 
 mod events;
