@@ -390,3 +390,102 @@ async fn url_and_key_file_each_replace_only_their_part_of_the_record() {
     server.kill().await.expect("stop kkt");
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// A home folder with nothing in it at all, as on a new machine.
+fn empty_home(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("kashkeshet-setup-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("empty home");
+    dir
+}
+
+/// A `docker` that does nothing and succeeds, except that asking the kkt
+/// container for its key prints `key`. Put in its own folder for PATH.
+fn fake_docker(dir: &Path, key: &str) -> PathBuf {
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).expect("bin");
+    let docker = bin.join("docker");
+    std::fs::write(
+        &docker,
+        format!("#!/bin/sh\ncase \"$*\" in *\"kkt key show\"*) echo '{key}' ;; esac\nexit 0\n"),
+    )
+    .expect("fake docker");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755))
+            .expect("make it runnable");
+    }
+    bin
+}
+
+#[tokio::test]
+async fn docker_setup_works_from_a_home_with_nothing_in_it() {
+    // A real server stands in for the container, on the port setup is told
+    // Docker publishes, so the connection check is real.
+    let (mut server, url, key) = keyed_server("docker-server").await;
+    let port = url
+        .trim_start_matches("http://127.0.0.1:")
+        .trim_end_matches("/mcp")
+        .to_string();
+    let key_text = std::fs::read_to_string(&key)
+        .expect("key")
+        .trim()
+        .to_string();
+    let scratch = empty_home("docker-scratch");
+    let bin = fake_docker(&scratch, &key_text);
+    let home = empty_home("docker-home");
+
+    let out = Command::new(KKT)
+        .args([
+            "setup",
+            "--mode",
+            "docker",
+            "--no-tailscale",
+            "--clients",
+            "none",
+        ])
+        .args(["--docker-project", "kkt-test", "--docker-port", &port])
+        .env("HOME", &home)
+        .env("PATH", &bin)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(TIMEOUT, out)
+        .await
+        .expect("setup should finish")
+        .expect("run kkt");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{said}");
+    let saved = home.join(".config/kkt/docker-access-key");
+    assert_eq!(
+        std::fs::read_to_string(&saved).expect("saved key").trim(),
+        key_text
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&saved)
+            .expect("meta")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    let record = record_text(&home);
+    assert!(record.contains("mode = \"docker\""), "{record}");
+    assert!(record.contains(&format!("url = \"{url}\"")), "{record}");
+    assert!(
+        said.contains(&format!("the web page is at http://127.0.0.1:{port}/")),
+        "{said}"
+    );
+    server.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&scratch);
+}

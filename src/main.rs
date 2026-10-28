@@ -930,11 +930,14 @@ impl setup::Steps for OsSteps<'_> {
             .data_dir(Platform::CURRENT)
             .ok_or("set HOME to keep kkt's Docker files")?
             .join(config::DOCKER_FOLDER);
-        let key_file = self
+        let key_dir = self
             .env
             .config_dir()
-            .ok_or("set HOME to keep the access key")?
-            .join(config::DOCKER_KEY_FILE_NAME);
+            .ok_or("set HOME to keep the access key")?;
+        // On a new machine nothing has made kkt's config folder yet.
+        std::fs::create_dir_all(&key_dir)
+            .map_err(|e| format!("could not create {}: {e}", key_dir.display()))?;
+        let key_file = key_dir.join(config::DOCKER_KEY_FILE_NAME);
         let auth_key = match &options.ts_authkey_file {
             Some(path) => Some(
                 std::fs::read_to_string(path)
