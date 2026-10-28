@@ -254,10 +254,27 @@ async fn with_no_terminal_a_missing_answer_names_its_flag() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The record of an earlier setup, which a failed setup must leave alone.
+const EARLIER: &str = "format = 1\nmode = \"client\"\nwritten_by = \"0.4.0\"\n\
+                       url = \"https://old.example/mcp\"\n";
+
+fn record_text(home: &Path) -> String {
+    std::fs::read_to_string(home.join(".config/kkt/setup.toml")).expect("record")
+}
+
+/// `kkt setup` for a client of `url` with the key in `key`, plus `extra`.
+async fn setup_client(home: &Path, url: &str, key: &Path, extra: &[&str]) -> (bool, String) {
+    let key = key.to_str().expect("utf-8");
+    let mut args = vec!["setup", "--mode", "client", "--url", url, "--key-file", key];
+    args.extend(extra);
+    kkt(home, &args).await
+}
+
 #[tokio::test]
-async fn a_wrong_key_fails_the_check_but_keeps_the_setup() {
+async fn a_rejected_key_leaves_the_earlier_setup() {
     let (mut server, url, _) = keyed_server("wrong-key-server").await;
     let home = temp_home("wrong-key");
+    write_record(&home, EARLIER);
     let wrong = home.join("wrong-key");
     let (made, said) = kkt(
         &home,
@@ -265,25 +282,69 @@ async fn a_wrong_key_fails_the_check_but_keeps_the_setup() {
     )
     .await;
     assert!(made, "{said}");
-    let (ok, said) = kkt(
-        &home,
-        &[
-            "setup",
-            "--mode",
-            "client",
-            "--url",
-            &url,
-            "--key-file",
-            wrong.to_str().expect("utf-8"),
-            "--clients",
-            "none",
-        ],
-    )
-    .await;
+    let (ok, said) = setup_client(&home, &url, &wrong, &["--clients", "none"]).await;
     assert!(!ok, "{said}");
     assert!(said.contains("problem: "), "{said}");
-    assert!(said.contains("connection check found problems"), "{said}");
-    assert!(home.join(".config/kkt/setup.toml").exists());
+    assert!(said.contains("nothing was recorded"), "{said}");
+    assert_eq!(record_text(&home), EARLIER);
+    server.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn an_unreachable_server_leaves_the_earlier_setup() {
+    let home = temp_home("unreachable");
+    write_record(&home, EARLIER);
+    let key = home.join("key");
+    let (made, said) = kkt(
+        &home,
+        &["key", "create", "--path", key.to_str().expect("utf-8")],
+    )
+    .await;
+    assert!(made, "{said}");
+    // Nothing listens on a port just freed.
+    let url = format!("http://{}/mcp", free_bind());
+    let (ok, said) = setup_client(&home, &url, &key, &["--clients", "codex"]).await;
+    assert!(!ok, "{said}");
+    assert_eq!(record_text(&home), EARLIER);
+    assert!(
+        !home.join(".codex/config.toml").exists(),
+        "no client was touched"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn a_missing_answer_leaves_the_earlier_setup() {
+    let (mut server, url, key) = keyed_server("missing-answer-server").await;
+    let home = temp_home("missing-answer");
+    write_record(&home, EARLIER);
+    // A Codex config, so Codex is found and setup would ask about it.
+    std::fs::create_dir_all(home.join(".codex")).expect("codex dir");
+    std::fs::write(home.join(".codex/config.toml"), "# mine\n").expect("codex config");
+    let (ok, said) = setup_client(&home, &url, &key, &[]).await;
+    assert!(!ok, "{said}");
+    assert!(said.contains("pass --clients"), "{said}");
+    assert_eq!(record_text(&home), EARLIER);
+    assert_eq!(
+        std::fs::read_to_string(home.join(".codex/config.toml")).expect("codex"),
+        "# mine\n"
+    );
+    server.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn a_client_that_cannot_be_configured_leaves_the_earlier_setup() {
+    let (mut server, url, key) = keyed_server("bad-client-server").await;
+    let home = temp_home("bad-client");
+    write_record(&home, EARLIER);
+    // A folder where Codex's config file should be, so it can't be written.
+    std::fs::create_dir_all(home.join(".codex/config.toml")).expect("in the way");
+    let (ok, said) = setup_client(&home, &url, &key, &["--clients", "codex"]).await;
+    assert!(!ok, "{said}");
+    assert!(said.contains("could not connect Codex"), "{said}");
+    assert_eq!(record_text(&home), EARLIER);
     server.kill().await.expect("stop kkt");
     let _ = std::fs::remove_dir_all(&home);
 }

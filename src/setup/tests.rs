@@ -172,7 +172,7 @@ mod flow {
     use crate::clients::Client;
     use std::cell::RefCell;
     use std::collections::VecDeque;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// An answer a scripted person gives.
     enum Reply {
@@ -248,6 +248,9 @@ mod flow {
         fn done(&self) -> Vec<String> {
             self.done.borrow().clone()
         }
+        fn recorded(&self) -> bool {
+            self.done().iter().any(|d| d.starts_with("record"))
+        }
     }
 
     impl Steps for Fake {
@@ -276,9 +279,17 @@ mod flow {
                 },
             ))
         }
-        fn save_key(&self, key: &str) -> Result<PathBuf, String> {
-            self.did(format!("save key {key}"));
-            Ok("/home/sam/.config/kkt/client-access-key".into())
+        fn stage_key(&self, key: &str) -> Result<PathBuf, String> {
+            self.did(format!("stage key {key}"));
+            Ok("/home/sam/.config/kkt/client-access-key.partial".into())
+        }
+        fn keep_key(&self, _: &Path, url: &str) -> Result<PathBuf, String> {
+            self.did(format!("keep key for {url}"));
+            Ok("/home/sam/.config/kkt/client-access-key-abc".into())
+        }
+        fn discard_key(&self, _: &Path) -> Result<(), String> {
+            self.did("discard key".into());
+            Ok(())
         }
         fn detect_clients(&self) -> Vec<Client> {
             self.clients.clone()
@@ -287,8 +298,13 @@ mod flow {
             self.did(format!("record {} {}", record.mode.name(), record.url));
             Ok(())
         }
-        fn connect(&self, client: Client, _: &Record) -> Result<String, String> {
-            self.did(format!("connect {}", client.name()));
+        fn connect(&self, client: Client, record: &Record) -> Result<String, String> {
+            let key = record.key_file.as_deref().map(|k| k.display().to_string());
+            self.did(format!(
+                "connect {} key={}",
+                client.name(),
+                key.unwrap_or_default()
+            ));
             match self.fail_connect {
                 Some(failing) if failing == client => Err("bad config file".into()),
                 _ => Ok(format!("connected {}", client.name())),
@@ -303,6 +319,9 @@ mod flow {
             }
         }
     }
+
+    /// A key long enough to be valid.
+    const KEY: &str = "0123456789abcdefghijklmnopqrstuvwxyz";
 
     fn client_flags() -> Answers {
         Answers {
@@ -331,15 +350,15 @@ mod flow {
         assert_eq!(
             steps.done(),
             [
-                "record client https://kkt.tail1234.ts.net/mcp",
-                "connect codex",
-                "doctor"
+                "doctor",
+                "connect codex key=/keys/kkt",
+                "record client https://kkt.tail1234.ts.net/mcp"
             ]
         );
     }
 
     #[test]
-    fn questions_come_in_order_and_only_found_clients_are_offered() {
+    fn every_question_comes_before_anything_changes() {
         let ask = Script::with(vec![
             Reply::Choose(0),
             Reply::Confirm(true),
@@ -365,17 +384,17 @@ mod flow {
             steps.done(),
             [
                 "install service tailscale=true",
-                "record service http://127.0.0.1:7420/mcp",
-                "connect claude-code",
-                "doctor"
+                "doctor",
+                "connect claude-code key=/home/sam/.config/kkt/access-key",
+                "record service http://127.0.0.1:7420/mcp"
             ]
         );
         let told = ask.told.borrow();
+        assert!(told.iter().any(|t| t == "ok: all checks"), "{told:?}");
         assert!(
-            told.iter().any(|t| t.contains("set up as service")),
+            told.last().is_some_and(|t| t.contains("set up as service")),
             "{told:?}"
         );
-        assert!(told.iter().any(|t| t == "ok: all checks"), "{told:?}");
     }
 
     #[test]
@@ -394,10 +413,12 @@ mod flow {
         let record = run(&answers, "0.4.0", &ask, &steps).expect("setup");
         assert!(matches!(record.mode, Mode::Docker(ref d) if !d.tailscale));
         assert!(ask.asked.borrow().is_empty());
-        assert_eq!(
-            steps.done()[2..],
-            ["connect claude-code", "connect codex", "doctor"]
-        );
+        let connected: Vec<String> = steps
+            .done()
+            .into_iter()
+            .filter(|d| d.starts_with("connect"))
+            .collect();
+        assert_eq!(connected.len(), 2, "{connected:?}");
     }
 
     #[test]
@@ -411,7 +432,42 @@ mod flow {
             ..client_flags()
         };
         run(&answers, "0.4.0", &Script::default(), &steps).expect("setup");
-        assert_eq!(steps.done()[1..], ["doctor"]);
+        assert_eq!(steps.done()[..1], ["doctor"]);
+        assert!(!steps.done().iter().any(|d| d.starts_with("connect")));
+    }
+
+    #[test]
+    fn a_missing_answer_changes_nothing() {
+        // No scripted replies: the first question asked fails, as with no
+        // terminal. Here that is whether to connect a client that was found.
+        let steps = Fake {
+            clients: vec![Client::Codex],
+            ..Fake::default()
+        };
+        let answers = Answers {
+            clients: None,
+            ..client_flags()
+        };
+        let ask = Refusing;
+        let error = run(&answers, "0.4.0", &ask, &steps).expect_err("unanswered");
+        assert!(error.contains("pass --clients"), "{error}");
+        assert!(steps.done().is_empty(), "{:?}", steps.done());
+    }
+
+    /// Asks no one: every question fails as it does with no terminal.
+    struct Refusing;
+
+    impl Ask for Refusing {
+        fn choose(&self, question: Question, _: &[&str]) -> Result<usize, String> {
+            Err(unanswered(question))
+        }
+        fn confirm(&self, question: Question) -> Result<bool, String> {
+            Err(unanswered(question))
+        }
+        fn text(&self, question: Question) -> Result<String, String> {
+            Err(unanswered(question))
+        }
+        fn tell(&self, _: &str) {}
     }
 
     #[test]
@@ -423,6 +479,7 @@ mod flow {
         let answers = Answers {
             purpose: Some(Purpose::Service),
             tailscale: Some(false),
+            clients: Some(Vec::new()),
             ..Answers::default()
         };
         let error = run(&answers, "0.4.0", &Script::default(), &steps).expect_err("fails");
@@ -431,25 +488,76 @@ mod flow {
     }
 
     #[test]
-    fn a_client_machine_asks_for_the_address_and_saves_a_typed_key() {
+    fn a_typed_key_is_kept_only_once_the_server_accepts_it() {
         let ask = Script::with(vec![
             Reply::Text(" https://kkt.example/mcp "),
-            Reply::Text("k3y"),
+            Reply::Text(KEY),
         ]);
         let steps = Fake::default();
         let answers = Answers {
             purpose: Some(Purpose::Client),
-            clients: Some(Vec::new()),
+            clients: Some(vec![Client::Codex]),
             ..Answers::default()
         };
         let record = run(&answers, "0.4.0", &ask, &steps).expect("setup");
         assert_eq!(record.url, "https://kkt.example/mcp");
         assert_eq!(
             record.key_file,
-            Some("/home/sam/.config/kkt/client-access-key".into())
+            Some("/home/sam/.config/kkt/client-access-key-abc".into())
         );
-        assert_eq!(steps.done()[0], "save key k3y");
         assert_eq!(*ask.asked.borrow(), ["--url", "--key-file"]);
+        assert_eq!(
+            steps.done(),
+            [
+                format!("stage key {KEY}"),
+                "doctor".into(),
+                "keep key for https://kkt.example/mcp".into(),
+                "connect codex key=/home/sam/.config/kkt/client-access-key-abc".into(),
+                "record client https://kkt.example/mcp".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rejected_key_is_discarded_and_nothing_recorded() {
+        let ask = Script::with(vec![Reply::Text(KEY)]);
+        let steps = Fake {
+            fail_doctor: true,
+            ..Fake::default()
+        };
+        let answers = Answers {
+            key_file: None,
+            ..client_flags()
+        };
+        let error = run(&answers, "0.4.0", &ask, &steps).expect_err("rejected");
+        assert!(error.contains("nothing was recorded"), "{error}");
+        assert_eq!(
+            steps.done(),
+            [
+                format!("stage key {KEY}"),
+                "doctor".into(),
+                "discard key".into()
+            ]
+        );
+        assert!(
+            ask.told
+                .borrow()
+                .iter()
+                .any(|t| t == "problem: key rejected")
+        );
+    }
+
+    #[test]
+    fn a_malformed_key_is_refused_before_anything_changes() {
+        let ask = Script::with(vec![Reply::Text("short")]);
+        let steps = Fake::default();
+        let answers = Answers {
+            key_file: None,
+            ..client_flags()
+        };
+        let error = run(&answers, "0.4.0", &ask, &steps).expect_err("short key");
+        assert!(error.contains("that key is not valid"), "{error}");
+        assert!(steps.done().is_empty());
     }
 
     #[test]
@@ -463,11 +571,11 @@ mod flow {
         };
         let record = run(&answers, "0.4.0", &ask, &steps).expect("setup");
         assert_eq!(record.key_file, None);
-        assert!(!steps.done().iter().any(|d| d.starts_with("save key")));
+        assert!(!steps.done().iter().any(|d| d.contains("key")));
     }
 
     #[test]
-    fn an_address_that_is_not_a_url_is_refused_before_anything_is_written() {
+    fn an_address_that_is_not_a_url_is_refused_before_anything_changes() {
         let steps = Fake::default();
         let answers = Answers {
             url: Some("kkt.example".into()),
@@ -479,7 +587,7 @@ mod flow {
     }
 
     #[test]
-    fn a_client_that_fails_to_connect_does_not_stop_the_others() {
+    fn a_client_that_fails_to_connect_leaves_the_record_unwritten() {
         let steps = Fake {
             fail_connect: Some(Client::ClaudeCode),
             ..Fake::default()
@@ -491,10 +599,17 @@ mod flow {
         let ask = Script::default();
         let error = run(&answers, "0.4.0", &ask, &steps).expect_err("one failed");
         assert!(error.contains("Claude Code"), "{error}");
+        assert!(error.contains("nothing was recorded"), "{error}");
+        // The others are still tried, so one run shows every problem.
         assert_eq!(
-            steps.done()[1..],
-            ["connect claude-code", "connect codex", "doctor"]
+            steps
+                .done()
+                .iter()
+                .filter(|d| d.starts_with("connect"))
+                .count(),
+            2
         );
+        assert!(!steps.recorded());
         assert!(
             ask.told
                 .borrow()
@@ -504,15 +619,15 @@ mod flow {
     }
 
     #[test]
-    fn problems_found_by_doctor_fail_setup_after_recording_it() {
+    fn problems_found_by_doctor_stop_setup_before_clients_or_the_record() {
         let steps = Fake {
             fail_doctor: true,
             ..Fake::default()
         };
         let ask = Script::default();
         let error = run(&client_flags(), "0.4.0", &ask, &steps).expect_err("doctor");
-        assert!(error.contains("connection check found problems"), "{error}");
-        assert!(steps.done()[0].starts_with("record client"));
+        assert!(error.contains("nothing was recorded"), "{error}");
+        assert_eq!(steps.done(), ["doctor"]);
         assert!(
             ask.told
                 .borrow()

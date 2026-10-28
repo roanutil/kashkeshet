@@ -5,7 +5,7 @@
 use super::ask::{Ask, Question};
 use super::record::{DockerSetup, Mode, Record};
 use crate::clients::Client;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// What this machine is for, as chosen with `--mode` or asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,12 +71,17 @@ pub trait Steps {
     fn install_service(&self, tailscale: bool) -> Result<Installed, String>;
     /// Sets up and starts the server in Docker.
     fn install_docker(&self, tailscale: bool) -> Result<(Installed, DockerSetup), String>;
-    /// Saves an access key typed in for a client-only machine, readable only
-    /// by its owner, and returns where.
-    fn save_key(&self, key: &str) -> Result<PathBuf, String>;
+    /// Saves an access key typed in for a client-only machine where nothing
+    /// uses it yet, readable only by its owner, and returns where.
+    fn stage_key(&self, key: &str) -> Result<PathBuf, String>;
+    /// Moves a staged key to where clients of the server at `url` keep it,
+    /// and returns that path. Keys for other servers are left alone.
+    fn keep_key(&self, staged: &Path, url: &str) -> Result<PathBuf, String>;
+    /// Removes a staged key that won't be kept.
+    fn discard_key(&self, staged: &Path) -> Result<(), String>;
     /// The clients installed on this machine.
     fn detect_clients(&self) -> Vec<Client>;
-    /// Writes the setup record.
+    /// Writes the setup record, replacing any earlier one whole.
     fn write_record(&self, record: &Record) -> Result<(), String>;
     /// Points `client` at the server in `record`. Returns what it did.
     fn connect(&self, client: Client, record: &Record) -> Result<String, String>;
@@ -103,12 +108,13 @@ const KEY: Question = Question {
 };
 
 /// Runs `kkt setup`: asks what `answers` leaves open, sets the machine up,
-/// records it, connects clients and checks the connection. Returns the
+/// checks the connection, connects clients, and records it. Returns the
 /// record written.
 ///
-/// The record is written only once the server (or, for a client, the key)
-/// is in place, so a setup that fails part way leaves any earlier record.
-/// Clients are connected after it, so one that fails doesn't undo the rest.
+/// Every question comes first, so a missing answer changes nothing. The
+/// record is written last, and only when everything worked: a setup that
+/// fails at any step leaves an earlier record, and the key it names, as
+/// they were.
 pub fn run(
     answers: &Answers,
     version: &str,
@@ -122,53 +128,67 @@ pub fn run(
             Purpose::ALL[ask.choose(MODE, &options)?]
         }
     };
-    let tailscale = |ask: &dyn Ask| match answers.tailscale {
-        Some(answer) => Ok(answer),
-        None => ask.confirm(TAILSCALE),
-    };
-    let (mode, installed) = match purpose {
-        Purpose::Service => {
-            let tailscale = tailscale(ask)?;
-            (
-                Mode::Service { tailscale },
-                steps.install_service(tailscale)?,
-            )
+    let plan = match purpose {
+        Purpose::Client => Plan::Client(client_answers(answers, ask)?),
+        server => {
+            let tailscale = match answers.tailscale {
+                Some(answer) => answer,
+                None => ask.confirm(TAILSCALE)?,
+            };
+            Plan::Server(server, tailscale)
         }
-        Purpose::Docker => {
-            let (installed, docker) = steps.install_docker(tailscale(ask)?)?;
-            (Mode::Docker(docker), installed)
-        }
-        Purpose::Client => (Mode::Client, client(answers, ask, steps)?),
     };
-    let record = Record {
+    let chosen = choose_clients(answers, ask, steps)?;
+
+    let (mode, installed, staged) = match plan {
+        Plan::Server(Purpose::Docker, tailscale) => {
+            let (installed, docker) = steps.install_docker(tailscale)?;
+            (Mode::Docker(docker), installed, None)
+        }
+        Plan::Server(_, tailscale) => (
+            Mode::Service { tailscale },
+            steps.install_service(tailscale)?,
+            None,
+        ),
+        Plan::Client(ClientAnswers { url, key }) => {
+            let (key_file, staged) = match key {
+                Key::None => (None, None),
+                Key::File(path) => (Some(path), None),
+                Key::Typed(key) => {
+                    let staged = steps.stage_key(&key)?;
+                    (Some(staged.clone()), Some(staged))
+                }
+            };
+            (Mode::Client, Installed { url, key_file }, staged)
+        }
+    };
+    let mut record = Record {
         mode,
         written_by: version.to_string(),
         url: installed.url,
         key_file: installed.key_file,
     };
-    steps.write_record(&record)?;
-    ask.tell(&format!(
-        "This machine is set up as {}; clients use {}.",
-        record.mode.name(),
-        record.url
-    ));
 
-    let chosen = match &answers.clients {
-        Some(chosen) => chosen.clone(),
-        None => {
-            let mut chosen = Vec::new();
-            for client in steps.detect_clients() {
-                let question = Question {
-                    text: &format!("Connect {} to kkt?", client.display_name()),
-                    flag: "--clients",
-                };
-                if answers.yes || ask.confirm(question)? {
-                    chosen.push(client);
-                }
+    match steps.doctor(&record) {
+        Ok(report) => ask.tell(&report),
+        Err(report) => {
+            ask.tell(&report);
+            if let Some(staged) = &staged
+                && let Err(e) = steps.discard_key(staged)
+            {
+                ask.tell(&format!("Could not remove the unused key: {e}"));
             }
-            chosen
+            return Err(
+                "the connection check found problems (see the fixes above), so nothing was \
+                 recorded; fix them and run `kkt setup` again"
+                    .to_string(),
+            );
         }
-    };
+    }
+    if let Some(staged) = &staged {
+        record.key_file = Some(steps.keep_key(staged, &record.url)?);
+    }
+
     let mut failed = Vec::new();
     for client in chosen {
         match steps.connect(client, &record) {
@@ -179,25 +199,45 @@ pub fn run(
             }
         }
     }
-    let report = steps.doctor(&record);
-    ask.tell(match &report {
-        Ok(text) | Err(text) => text,
-    });
-    match (report, failed.is_empty()) {
-        (Ok(_), true) => Ok(record),
-        (Ok(_), false) => Err(format!(
-            "set up, but these clients were not connected: {}; \
-             try `kkt connect` for each",
+    if !failed.is_empty() {
+        return Err(format!(
+            "could not connect {}, so nothing was recorded; fix that and run `kkt setup` again",
             failed.join(", ")
-        )),
-        (Err(_), _) => {
-            Err("set up, but the connection check found problems; see the fixes above".to_string())
-        }
+        ));
     }
+
+    steps.write_record(&record)?;
+    ask.tell(&format!(
+        "This machine is set up as {}; clients use {}.",
+        record.mode.name(),
+        record.url
+    ));
+    Ok(record)
 }
 
-/// A client-only machine: where its server is and the key it needs.
-fn client(answers: &Answers, ask: &dyn Ask, steps: &dyn Steps) -> Result<Installed, String> {
+/// What setup will do, once every question is answered.
+enum Plan {
+    /// Run the server here: as a service or in Docker, and whether over
+    /// Tailscale.
+    Server(Purpose, bool),
+    Client(ClientAnswers),
+}
+
+/// Where a client-only machine's server is, and its key.
+struct ClientAnswers {
+    url: String,
+    key: Key,
+}
+
+enum Key {
+    None,
+    /// A file given with `--key-file`, used where it is.
+    File(PathBuf),
+    /// A key typed in, saved by setup.
+    Typed(String),
+}
+
+fn client_answers(answers: &Answers, ask: &dyn Ask) -> Result<ClientAnswers, String> {
     let url = match &answers.url {
         Some(url) => url.clone(),
         None => ask.text(URL)?,
@@ -208,17 +248,39 @@ fn client(answers: &Answers, ask: &dyn Ask, steps: &dyn Steps) -> Result<Install
             "{url:?} is not a server address: it starts with http:// or https://"
         ));
     }
-    let key_file = match &answers.key_file {
-        Some(path) => Some(path.clone()),
-        None => {
-            let key = ask.text(KEY)?;
-            let key = key.trim();
-            if key.is_empty() {
-                None
-            } else {
-                Some(steps.save_key(key)?)
+    let key = match &answers.key_file {
+        Some(path) => Key::File(path.clone()),
+        None => match ask.text(KEY)?.trim() {
+            "" => Key::None,
+            key => {
+                crate::config::check_access_key(key)
+                    .map_err(|e| format!("that key is not valid: {e}"))?;
+                Key::Typed(key.to_string())
             }
-        }
+        },
     };
-    Ok(Installed { url, key_file })
+    Ok(ClientAnswers { url, key })
+}
+
+/// The clients to connect: those given with `--clients`, or each one found
+/// that the person agrees to (all of them with `--yes`).
+fn choose_clients(
+    answers: &Answers,
+    ask: &dyn Ask,
+    steps: &dyn Steps,
+) -> Result<Vec<Client>, String> {
+    if let Some(chosen) = &answers.clients {
+        return Ok(chosen.clone());
+    }
+    let mut chosen = Vec::new();
+    for client in steps.detect_clients() {
+        let question = Question {
+            text: &format!("Connect {} to kkt?", client.display_name()),
+            flag: "--clients",
+        };
+        if answers.yes || ask.confirm(question)? {
+            chosen.push(client);
+        }
+    }
+    Ok(chosen)
 }

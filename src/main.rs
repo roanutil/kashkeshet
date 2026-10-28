@@ -19,6 +19,7 @@ use kashkeshet::setup;
 use kashkeshet::shutdown::{Shutdown, StopSignals};
 use kashkeshet::store::{self, Db};
 use kashkeshet::{Operator, Revoked};
+use sha2::{Digest, Sha256};
 use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -816,17 +817,36 @@ impl setup::Steps for OsSteps<'_> {
             .to_string())
     }
 
-    fn save_key(&self, key: &str) -> Result<PathBuf, String> {
-        config::check_access_key(key).map_err(|e| format!("that key is not valid: {e}"))?;
+    fn stage_key(&self, key: &str) -> Result<PathBuf, String> {
         let dir = self
             .env
             .config_dir()
             .ok_or("set HOME to keep the key in ~/.config/kkt")?;
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-        let path = dir.join(config::CLIENT_KEY_FILE_NAME);
+        let path = dir.join(format!("{}.partial", config::CLIENT_KEY_FILE_NAME));
         write_key_file(&path, key, true)?;
         Ok(path)
+    }
+
+    fn keep_key(&self, staged: &Path, url: &str) -> Result<PathBuf, String> {
+        let dir = staged.parent().unwrap_or(Path::new("."));
+        // One file per server, so a key for another server, which an
+        // earlier setup record may name, is never replaced.
+        let server: String = Sha256::digest(url.as_bytes())
+            .iter()
+            .take(6)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let path = dir.join(format!("{}-{server}", config::CLIENT_KEY_FILE_NAME));
+        std::fs::rename(staged, &path)
+            .map_err(|e| format!("could not move the key to {}: {e}", path.display()))?;
+        Ok(path)
+    }
+
+    fn discard_key(&self, staged: &Path) -> Result<(), String> {
+        std::fs::remove_file(staged)
+            .map_err(|e| format!("could not remove {}: {e}", staged.display()))
     }
 
     fn detect_clients(&self) -> Vec<Client> {
