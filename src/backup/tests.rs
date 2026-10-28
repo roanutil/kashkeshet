@@ -70,12 +70,18 @@ fn a_backup_holds_each_file_and_keeps_the_key_private() {
     assert_eq!(read(DATABASE_FILE), "pages");
     assert_eq!(read(CONFIG_FILE), "bind = \"127.0.0.1:7420\"");
     assert_eq!(read(ACCESS_KEY_FILE), "secret");
-    let about = read(ABOUT_FILE);
-    assert!(
-        about.contains("kkt 0.3.0 backup made 2026-10-28T13:15:00Z"),
-        "{about}"
+    assert_eq!(
+        read(ABOUT_FILE),
+        format!(
+            "kkt 0.3.0 backup made 2026-10-28T13:15:00Z\n\
+             kashkeshet.db: copy of {}\n\
+             config.toml: copy of {}\n\
+             access-key: copy of {}\n",
+            database.display(),
+            config.display(),
+            key.display()
+        )
     );
-    assert!(about.contains(&database.display().to_string()), "{about}");
     #[cfg(unix)]
     {
         assert_eq!(mode(&written), 0o700);
@@ -103,6 +109,16 @@ fn without_config_or_key_only_the_database_is_backed_up() {
         .collect();
     files.sort();
     assert_eq!(files, [ABOUT_FILE, DATABASE_FILE]);
+    let about = std::fs::read_to_string(written.join(ABOUT_FILE)).expect("about");
+    let lines: Vec<&str> = about.lines().skip(1).collect();
+    assert_eq!(
+        lines,
+        [
+            format!("kashkeshet.db: copy of {}", database.display()).as_str(),
+            "config.toml: none",
+            "access-key: none",
+        ]
+    );
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
 
