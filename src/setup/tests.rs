@@ -243,6 +243,9 @@ mod flow {
         bad_addresses: Vec<&'static str>,
         /// Keys the server refuses, as [`shown`] shows them.
         bad_keys: Vec<String>,
+        /// An address whose server passes the first check and then stops
+        /// answering, so every later check of it fails.
+        flaky: Option<&'static str>,
         /// The read-only checks made, in order.
         checked: RefCell<Vec<String>>,
     }
@@ -351,8 +354,10 @@ mod flow {
             }
         }
         fn check_address(&self, url: &str) -> Result<(), String> {
-            self.checked.borrow_mut().push(format!("address {url}"));
-            if self.bad_addresses.contains(&url) {
+            let checked = format!("address {url}");
+            let gone = self.flaky == Some(url) && self.checked().contains(&checked);
+            self.checked.borrow_mut().push(checked);
+            if gone || self.bad_addresses.contains(&url) {
                 return Err("problem: server: connection refused".into());
             }
             Ok(())
@@ -362,6 +367,9 @@ mod flow {
             self.checked
                 .borrow_mut()
                 .push(format!("key {key} for {url}"));
+            if self.flaky == Some(url) {
+                return Err("problem: MCP: connection reset".into());
+            }
             if self.bad_keys.contains(&key) {
                 return Err("problem: key accepted: server returned 401".into());
             }
@@ -752,6 +760,47 @@ mod flow {
         let record = run(&answers, "0.4.0", &ask, &steps).expect("setup");
         assert!(record.key_file.is_some());
         assert_eq!(*ask.asked.borrow(), ["--key-file", "--key-file"]);
+    }
+
+    #[test]
+    fn an_address_that_stops_working_is_asked_for_again_not_the_key() {
+        let ask = Script::with(vec![
+            Reply::Text("https://kkt.flaky.ts.net/mcp"),
+            Reply::Text(KEY),
+            Reply::Text("https://kkt.tail1234.ts.net/mcp"),
+            Reply::Text(KEY),
+        ]);
+        let steps = Fake {
+            flaky: Some("https://kkt.flaky.ts.net/mcp"),
+            ..Fake::default()
+        };
+        let answers = Answers {
+            url: None,
+            key_file: None,
+            ..client_flags()
+        };
+        let record = run(&answers, "0.4.0", &ask, &steps).expect("setup");
+        assert_eq!(record.url, "https://kkt.tail1234.ts.net/mcp");
+        assert_eq!(
+            *ask.asked.borrow(),
+            ["--url", "--key-file", "--url", "--key-file"]
+        );
+        assert_eq!(
+            ask.told.borrow()[0],
+            "That address no longer works:\nproblem: server: connection refused"
+        );
+    }
+
+    #[test]
+    fn unattended_a_failed_key_check_with_a_failing_address_names_the_url() {
+        let steps = Fake {
+            flaky: Some("https://kkt.tail1234.ts.net/mcp"),
+            ..Fake::default()
+        };
+        let error = run(&client_flags(), "0.4.0", &Script::default(), &steps).expect_err("flaky");
+        assert!(error.contains("given with --url"), "{error}");
+        assert!(!error.contains("--key-file"), "{error}");
+        assert!(steps.done().is_empty(), "{:?}", steps.done());
     }
 
     #[test]

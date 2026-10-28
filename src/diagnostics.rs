@@ -159,13 +159,14 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
     probe(url, key.as_deref(), checks).await
 }
 
-/// Checks only that a server answers at `url` and accepts its host name,
-/// without a key.
+/// The name of the check that the server accepted the key.
+pub const KEY_CHECK: &str = "key accepted";
+
+/// Checks that a server answers at `url`, accepts its host name, and serves
+/// MCP there, without a key: a server that asks for one passes.
 pub async fn inspect_address(url: &str) -> Result<Vec<Check>, String> {
-    let client = http_client()?;
-    let url = Url::parse(url).map_err(|_| "invalid diagnostic URL")?;
-    let mut checks = Vec::new();
-    reach(&client, &url, &mut checks).await;
+    let mut checks = probe(url, None, Vec::new()).await?;
+    checks.retain(|check| check.name != KEY_CHECK);
     Ok(checks)
 }
 
@@ -248,7 +249,7 @@ async fn probe(url: &str, key: Option<&str>, mut checks: Vec<Check>) -> Result<V
         }
     };
     if response.status().as_u16() == 401 {
-        checks.push(Check::problem("key accepted", "server returned 401", "pass --key-file with the key used by the running server, or restart it after changing keys"));
+        checks.push(Check::problem(KEY_CHECK, "server returned 401", "pass --key-file with the key used by the running server, or restart it after changing keys"));
         return Ok(checks);
     }
     if response.status().as_u16() != 200 {
@@ -286,7 +287,7 @@ async fn probe(url: &str, key: Option<&str>, mut checks: Vec<Check>) -> Result<V
     match initialized {
         Ok(value) => match value.get("result").and_then(|r| r.get("serverInfo")) {
             Some(info) => {
-                checks.push(Check::ok("key accepted", "MCP initialize returned 200"));
+                checks.push(Check::ok(KEY_CHECK, "MCP initialize returned 200"));
                 let version = info
                     .get("version")
                     .and_then(Value::as_str)

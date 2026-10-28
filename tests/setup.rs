@@ -341,6 +341,24 @@ async fn an_unreachable_server_leaves_the_earlier_setup() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A server that answers, but at another path, fails the address check,
+/// so the problem is put on `--url`, not on the key.
+#[tokio::test]
+async fn a_wrong_path_on_a_running_server_is_put_on_the_url() {
+    let (mut server, url, key) = keyed_server("wrong-path-server").await;
+    let home = temp_home("wrong-path");
+    write_record(&home, EARLIER);
+    let wrong = format!("{url}x");
+    let (ok, said) = setup_client(&home, &wrong, &key, &["--clients", "none"]).await;
+    assert!(!ok, "{said}");
+    assert!(said.contains("given with --url"), "{said}");
+    assert!(!said.contains("given with --key-file"), "{said}");
+    assert!(said.contains("problem: MCP: "), "{said}");
+    assert_eq!(record_text(&home), EARLIER);
+    server.kill().await.expect("stop kkt");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[tokio::test]
 async fn a_missing_answer_leaves_the_earlier_setup() {
     let (mut server, url, key) = keyed_server("missing-answer-server").await;

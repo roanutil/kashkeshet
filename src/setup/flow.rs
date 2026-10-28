@@ -277,18 +277,40 @@ fn client_answers(
     ask: &dyn Ask,
     steps: &dyn Steps,
 ) -> Result<ClientAnswers, String> {
-    let url = loop {
+    loop {
+        let url = checked_address(answers, ask, steps)?;
+        if let Some(key) = checked_key(&url, answers, ask, steps)? {
+            return Ok(ClientAnswers { url, key });
+        }
+    }
+}
+
+/// The server's address, once it passes its check.
+fn checked_address(answers: &Answers, ask: &dyn Ask, steps: &dyn Steps) -> Result<String, String> {
+    loop {
         let url = match &answers.url {
             Some(url) => url.trim().to_string(),
             None => ask.text(URL)?.trim().to_string(),
         };
         match check_address(&url, steps) {
-            Ok(()) => break url,
+            Ok(()) => return Ok(url),
             Err(problem) if answers.url.is_some() => return Err(flag_failed(URL, &problem)),
             Err(problem) => ask.tell(&format!("That address did not work:\n{problem}")),
         }
-    };
-    let key = loop {
+    }
+}
+
+/// The key, once the server at `url` accepts it. When a key fails, the
+/// address is checked again, so a problem with the address is never taken
+/// for one with the key: `None` means it no longer passes and must be asked
+/// for again.
+fn checked_key(
+    url: &str,
+    answers: &Answers,
+    ask: &dyn Ask,
+    steps: &dyn Steps,
+) -> Result<Option<ClientKey>, String> {
+    loop {
         let key = match &answers.key_file {
             Some(path) => ClientKey::File(path.clone()),
             None => match typed_key(&ask.text(KEY)?) {
@@ -299,13 +321,19 @@ fn client_answers(
                 }
             },
         };
-        match steps.check_key(&url, &key) {
-            Ok(()) => break key,
-            Err(problem) if answers.key_file.is_some() => return Err(flag_failed(KEY, &problem)),
-            Err(problem) => ask.tell(&format!("The server did not accept that key:\n{problem}")),
+        let Err(problem) = steps.check_key(url, &key) else {
+            return Ok(Some(key));
+        };
+        match steps.check_address(url) {
+            Err(problem) if answers.url.is_some() => return Err(flag_failed(URL, &problem)),
+            Err(problem) => {
+                ask.tell(&format!("That address no longer works:\n{problem}"));
+                return Ok(None);
+            }
+            Ok(()) if answers.key_file.is_some() => return Err(flag_failed(KEY, &problem)),
+            Ok(()) => ask.tell(&format!("The server did not accept that key:\n{problem}")),
         }
-    };
-    Ok(ClientAnswers { url, key })
+    }
 }
 
 fn check_address(url: &str, steps: &dyn Steps) -> Result<(), String> {
