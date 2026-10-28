@@ -44,14 +44,22 @@ impl Host for OsHost {
     fn say(&self, line: &str) {
         println!("{line}");
     }
+
+    fn working_dir(&self) -> io::Result<std::path::PathBuf> {
+        std::env::current_dir()
+    }
 }
 
-/// The process for `command`, without the variables it must not see.
+/// The process for `command`: in its folder, without the variables it must
+/// not see.
 fn process(command: &Command) -> std::process::Command {
     let mut process = std::process::Command::new(command.program);
     process.args(&command.args);
     for name in &command.unset {
         process.env_remove(name);
+    }
+    if let Some(dir) = &command.current_dir {
+        process.current_dir(dir);
     }
     process
 }

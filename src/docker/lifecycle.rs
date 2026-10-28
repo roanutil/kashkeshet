@@ -81,7 +81,13 @@ pub fn backup(
     let Some(dest) = dest else {
         return Ok(folder.backups().join(name));
     };
-    host.create_dir_all(dest)
+    // A folder typed relative to where the person is, not to the managed
+    // folder the Docker commands run in.
+    let dest = host
+        .working_dir()
+        .map_err(|e| DockerError::io("could not find the current folder", e))?
+        .join(dest);
+    host.create_dir_all(&dest)
         .map_err(|e| DockerError::io(format!("could not create {}", dest.display()), e))?;
     let from = format!("kkt:{DOCKER_BACKUPS_MOUNT}/{name}");
     let to = dest.display().to_string();

@@ -125,6 +125,10 @@ impl Host for FakeHost {
     fn say(&self, line: &str) {
         self.said.borrow_mut().push(line.to_string());
     }
+
+    fn working_dir(&self) -> io::Result<PathBuf> {
+        Ok(PathBuf::from("/home/me"))
+    }
 }
 
 const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -730,6 +734,7 @@ fn the_real_host_leaves_unset_variables_out_of_a_commands_environment() {
                     "printf %s \"${CARGO_MANIFEST_DIR-unset}\"".into(),
                 ],
                 unset,
+                current_dir: None,
             })
             .unwrap()
             .stdout
@@ -780,4 +785,51 @@ async fn the_key_goes_in_a_folder_that_did_not_exist_yet() {
         host.file("/home/me/.config/kkt/docker-access-key").unwrap(),
         (format!("{KEY}\n"), true)
     );
+}
+
+#[test]
+fn compose_commands_run_in_the_managed_folder() {
+    // Compose finds a relative COMPOSE_FILE from where it runs.
+    let command = super::compose::compose(&folder(), &["up", "-d"]);
+    assert_eq!(command.current_dir, Some(PathBuf::from("/data/docker")));
+    assert_eq!(super::compose::version().current_dir, None);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_real_host_runs_a_command_in_the_folder_it_names() {
+    let dir = std::env::temp_dir().join(format!("kkt-docker-cwd-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let here = OsHost
+        .run(&Command {
+            program: "pwd",
+            args: vec!["-P".into()],
+            unset: Vec::new(),
+            current_dir: Some(dir.clone()),
+        })
+        .unwrap()
+        .stdout;
+    assert_eq!(
+        Path::new(here.trim()),
+        std::fs::canonicalize(&dir).unwrap().as_path()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_backup_folder_typed_relative_is_taken_from_where_the_person_is() {
+    let host = installed(&env_text(&plain(), None));
+    let made = backup(&host, &folder(), Some(Path::new("export"))).unwrap();
+    assert_eq!(
+        made,
+        PathBuf::from("/home/me/export/kkt-20261029T120000.000Z-v0.4.0")
+    );
+    assert!(
+        host.dirs
+            .borrow()
+            .contains(&PathBuf::from("/home/me/export"))
+    );
+    let ran = host.ran.borrow();
+    assert!(ran[1].ends_with(" /home/me/export"), "{ran:?}");
 }
