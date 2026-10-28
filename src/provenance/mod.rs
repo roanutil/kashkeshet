@@ -270,7 +270,7 @@ mod tests {
              member_preview=3\n\
              purpose_preview_chars=120\n\
              web_session_lifetime_ms=43200000\n\
-             web_page_messages=100\n\
+             web_page_messages=50\n\
              upgrade_backups_kept=5\n\
              log_level=info\n\
              dependency_log_level=warn\n\
