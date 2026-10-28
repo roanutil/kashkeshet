@@ -148,6 +148,9 @@ pub struct Inputs {
     /// [`crate::config::DEFAULT_BIND`]'s port unless testing beside a real
     /// setup.
     pub port: u16,
+    /// Host names kkt answers to besides its own, such as
+    /// `host.docker.internal`. Written to `.env` as `KKT_ALLOW_HOSTS`.
+    pub allow_hosts: Vec<String>,
     /// Serve over Tailscale, if given.
     pub tailscale: Option<Tailscale>,
 }

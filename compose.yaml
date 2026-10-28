@@ -17,6 +17,16 @@ services:
       - kkt-data:/data
       # `docker compose exec kkt kkt backup /backups` writes here.
       - ./backups:/backups
+    # KKT_ALLOW_HOSTS (comma-separated) adds host names kkt answers to, such
+    # as host.docker.internal for agents in other containers. Loopback names
+    # are always allowed, so the default changes nothing.
+    command:
+      - serve
+      - --bind
+      - 0.0.0.0:7420
+      - --allow-any-bind
+      - --allow-host
+      - ${KKT_ALLOW_HOSTS:-localhost}
 
 volumes:
   kkt-data:

@@ -179,6 +179,12 @@ struct SetupFlags {
     /// in with instead of a link.
     #[arg(long)]
     ts_authkey_file: Option<PathBuf>,
+    /// A host name the server should answer to besides its own, such as
+    /// host.docker.internal for agents in containers on this machine. Repeat
+    /// for more; `none` for none. For a service it goes in the config file's
+    /// allow_hosts; for Docker, in KKT_ALLOW_HOSTS in the managed .env.
+    #[arg(long = "allow-host")]
+    allow_hosts: Vec<String>,
     /// For testing: the kkt version whose image Docker runs.
     #[arg(long, hide = true, default_value = Build::CURRENT.version)]
     kkt_version: String,
@@ -237,6 +243,11 @@ impl SetupFlags {
             },
             url: self.url,
             key_file,
+            allow_hosts: match self.allow_hosts.as_slice() {
+                [] => None,
+                [none] if none == "none" => Some(Vec::new()),
+                hosts => Some(hosts.to_vec()),
+            },
             clients,
             yes: self.yes,
         })
@@ -395,8 +406,8 @@ struct ServeFlags {
     allow_origins: Vec<String>,
     /// A host name the server answers to besides localhost, 127.0.0.1 and
     /// ::1, e.g. host.docker.internal or a Tailscale name. Add `:port` to
-    /// allow only that port. Repeat for more.
-    #[arg(long = "allow-host")]
+    /// allow only that port. Repeat, or separate names with commas, for more.
+    #[arg(long = "allow-host", value_delimiter = ',')]
     allow_hosts: Vec<String>,
     /// A file whose text is sent to every agent that connects, in place of
     /// the built-in instructions (agent-instructions.md).
@@ -1007,7 +1018,11 @@ fn allow_host_in_config(env: &Env, host: &str) -> Result<(), String> {
 }
 
 impl setup::Steps for OsSteps<'_> {
-    fn install_service(&self, tailscale: bool) -> Result<setup::Installed, String> {
+    fn install_service(
+        &self,
+        tailscale: bool,
+        allow_hosts: &[String],
+    ) -> Result<setup::Installed, String> {
         // Before anything changes: Tailscale must be logged in, with HTTPS.
         let node = match tailscale {
             true => Some(tailscale::prepare(&tailscale::OsHost)?),
@@ -1015,6 +1030,9 @@ impl setup::Steps for OsSteps<'_> {
         };
         if let Some(node) = &node {
             allow_host_in_config(self.env, &node.dns_name)?;
+        }
+        for host in allow_hosts {
+            allow_host_in_config(self.env, host)?;
         }
         service(
             self.env,
@@ -1048,6 +1066,7 @@ impl setup::Steps for OsSteps<'_> {
     fn install_docker(
         &self,
         tailscale: bool,
+        allow_hosts: &[String],
     ) -> Result<(setup::Installed, setup::DockerSetup), String> {
         let options = &self.options;
         let folder = self
@@ -1073,6 +1092,7 @@ impl setup::Steps for OsSteps<'_> {
             version: options.kkt_version.clone(),
             project: options.docker_project.clone(),
             port: options.docker_port,
+            allow_hosts: allow_hosts.to_vec(),
             tailscale: tailscale.then(|| docker::Tailscale {
                 hostname: options.ts_hostname.clone(),
                 auth_key,

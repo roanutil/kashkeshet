@@ -178,6 +178,7 @@ fn plain() -> Inputs {
         version: "0.4.0".into(),
         project: "kkt".into(),
         port: 7420,
+        allow_hosts: vec![],
         tailscale: None,
     }
 }
@@ -187,6 +188,7 @@ fn with_tailscale(auth_key: Option<&str>) -> Inputs {
         version: "0.4.0".into(),
         project: "kkt".into(),
         port: 7420,
+        allow_hosts: vec![],
         tailscale: Some(Tailscale {
             hostname: "kkt".into(),
             auth_key: auth_key.map(str::to_string),
@@ -743,6 +745,27 @@ fn a_test_setup_can_use_its_own_project_name_and_port() {
     let env = env_text(&beside, None);
     assert!(env.contains("COMPOSE_PROJECT_NAME=kkt-test\n"), "{env}");
     assert!(env.contains("KKT_PORT=7421\n"), "{env}");
+}
+
+#[test]
+fn extra_host_names_go_into_the_settings_file_as_one_list() {
+    let extra = Inputs {
+        allow_hosts: vec!["host.docker.internal".into(), "box.example".into()],
+        ..with_tailscale(None)
+    };
+    let env = env_text(&extra, None);
+    assert!(
+        env.contains("KKT_ALLOW_HOSTS=host.docker.internal,box.example\n"),
+        "{env}"
+    );
+    // Upgrading changes only the version, so the extra names stay.
+    let upgraded = super::files::set_version(&env, "0.5.0");
+    assert!(
+        upgraded.contains("KKT_ALLOW_HOSTS=host.docker.internal,box.example\n"),
+        "{upgraded}"
+    );
+    // With none, the line is left out and the Compose files' default applies.
+    assert!(!env_text(&plain(), None).contains("KKT_ALLOW_HOSTS"));
 }
 
 #[test]

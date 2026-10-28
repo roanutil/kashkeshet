@@ -13,14 +13,14 @@ Tailscale container.
 ## Setup
 
 Choose a [published release](https://github.com/sam-mfb/kashkeshet/releases)
-and download its files into a new folder. The commands below use 0.4.0;
+and download its files into a new folder. The commands below use 0.4.1;
 for another release, change `KKT_VERSION` (without the `v`). Keep the files
 and image on the same release; the backup commands in this guide need 0.4.0
 or later.
 
 ```sh
 mkdir kkt && cd kkt
-KKT_VERSION=0.4.0
+KKT_VERSION=0.4.1
 curl -fsSLO "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/compose.yaml"
 curl -fsSL "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/.env.example" -o .env
 mkdir backups
@@ -147,6 +147,21 @@ For a backup made before an upgrade, copy from
 directory. With Tailscale, set `COMPOSE_FILE=compose.tailscale.yaml` in
 `.env` (or add `-f compose.tailscale.yaml` after `docker compose` in each
 command), as for every other command here.
+
+## Other host names
+
+kkt answers only to `localhost`, `127.0.0.1` and `::1`, plus its tailnet
+name with Tailscale. To let agents in other containers on this machine reach
+it as `host.docker.internal`, set `KKT_ALLOW_HOSTS` in `.env` (names
+separated by commas) and run `docker compose up -d`:
+
+```sh
+KKT_ALLOW_HOSTS=host.docker.internal
+```
+
+Both Compose files pass it to kkt as `--allow-host`. Use this, not
+`allow_hosts` in the config file in the volume: with Tailscale, the Compose
+file's own `--allow-host` replaces the config file's list.
 
 ## The access key
 
