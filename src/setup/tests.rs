@@ -391,9 +391,12 @@ mod flow {
         );
         let told = ask.told.borrow();
         assert!(told.iter().any(|t| t == "ok: all checks"), "{told:?}");
-        assert!(
-            told.last().is_some_and(|t| t.contains("set up as service")),
-            "{told:?}"
+        assert_eq!(
+            told.last().map(String::as_str),
+            Some(
+                "This machine is set up as service; clients use http://127.0.0.1:7420/mcp, \
+                 and the web page is at http://127.0.0.1:7420/."
+            )
         );
     }
 

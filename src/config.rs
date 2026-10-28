@@ -68,6 +68,14 @@ pub const UPGRADE_BACKUP_FOLDER: &str = "upgrade-backups";
 /// The Compose project name for kkt in Docker, so the containers and volumes
 /// are named the same whatever the folder holding the Compose files is called.
 pub const DOCKER_PROJECT: &str = "kkt";
+/// The folder, in the per-user data directory, that `kkt setup` keeps
+/// the Docker install's files in.
+pub const DOCKER_FOLDER: &str = "docker";
+/// Where `kkt setup` saves the Docker server's access key, in the config
+/// directory.
+pub const DOCKER_KEY_FILE_NAME: &str = "docker-access-key";
+/// The machine name `kkt setup` asks for on the tailnet.
+pub const DEFAULT_TS_HOSTNAME: &str = "kkt";
 /// The user ID the kkt image runs as. A host folder it writes backups to
 /// must belong to it.
 pub const DOCKER_IMAGE_USER_ID: u32 = 10001;
