@@ -553,7 +553,7 @@ async fn on_a_docker_machine_doctor_reports_the_container_not_the_service() {
     );
     assert!(
         said.contains(&format!(
-            "docker compose --project-directory '{}' up -d",
+            "cd '{}' && docker compose up -d",
             folder.display()
         )),
         "{said}"
