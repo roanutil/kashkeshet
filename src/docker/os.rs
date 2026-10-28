@@ -44,6 +44,10 @@ impl Host for OsHost {
     fn say(&self, line: &str) {
         println!("{line}");
     }
+
+    fn working_dir(&self) -> io::Result<std::path::PathBuf> {
+        std::env::current_dir()
+    }
 }
 
 /// The process for `command`: in its folder, without the variables it must

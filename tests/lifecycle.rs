@@ -25,7 +25,13 @@ fn record(home: &Path, mode: Mode) {
 }
 
 fn run(home: &Path, args: &[&str]) -> Output {
+    run_in(home, home, args)
+}
+
+/// Runs `kkt` with `dir` as the folder it was started in.
+fn run_in(home: &Path, dir: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_kkt"));
+    command.current_dir(dir);
     command
         .args(args)
         .env("HOME", home)
@@ -336,5 +342,32 @@ fn same_version_is_a_noop_and_downgrade_requires_an_override() {
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("already at"));
     assert_eq!(std::fs::read_to_string(home.join("commands")).unwrap(), log);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_relative_backup_folder_is_made_where_kkt_was_run_not_in_the_managed_folder() {
+    let home = home("docker-relative");
+    let folder = docker_record(&home);
+    let elsewhere = home.join("where-i-am");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    fake(
+        &home,
+        "docker",
+        "case \" $* \" in\n*' exec '*) echo 'Backed up to /backups/kkt-fixture' ;;\nesac\nexit 0",
+    );
+    let out = run_in(&home, &elsewhere, &["backup", "export"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let wanted = std::fs::canonicalize(&elsewhere).unwrap().join("export");
+    let log = std::fs::read_to_string(home.join("commands")).unwrap();
+    let copy = log.lines().find(|l| l.contains(" cp ")).unwrap();
+    assert!(
+        copy.ends_with(wanted.to_str().unwrap()),
+        "{copy} should end with {}",
+        wanted.display()
+    );
+    assert!(wanted.is_dir());
+    assert!(!folder.join("export").exists());
     std::fs::remove_dir_all(home).unwrap();
 }

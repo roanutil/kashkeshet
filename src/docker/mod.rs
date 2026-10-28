@@ -41,6 +41,9 @@ pub trait Host {
     fn write_file(&self, path: &Path, contents: &str, private: bool) -> io::Result<()>;
     /// Tells the person one line.
     fn say(&self, line: &str);
+    /// The folder the person ran kkt in, which paths they typed are relative
+    /// to. Docker commands run elsewhere, in the managed folder.
+    fn working_dir(&self) -> io::Result<PathBuf>;
 }
 
 /// A program to run and its arguments.
