@@ -383,9 +383,20 @@ mod flow {
     }
 
     #[test]
+    fn docker_is_offered_first_and_recommended() {
+        assert_eq!(
+            Purpose::ALL,
+            [Purpose::Docker, Purpose::Service, Purpose::Client]
+        );
+        assert!(Purpose::Docker.describe().ends_with("(Recommended)"));
+        assert!(!Purpose::Service.describe().contains("Recommended"));
+        assert!(!Purpose::Client.describe().contains("Recommended"));
+    }
+
+    #[test]
     fn every_question_comes_before_anything_changes() {
         let ask = Script::with(vec![
-            Reply::Choose(0),
+            Reply::Choose(1),
             Reply::Confirm(true),
             Reply::Confirm(true),
             Reply::Confirm(true),
