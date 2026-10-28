@@ -107,7 +107,8 @@ To remove **Docker data** too, first note the managed folder printed by
 run this before deleting the managed folder:
 
 ```sh
-docker compose --project-directory '/path/to/managed/docker' down -v
+cd '/path/to/managed/docker'
+docker compose down -v
 ```
 
 This deletes the Docker database/key volume and, when used, the Tailscale
