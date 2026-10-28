@@ -111,7 +111,7 @@ impl Rules {
     }
 }
 
-fn human_only(actor: &Actor) -> Result<()> {
+pub(super) fn human_only(actor: &Actor) -> Result<()> {
     if matches!(actor, Actor::Human) {
         Ok(())
     } else {

@@ -114,6 +114,30 @@ impl Source for RulesSource {
         })
     }
 
+    fn create_channel(
+        &self,
+        name: String,
+        purpose: String,
+        open: bool,
+        members: Vec<String>,
+    ) -> BoxFuture<'_, Result<String, SourceError>> {
+        Box::pin(async move {
+            self.rules
+                .create_channel_as_operator(
+                    Actor::Human,
+                    rules::NewChannel {
+                        name,
+                        purpose: Some(purpose),
+                        open,
+                        members,
+                    },
+                )
+                .await
+                .map(|c| c.id)
+                .map_err(source_error)
+        })
+    }
+
     fn set_purpose(
         &self,
         channel_id: String,

@@ -26,6 +26,15 @@ pub trait Source: Send + Sync {
     /// One agent and the channels it is in.
     fn agent(&self, name: String) -> BoxFuture<'_, Result<AgentView, SourceError>>;
 
+    /// Creates a channel as the operator and returns its ID.
+    fn create_channel(
+        &self,
+        name: String,
+        purpose: String,
+        open: bool,
+        members: Vec<String>,
+    ) -> BoxFuture<'_, Result<String, SourceError>>;
+
     /// Changes a channel's purpose, as the human. Empty text clears it. The
     /// change is announced in the channel by a message from the operator.
     fn set_purpose(
