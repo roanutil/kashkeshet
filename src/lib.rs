@@ -5,6 +5,7 @@
 
 pub mod admission;
 pub mod app;
+pub mod backup;
 pub mod clients;
 pub mod clock;
 pub mod config;

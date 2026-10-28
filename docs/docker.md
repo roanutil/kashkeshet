@@ -6,17 +6,73 @@ kkt accepts that only with an access key. Keep the port on the host's
 loopback (`127.0.0.1:7420:7420`), as `compose.yaml` does, or behind the
 Tailscale container.
 
-## One volume
+## Setup
 
-Everything kkt keeps is under `/data`: the database, the access key
-(`/data/.config/kkt/access-key`, made on first start) and the config file
-(`/data/.config/kkt/config.toml`). Upgrading means pulling a new image and
-starting the container again; the volume stays.
+The Compose files run the kkt version named in `.env`; there is no default.
 
 ```
-docker compose pull
+cp .env.example .env      # then set KKT_VERSION, such as 0.3.0
+mkdir backups
 docker compose up -d
 ```
+
+Everything kkt keeps is under `/data`, in the `kkt-data` volume: the
+database (`/data/.local/share/kashkeshet/kashkeshet.db`), the access key
+(`/data/.config/kkt/access-key`, made on first start) and the config file
+(`/data/.config/kkt/config.toml`, if you make one). The `backups` folder
+beside the Compose file is mounted at `/backups`.
+
+The container runs as user 10001. On Linux that user must be able to write
+to `backups`: make it before the first `docker compose up`, then run
+`sudo chown 10001 backups`. Docker Desktop (Mac and Windows) needs only the
+`mkdir`. If the folder is missing at start, Docker makes it owned by root,
+and on Linux backups to it fail until you run the same `chown`.
+
+## Backups
+
+```
+docker compose exec kkt kkt backup /backups
+```
+
+This leaves a folder in `backups` with the database, the key and the config
+file (see [backups](backup.md)). On Linux the files belong to user 10001 and
+are readable only by it, because they hold the access key; use `sudo` to
+read or copy them.
+
+## Upgrading
+
+Change `KKT_VERSION` in `.env`, then:
+
+```
+docker compose up -d
+```
+
+Compose pulls the new image and restarts kkt. If the new version upgrades
+the database, it first backs it up inside the volume, in
+`/data/.local/share/kashkeshet/upgrade-backups`, and refuses to start if it
+can't. Making your own backup first, as above, also puts one on the host.
+
+## Rolling back
+
+Set `KKT_VERSION` back to the old version, then put back a database made by
+that version or before: a backup made before the upgrade has the database
+as the old version left it. Remove the database's `-wal` and `-shm` files
+too; they belong to the database being replaced. For a backup in `backups`
+named `kkt-20261028T131500.123Z-v0.3.0`:
+
+```
+docker compose stop kkt
+docker compose run --rm --no-deps --entrypoint sh kkt -c '
+  cd /data/.local/share/kashkeshet &&
+  rm -f kashkeshet.db-wal kashkeshet.db-shm &&
+  cp /backups/kkt-20261028T131500.123Z-v0.3.0/kashkeshet.db kashkeshet.db'
+docker compose up -d
+```
+
+For a backup made before an upgrade, copy from
+`upgrade-backups/<name>/kashkeshet.db` instead; that folder is in the same
+directory. With Tailscale, add `-f compose.tailscale.yaml` after
+`docker compose` in each command.
 
 ## The access key
 

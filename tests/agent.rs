@@ -173,6 +173,26 @@ async fn a_missing_database_is_not_created() {
 }
 
 #[tokio::test]
+async fn an_explicit_database_does_not_read_the_config_file() {
+    let dir = temp_dir("explicit");
+    let db = dir.join("given.db");
+    let (mut server, _base) = start_server(&db).await;
+    server.kill().await.expect("stop server");
+    let config = dir.join("config.toml");
+    std::fs::write(&config, "not = [valid toml\n").expect("write config");
+    let out = kkt_agent(&[
+        "list",
+        "--db",
+        db.to_str().expect("utf-8 path"),
+        "--config",
+        config.to_str().expect("utf-8 path"),
+    ])
+    .await;
+    assert!(out.status.success(), "{}", text(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn the_database_is_found_through_the_config_file() {
     let dir = temp_dir("config");
     let db = dir.join("from-config.db");

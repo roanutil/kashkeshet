@@ -2,6 +2,7 @@
 #   cp .env.example .env     # then fill in the values
 #   docker compose -f compose.tailscale.yaml up -d
 #   docker compose -f compose.tailscale.yaml exec kkt kkt key show
+#   docker compose -f compose.tailscale.yaml exec kkt kkt backup /backups
 # kkt and Tailscale are separate containers on the Compose network. Tailscale
 # Serve proxies HTTPS 443 to http://kkt:7420 (see tailscale/serve.json), and
 # only the Tailscale container is on the tailnet. kkt is also published on
@@ -25,13 +26,15 @@ services:
       - ./tailscale:/config:ro
 
   kkt:
-    image: ghcr.io/sam-mfb/kashkeshet:latest
+    image: ghcr.io/sam-mfb/kashkeshet:${KKT_VERSION:?set KKT_VERSION in .env}
     restart: unless-stopped
     ports:
       # The host's loopback only. Do not drop the 127.0.0.1.
       - "127.0.0.1:7420:7420"
     volumes:
       - kkt-data:/data
+      # `docker compose exec kkt kkt backup /backups` writes here.
+      - ./backups:/backups
     command:
       - serve
       - --bind

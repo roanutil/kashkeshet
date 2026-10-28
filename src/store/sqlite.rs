@@ -151,6 +151,71 @@ fn configure(conn: &Connection) -> StoreResult<()> {
     Ok(())
 }
 
+/// The upgrade [`Db::open`] would make to the tables in the database file at
+/// `path`: from one schema version to another. `None` when there is no file,
+/// it has no kkt tables yet, or they are up to date. Changes nothing.
+pub fn pending_upgrade(path: &Path) -> StoreResult<Option<SchemaUpgrade>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    configure(&conn)?;
+    let current: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let from = usize::try_from(current).unwrap_or(0);
+    let to = MIGRATIONS.len();
+    Ok((from > 0 && from < to).then_some(SchemaUpgrade { from, to }))
+}
+
+/// Writes a copy of the database file at `from` to the new file `to` with
+/// SQLite's online backup, so the copy is consistent even while a server
+/// writes to `from`. The copy is one file (no write-ahead log beside it),
+/// and it passes SQLite's integrity check before this returns.
+pub fn copy_database(from: &Path, to: &Path) -> StoreResult<()> {
+    if to.exists() {
+        return Err(StoreError::Database(format!(
+            "{} already exists",
+            to.display()
+        )));
+    }
+    let source = Connection::open_with_flags(
+        from,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    configure(&source)?;
+    let mut copy = Connection::open(to)?;
+    configure(&copy)?;
+    {
+        use rusqlite::backup::{Backup, StepResult};
+        let backup = Backup::new(&source, &mut copy)?;
+        // All pages in one step (-1): one read transaction, so the copy is
+        // the database at one moment. In WAL mode it does not block writers.
+        // Both connections wait DB_BUSY_TIMEOUT for locks, so busy is final.
+        loop {
+            match backup.step(-1)? {
+                StepResult::Done => break,
+                StepResult::More => continue,
+                // Busy or locked.
+                waiting => {
+                    return Err(StoreError::Database(format!(
+                        "the database stayed {waiting:?}; try again"
+                    )));
+                }
+            }
+        }
+    }
+    copy.pragma_update(None, "journal_mode", "DELETE")?;
+    let check: String = copy.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    if check != "ok" {
+        return Err(StoreError::Database(format!(
+            "the copy failed SQLite's integrity check: {check}"
+        )));
+    }
+    Ok(())
+}
+
 /// Applies any migrations newer than the database's `user_version`.
 fn migrate(conn: &mut Connection) -> StoreResult<()> {
     let current: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;

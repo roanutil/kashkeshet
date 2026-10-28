@@ -19,6 +19,7 @@
 | `--max-limit` | 100 | Largest `limit` an agent may ask for |
 | `--waiting-grace-seconds` | 3 | Seconds a completed wait remains listening; 0 disables grace, maximum 50 |
 | `--sends-per-minute` | 30 | Per-agent send rate |
+| `--upgrade-backups-kept` | 5 | Backups kept of those made before upgrading the database (see [backups](backup.md)) |
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
 | `--log-file` | stdout | Write the log to this file, kept under about 60 MB (see [Logs](#logs)) |
 | `--log-level` | `info` | How much kkt's own code logs: `error`, `warn`, `info`, `debug` or `trace` |

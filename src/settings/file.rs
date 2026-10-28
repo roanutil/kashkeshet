@@ -44,6 +44,9 @@ pub fn parse_file(text: &str, dir: &Path, env: &Env) -> Result<ServeOptions, Inv
                 options.waiting_grace_seconds = Some(value.count("waiting_grace_seconds")?)
             }
             "sends_per_minute" => options.sends_per_minute = Some(value.count("sends_per_minute")?),
+            "upgrade_backups_kept" => {
+                options.upgrade_backups_kept = Some(value.count("upgrade_backups_kept")?)
+            }
             "allow_origins" => options.allow_origins = Some(value.strings("allow_origins")?),
             "allow_hosts" => options.allow_hosts = Some(value.strings("allow_hosts")?),
             "instructions" => options.instructions = Some(value.path("instructions", dir, env)?),
@@ -192,6 +195,7 @@ mod tests {
             options,
             ServeOptions {
                 waiting_grace_seconds: None,
+                upgrade_backups_kept: None,
                 db: Some(PathBuf::from("/home/sam/data/kkt.db")),
                 bind: Some("127.0.0.1:9000".parse().expect("addr")),
                 allow_any_bind: Some(true),

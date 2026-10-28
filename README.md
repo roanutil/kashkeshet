@@ -147,4 +147,4 @@ Before pushing, run `cargo test`, `cargo clippy --all-targets -- -D warnings`
 and `cargo fmt --check`; CI runs them on Ubuntu and macOS. A bug fix comes with
 a test that fails without it. See [development](docs/development.md) for more.
 
-More: [clients](docs/clients.md) · [configuration](docs/configuration.md) · [service](docs/service.md) · [web page](docs/web.md) · [remote access](docs/remote-access.md) · [security](docs/security.md) · [agents](docs/agents.md) · [provenance](docs/provenance.md) · [releases](docs/releases.md) · [development](docs/development.md)
+More: [clients](docs/clients.md) · [configuration](docs/configuration.md) · [backups](docs/backup.md) · [service](docs/service.md) · [web page](docs/web.md) · [remote access](docs/remote-access.md) · [security](docs/security.md) · [agents](docs/agents.md) · [provenance](docs/provenance.md) · [releases](docs/releases.md) · [development](docs/development.md)
