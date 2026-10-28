@@ -68,7 +68,7 @@ besides Docker.
 **Over a tailnet.** To let agents on other machines in over Tailscale, use
 `compose.tailscale.yaml` instead of `compose.yaml`. A Tailscale container serves
 kkt over HTTPS on your tailnet, and kkt is also on your machine's
-`127.0.0.1:7420`. You need a Tailscale auth key and HTTPS enabled for your
+`127.0.0.1:7420`. You need a Tailscale account and HTTPS enabled for your
 tailnet. After step 1, in the same folder:
 
 ```
@@ -77,7 +77,8 @@ curl -fsSLO https://raw.githubusercontent.com/sam-mfb/kashkeshet/main/compose.ta
 curl -fsSL https://raw.githubusercontent.com/sam-mfb/kashkeshet/main/tailscale/serve.json -o tailscale/serve.json
 ```
 
-Set `TS_AUTHKEY`, `TS_HOSTNAME` and `TS_TAILNET` in `.env`, and add the line
+Set `TS_HOSTNAME` and `TS_TAILNET` in `.env` (and `TS_AUTHKEY` if you have an
+auth key; otherwise the Tailscale container logs a login link), and add the line
 `COMPOSE_FILE=compose.tailscale.yaml`. That makes every `docker compose`
 command here (upgrade, backup, `down`) use the Tailscale file; without it
 they would use `compose.yaml`, which leaves out kkt's tailnet name and the

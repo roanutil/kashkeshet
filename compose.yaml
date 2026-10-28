@@ -12,7 +12,7 @@ services:
     restart: unless-stopped
     ports:
       # The host's loopback only. Do not drop the 127.0.0.1.
-      - "127.0.0.1:7420:7420"
+      - "127.0.0.1:${KKT_PORT:-7420}:7420"
     volumes:
       - kkt-data:/data
       # `docker compose exec kkt kkt backup /backups` writes here.
