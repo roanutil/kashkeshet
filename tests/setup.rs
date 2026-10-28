@@ -162,6 +162,14 @@ async fn kkt(home: &Path, args: &[&str]) -> (bool, String) {
 /// A server with an access key, in its own home; returns it, its MCP URL
 /// and its key file.
 async fn keyed_server(name: &str) -> (tokio::process::Child, String, PathBuf) {
+    let (home, key) = server_key(name).await;
+    let bind = free_bind();
+    let child = serve_with_key(&home, &key, &bind).await;
+    (child, format!("http://{bind}/mcp"), key)
+}
+
+/// A home for a server, and a new access key in it.
+async fn server_key(name: &str) -> (PathBuf, PathBuf) {
     let home = temp_home(name);
     let key = home.join("server-key");
     let (made, said) = kkt(
@@ -170,14 +178,18 @@ async fn keyed_server(name: &str) -> (tokio::process::Child, String, PathBuf) {
     )
     .await;
     assert!(made, "{said}");
-    let bind = free_bind();
+    (home, key)
+}
+
+/// Starts `kkt serve` with `key` on `bind`, returning once it listens.
+async fn serve_with_key(home: &Path, key: &Path, bind: &str) -> tokio::process::Child {
     let mut command = Command::new(KKT);
     command
-        .args(["serve", "--bind", &bind, "--access-key-file"])
-        .arg(&key)
+        .args(["serve", "--bind", bind, "--access-key-file"])
+        .arg(key)
         .arg("--db")
         .arg(home.join("kkt.db"))
-        .env("HOME", &home)
+        .env("HOME", home)
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
         .stdout(Stdio::piped())
@@ -195,7 +207,7 @@ async fn keyed_server(name: &str) -> (tokio::process::Child, String, PathBuf) {
     .await
     .expect("kkt did not start in time");
     tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
-    (child, format!("http://{bind}/mcp"), key)
+    child
 }
 
 #[tokio::test]
@@ -583,4 +595,60 @@ async fn on_a_client_machine_doctor_has_no_line_about_a_server_here() {
     assert!(said.contains("https://kkt.tail1234.ts.net/mcp"), "{said}");
     assert!(!said.contains("this machine's kkt"), "{said}");
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn setup_waits_for_a_server_it_set_up_that_answers_late() {
+    // As with a new Tailscale node, whose HTTPS certificate comes on first
+    // use: the server only answers a few seconds after setup's check starts.
+    let (server_home, key) = server_key("late-server").await;
+    let bind = free_bind();
+    let port = bind.trim_start_matches("127.0.0.1:").to_string();
+    let key_text = std::fs::read_to_string(&key)
+        .expect("key")
+        .trim()
+        .to_string();
+    let scratch = empty_home("late-scratch");
+    let bin = fake_docker(&scratch, &key_text);
+    let home = empty_home("late-home");
+
+    let setup = Command::new(KKT)
+        .args([
+            "setup",
+            "--mode",
+            "docker",
+            "--no-tailscale",
+            "--clients",
+            "none",
+        ])
+        .args(["--docker-project", "kkt-test", "--docker-port", &port])
+        .env("HOME", &home)
+        .env("PATH", &bin)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("start setup");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let mut server = serve_with_key(&server_home, &key, &bind).await;
+    let out = tokio::time::timeout(TIMEOUT, setup.wait_with_output())
+        .await
+        .expect("setup should finish once the server answers")
+        .expect("run setup");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{said}");
+    assert!(said.contains("Waiting for the server to answer"), "{said}");
+    assert!(said.contains("ok: key accepted"), "{said}");
+    assert!(record_text(&home).contains("mode = \"docker\""));
+    server.kill().await.expect("stop kkt");
+    for dir in [&home, &scratch, &server_home] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -76,6 +76,12 @@ pub const DOCKER_FOLDER: &str = "docker";
 pub const DOCKER_KEY_FILE_NAME: &str = "docker-access-key";
 /// The machine name `kkt setup` asks for on the tailnet.
 pub const DEFAULT_TS_HOSTNAME: &str = "kkt";
+/// How long `kkt setup` waits for a server it just set up to answer before
+/// its connection check gives up. A new Tailscale node gets its HTTPS
+/// certificate on the first request, which can take a while.
+pub const SETUP_SERVER_WAIT: Duration = Duration::from_secs(2 * 60);
+/// How often `kkt setup` asks while it waits.
+pub const SETUP_SERVER_POLL: Duration = Duration::from_secs(2);
 /// The user ID the kkt image runs as. A host folder it writes backups to
 /// must belong to it.
 pub const DOCKER_IMAGE_USER_ID: u32 = 10001;
