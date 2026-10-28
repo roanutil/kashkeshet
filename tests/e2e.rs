@@ -776,6 +776,15 @@ async fn operator_instructions_reach_both_handshakes_and_connected_agents() {
     let registration = ok(&connected, "register", json!({})).await;
     assert!(registration.contains("From this server's operator (version 1):"));
     assert!(registration.contains("First version 😀"));
+    let registration = json_of(&ok(&connected, "register", json!({"format": "json"})).await);
+    for key in ["name", "token", "recovery_code"] {
+        assert!(registration[key].is_string(), "no {key} in {registration}");
+    }
+    assert_eq!(registration["operator_instructions"]["version"], 1);
+    assert_eq!(
+        registration["operator_instructions"]["text"],
+        "Ask in #help-desk.\nFirst version 😀"
+    );
     let identity = json_of(
         &ok(
             &connected,
