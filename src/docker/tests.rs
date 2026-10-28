@@ -131,6 +131,42 @@ impl Host for FakeHost {
     }
 }
 
+/// A login link that records what it was shown and what was opened, and
+/// answers `open_requested` from a queue.
+#[derive(Default)]
+struct FakeLogin {
+    shown: RefCell<Vec<String>>,
+    opened: RefCell<Vec<String>>,
+    /// What `open_requested` answers, one per ask; false when it runs out.
+    requests: RefCell<std::collections::VecDeque<bool>>,
+    open_fails: Cell<bool>,
+    /// What `open_failure` answers once, after an open.
+    later_failure: RefCell<Option<String>>,
+}
+
+impl LoginLink for FakeLogin {
+    fn show(&self, url: &str) {
+        self.shown.borrow_mut().push(url.to_string());
+    }
+
+    fn open_requested(&self) -> bool {
+        self.requests.borrow_mut().pop_front().unwrap_or(false)
+    }
+
+    fn open(&self, url: &str) -> io::Result<()> {
+        self.opened.borrow_mut().push(url.to_string());
+        if self.open_fails.get() {
+            Err(io::Error::new(io::ErrorKind::NotFound, "no opener"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn open_failure(&self) -> Option<String> {
+        self.later_failure.borrow_mut().take()
+    }
+}
+
 const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn folder() -> Folder {
@@ -275,6 +311,7 @@ async fn a_local_setup_writes_the_files_starts_kkt_and_saves_the_key_privately()
     let done = provision(
         &host,
         &*host.clock,
+        &FakeLogin::default(),
         &folder(),
         &plain(),
         Path::new("/keys/docker"),
@@ -331,9 +368,11 @@ async fn a_tailscale_setup_shows_the_login_link_once_and_uses_the_nodes_own_name
         }
         working("")(command)
     });
+    let login = FakeLogin::default();
     let done = provision(
         &host,
         &*host.clock,
+        &login,
         &folder(),
         &with_tailscale(None),
         Path::new("/keys/docker"),
@@ -344,14 +383,12 @@ async fn a_tailscale_setup_shows_the_login_link_once_and_uses_the_nodes_own_name
         done.node,
         Some(("kkt-1".to_string(), "tail1234.ts.net".to_string()))
     );
-    let links: Vec<String> = host
-        .said
-        .borrow()
-        .iter()
-        .filter(|l| l.contains("https://login.tailscale.com/a/abc123"))
-        .cloned()
-        .collect();
-    assert_eq!(links.len(), 1, "{:?}", host.said.borrow());
+    assert_eq!(
+        *login.shown.borrow(),
+        ["https://login.tailscale.com/a/abc123"]
+    );
+    // Nothing is opened unless asked.
+    assert!(login.opened.borrow().is_empty());
     // The real names go into the settings file, which holds no auth key.
     let env = host.file("/data/docker/.env").unwrap();
     assert_eq!(
@@ -381,6 +418,7 @@ async fn an_auth_key_goes_only_in_the_private_settings_file() {
     provision(
         &host,
         &*host.clock,
+        &FakeLogin::default(),
         &folder(),
         &with_tailscale(Some("tskey-auth-xyz")),
         Path::new("/keys/docker"),
@@ -400,6 +438,7 @@ async fn disabled_https_stops_setup_before_kkt_starts() {
     let err = provision(
         &host,
         &*host.clock,
+        &FakeLogin::default(),
         &folder(),
         &with_tailscale(None),
         Path::new("/keys/docker"),
@@ -418,6 +457,7 @@ async fn waiting_for_a_login_gives_up_after_the_deadline() {
     let err = provision(
         &host,
         &*host.clock,
+        &FakeLogin::default(),
         &folder(),
         &with_tailscale(None),
         Path::new("/keys/docker"),
@@ -441,6 +481,7 @@ async fn kkt_that_never_makes_a_key_is_a_start_timeout() {
     let err = provision(
         &host,
         &*host.clock,
+        &FakeLogin::default(),
         &folder(),
         &plain(),
         Path::new("/keys/docker"),
@@ -457,6 +498,7 @@ async fn missing_docker_is_said_plainly_and_nothing_is_written() {
     let err = provision(
         &host,
         &*host.clock,
+        &FakeLogin::default(),
         &folder(),
         &plain(),
         Path::new("/keys/docker"),
@@ -480,6 +522,7 @@ async fn a_failing_command_is_an_error_naming_it() {
     let err = provision(
         &host,
         &*host.clock,
+        &FakeLogin::default(),
         &folder(),
         &plain(),
         Path::new("/keys/docker"),
@@ -770,6 +813,7 @@ async fn the_key_goes_in_a_folder_that_did_not_exist_yet() {
     provision(
         &host,
         &*host.clock,
+        &FakeLogin::default(),
         &folder(),
         &plain(),
         Path::new("/home/me/.config/kkt/docker-access-key"),
@@ -832,4 +876,139 @@ fn a_backup_folder_typed_relative_is_taken_from_where_the_person_is() {
     );
     let ran = host.ran.borrow();
     assert!(ran[1].ends_with(" /home/me/export"), "{ran:?}");
+}
+
+#[tokio::test]
+async fn the_link_is_opened_when_asked_and_setup_goes_on_watching_for_the_login() {
+    let polls = Cell::new(0);
+    let host = FakeHost::new(move |command| {
+        if command.contains("tailscale status") {
+            polls.set(polls.get() + 1);
+            return ok(if polls.get() < 6 {
+                NEEDS_LOGIN
+            } else {
+                RUNNING
+            });
+        }
+        working("")(command)
+    });
+    let login = FakeLogin::default();
+    // Not at first; then asked once; then the person logs in on their own.
+    login
+        .requests
+        .borrow_mut()
+        .extend([false, false, true, false]);
+    let done = provision(
+        &host,
+        &*host.clock,
+        &login,
+        &folder(),
+        &with_tailscale(None),
+        Path::new("/keys/docker"),
+    )
+    .await
+    .unwrap();
+    assert!(done.node.is_some());
+    assert_eq!(
+        *login.opened.borrow(),
+        ["https://login.tailscale.com/a/abc123"]
+    );
+    assert!(
+        host.said
+            .borrow()
+            .iter()
+            .any(|l| l.contains("Opening the link"))
+    );
+}
+
+#[tokio::test]
+async fn a_link_that_cannot_be_opened_is_said_and_setup_carries_on() {
+    let polls = Cell::new(0);
+    let host = FakeHost::new(move |command| {
+        if command.contains("tailscale status") {
+            polls.set(polls.get() + 1);
+            return ok(if polls.get() < 4 {
+                NEEDS_LOGIN
+            } else {
+                RUNNING
+            });
+        }
+        working("")(command)
+    });
+    let login = FakeLogin::default();
+    login.requests.borrow_mut().extend([true]);
+    login.open_fails.set(true);
+    provision(
+        &host,
+        &*host.clock,
+        &login,
+        &folder(),
+        &with_tailscale(None),
+        Path::new("/keys/docker"),
+    )
+    .await
+    .unwrap();
+    let said = host.said.borrow();
+    assert!(
+        said.iter()
+            .any(|l| l.contains("Could not open a browser") && l.contains("no opener")),
+        "{said:?}"
+    );
+    assert_eq!(login.shown.borrow().len(), 1);
+}
+
+#[tokio::test]
+async fn no_link_is_shown_when_no_login_is_needed() {
+    let host = FakeHost::new(working(RUNNING));
+    let login = FakeLogin::default();
+    provision(
+        &host,
+        &*host.clock,
+        &login,
+        &folder(),
+        &with_tailscale(Some("tskey-auth-xyz")),
+        Path::new("/keys/docker"),
+    )
+    .await
+    .unwrap();
+    assert!(login.shown.borrow().is_empty());
+}
+
+#[tokio::test]
+async fn an_opener_that_fails_after_starting_is_said_while_setup_goes_on_waiting() {
+    let polls = Cell::new(0);
+    let host = FakeHost::new(move |command| {
+        if command.contains("tailscale status") {
+            polls.set(polls.get() + 1);
+            return ok(if polls.get() < 5 {
+                NEEDS_LOGIN
+            } else {
+                RUNNING
+            });
+        }
+        working("")(command)
+    });
+    let login = FakeLogin::default();
+    login.requests.borrow_mut().extend([true]);
+    *login.later_failure.borrow_mut() = Some("the opener ended with exit status: 7".into());
+    provision(
+        &host,
+        &*host.clock,
+        &login,
+        &folder(),
+        &with_tailscale(None),
+        Path::new("/keys/docker"),
+    )
+    .await
+    .unwrap();
+    let said = host.said.borrow();
+    assert!(
+        said.iter().any(|l| l.contains("Opening the link")),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|l| l.contains("Could not open a browser") && l.contains("exit status: 7")),
+        "{said:?}"
+    );
 }

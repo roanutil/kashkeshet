@@ -48,7 +48,7 @@ require reading another's internals.
 | `names.rs` | Agent names, channel IDs, and the randomness behind them (`Entropy`) | |
 | `clock.rs` | The current time and waiting (`Clock`), injected so tests can control them | |
 | `app.rs` | Assembling the parts | Hold business logic |
-| `main.rs` | The `kkt` command: its subcommands, and the files and environment they read | Hold business logic |
+| `main.rs` | The `kkt` command: its subcommands, and the files and environment they read; `browser_login.rs`, the terminal prompt that offers to open the Tailscale login link | Hold business logic |
 
 Outside `src/`:
 
