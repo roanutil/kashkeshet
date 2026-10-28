@@ -16,7 +16,7 @@ pub enum Purpose {
 }
 
 impl Purpose {
-    pub const ALL: [Purpose; 3] = [Purpose::Service, Purpose::Docker, Purpose::Client];
+    pub const ALL: [Purpose; 3] = [Purpose::Docker, Purpose::Service, Purpose::Client];
 
     /// The `--mode` value.
     pub fn name(self) -> &'static str {
@@ -31,10 +31,10 @@ impl Purpose {
         Purpose::ALL.into_iter().find(|p| p.name() == name)
     }
 
-    fn describe(self) -> &'static str {
+    pub(super) fn describe(self) -> &'static str {
         match self {
             Purpose::Service => "Run the kkt server here, as a service that starts when you log in",
-            Purpose::Docker => "Run the kkt server here, in Docker",
+            Purpose::Docker => "Run the kkt server here, in Docker (Recommended)",
             Purpose::Client => "Connect this machine's clients to a kkt server elsewhere",
         }
     }
