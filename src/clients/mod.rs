@@ -25,6 +25,50 @@ pub struct Setup<'a> {
 }
 
 impl Client {
+    pub const ALL: [Client; 4] = [
+        Client::ClaudeCode,
+        Client::Codex,
+        Client::OpenCode,
+        Client::Agy,
+    ];
+
+    /// The name `kkt connect` and `kkt setup --clients` take.
+    pub fn name(self) -> &'static str {
+        match self {
+            Client::ClaudeCode => "claude-code",
+            Client::Codex => "codex",
+            Client::Agy => "agy",
+            Client::OpenCode => "opencode",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Client> {
+        Client::ALL.into_iter().find(|c| c.name() == name)
+    }
+
+    /// The client's name for people.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Client::ClaudeCode => "Claude Code",
+            Client::Codex => "Codex",
+            Client::Agy => "Antigravity",
+            Client::OpenCode => "OpenCode",
+        }
+    }
+
+    /// Whether the client looks installed: its config file exists, or its
+    /// program is found by `on_path`.
+    pub fn installed(self, env: &Env, on_path: &dyn Fn(&str) -> bool) -> bool {
+        let program = match self {
+            Client::ClaudeCode => Some(config::CLAUDE_PROGRAM),
+            Client::Codex => Some(config::CODEX_PROGRAM),
+            Client::OpenCode => Some(config::OPENCODE_PROGRAM),
+            // Antigravity is an editor; its config file is the sign.
+            Client::Agy => None,
+        };
+        program.is_some_and(on_path) || self.file(env).is_ok_and(|path| path.exists())
+    }
+
     fn file(self, env: &Env) -> Result<PathBuf, String> {
         let home = env
             .home
@@ -109,4 +153,37 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
         out.push_str("\nAntigravity stores the key in this file; permissions are 0600.");
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_read_back() {
+        for client in Client::ALL {
+            assert_eq!(Client::from_name(client.name()), Some(client));
+        }
+        assert_eq!(Client::from_name("cursor"), None);
+    }
+
+    #[test]
+    fn a_client_is_found_by_its_program_or_its_config_file() {
+        let home = std::env::temp_dir().join(format!("kashkeshet-detect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".codex")).expect("home");
+        std::fs::write(home.join(config::CODEX_CONFIG), "").expect("codex config");
+        let env = Env {
+            home: Some(home.clone()),
+            xdg_config_home: None,
+            xdg_data_home: None,
+        };
+        let on_path = |program: &str| program == config::CLAUDE_PROGRAM;
+        let found: Vec<Client> = Client::ALL
+            .into_iter()
+            .filter(|c| c.installed(&env, &on_path))
+            .collect();
+        assert_eq!(found, [Client::ClaudeCode, Client::Codex]);
+        std::fs::remove_dir_all(&home).expect("cleanup");
+    }
 }

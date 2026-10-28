@@ -134,6 +134,9 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 pub const ACCESS_KEY_FILE_NAME: &str = "access-key";
 /// The setup record `kkt setup` writes, in the config directory.
 pub const SETUP_FILE_NAME: &str = "setup.toml";
+/// Where `kkt setup` keeps a client-only machine's copy of its server's
+/// key, in the config directory.
+pub const CLIENT_KEY_FILE_NAME: &str = "client-access-key";
 /// The host Tailscale Serve listener used by service-mode setup.
 pub const TAILSCALE_HTTPS_PORT: u16 = 443;
 /// Full backups made before an explicit service-mode upgrade, in the
@@ -146,6 +149,11 @@ pub const CLAUDE_CONFIG: &str = ".claude.json";
 pub const AGY_CONFIG: &str = ".gemini/config/mcp_config.json";
 pub const AGY_LEGACY_CONFIG: &str = ".gemini/antigravity/mcp_config.json";
 pub const OPENCODE_CONFIG: &str = ".config/opencode/opencode.json";
+/// The programs `kkt setup` looks for on PATH to tell which clients are
+/// installed.
+pub const CLAUDE_PROGRAM: &str = "claude";
+pub const CODEX_PROGRAM: &str = "codex";
+pub const OPENCODE_PROGRAM: &str = "opencode";
 pub const DOCTOR_TIMEOUT: Duration = Duration::from_secs(5);
 pub const DOCTOR_MAX_RESPONSE_BYTES: usize = 64 * 1024;
 pub const DOCTOR_PROTOCOL_VERSION: &str = "2026-07-28";

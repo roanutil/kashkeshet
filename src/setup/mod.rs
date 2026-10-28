@@ -7,12 +7,14 @@
 //! [`Ask`], so every rule here is tested directly.
 
 mod ask;
+mod flow;
 mod guard;
 mod record;
 #[cfg(test)]
 mod tests;
 
-pub use ask::{Ask, Question, Unattended};
+pub use ask::{Ask, Question, unanswered};
+pub use flow::{Answers, Installed, Purpose, Steps, run};
 pub use guard::guard;
 pub use record::{DockerSetup, Mode, Record};
 

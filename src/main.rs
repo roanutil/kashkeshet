@@ -21,6 +21,7 @@ use kashkeshet::shutdown::{Shutdown, StopSignals};
 use kashkeshet::store::{self, Db};
 use kashkeshet::tailscale;
 use kashkeshet::{Operator, Revoked};
+use sha2::{Digest, Sha256};
 use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -112,6 +113,13 @@ enum Command {
         #[command(subcommand)]
         command: ServiceCommand,
     },
+    /// Set this machine up: run the server here as a service or in Docker,
+    /// or connect clients to a server elsewhere. Asks what the flags leave
+    /// open; with no terminal, a missing answer is an error naming its flag.
+    Setup {
+        #[command(flatten)]
+        answers: SetupFlags,
+    },
     /// Show a client's MCP configuration, or apply it with --write.
     Connect {
         #[arg(value_parser = ["claude-code", "codex", "agy", "opencode"])]
@@ -127,6 +135,73 @@ enum Command {
         #[command(flatten)]
         connection: ConnectionFlags,
     },
+}
+
+#[derive(Args, Debug)]
+struct SetupFlags {
+    /// What this machine is for.
+    #[arg(long, value_parser = ["service", "docker", "client"])]
+    mode: Option<String>,
+    /// Share the server over Tailscale.
+    #[arg(long, conflicts_with = "no_tailscale")]
+    tailscale: bool,
+    /// Don't share the server over Tailscale.
+    #[arg(long)]
+    no_tailscale: bool,
+    /// For a client: the server's MCP address, such as
+    /// https://kkt.tail1234.ts.net/mcp.
+    #[arg(long)]
+    url: Option<String>,
+    /// For a client: a file holding the server's access key.
+    #[arg(long)]
+    key_file: Option<PathBuf>,
+    /// The clients to connect, separated by commas (claude-code, codex,
+    /// opencode, agy), or `none`. Without it, setup offers each one it finds.
+    #[arg(long)]
+    clients: Option<String>,
+    /// Connect every client found without asking.
+    #[arg(long)]
+    yes: bool,
+}
+
+impl SetupFlags {
+    fn answers(self) -> Result<setup::Answers, String> {
+        let clients = match self.clients.as_deref() {
+            None => None,
+            Some("none") => Some(Vec::new()),
+            Some(list) => Some(
+                list.split(',')
+                    .map(|name| {
+                        Client::from_name(name.trim()).ok_or_else(|| {
+                            format!(
+                                "unknown client {name:?} in --clients: use claude-code, codex, \
+                                 opencode, agy or none"
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            ),
+        };
+        let key_file = match self.key_file {
+            Some(path) => Some(
+                std::path::absolute(&path)
+                    .map_err(|e| format!("could not resolve {}: {e}", path.display()))?,
+            ),
+            None => None,
+        };
+        Ok(setup::Answers {
+            purpose: self.mode.as_deref().and_then(setup::Purpose::from_name),
+            tailscale: match (self.tailscale, self.no_tailscale) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            },
+            url: self.url,
+            key_file,
+            clients,
+            yes: self.yes,
+        })
+    }
 }
 
 #[derive(Args, Debug)]
@@ -381,6 +456,19 @@ fn client_connection(
     flags: ConnectionFlags,
     create: bool,
 ) -> Result<Connection, String> {
+    // With nothing given, clients use the server `kkt setup` recorded.
+    let nothing_given = flags.url.is_none() && flags.key_file.is_none() && flags.config.is_none();
+    if nothing_given && let Some(record) = read_setup(env)? {
+        return Ok(Connection {
+            url: record.url,
+            key_file: record.key_file,
+        });
+    }
+    serve_connection(env, flags, create)
+}
+
+/// How clients reach the server `kkt serve` would run with these settings.
+fn serve_connection(env: &Env, flags: ConnectionFlags, create: bool) -> Result<Connection, String> {
     let key_override = flags.key_file.is_some();
     let loaded = load_serve_options(
         env,
@@ -420,17 +508,9 @@ fn client_connection(
 }
 
 fn connect(env: &Env, client: &str, flags: ConnectionFlags, write: bool) -> Result<(), String> {
-    let client = match client {
-        "claude-code" => Client::ClaudeCode,
-        "codex" => Client::Codex,
-        "agy" => Client::Agy,
-        "opencode" => Client::OpenCode,
-        _ => return Err("unknown client".into()),
-    };
+    let client = Client::from_name(client).ok_or("unknown client")?;
     let connection = client_connection(env, flags, true)?;
-    let executable = std::env::current_exe()
-        .and_then(|p| p.canonicalize())
-        .map_err(|e| format!("could not find kkt's path: {e}"))?;
+    let executable = kkt_path()?;
     let setup = Setup {
         env,
         url: &connection.url,
@@ -439,6 +519,13 @@ fn connect(env: &Env, client: &str, flags: ConnectionFlags, write: bool) -> Resu
     };
     println!("{}", clients::configure(client, &setup, write)?);
     Ok(())
+}
+
+/// This program's absolute path, for client configs that run it.
+fn kkt_path() -> Result<PathBuf, String> {
+    std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .map_err(|e| format!("could not find kkt's path: {e}"))
 }
 
 fn key_header(env: &Env, path: Option<PathBuf>, json: bool) -> Result<(), String> {
@@ -489,24 +576,32 @@ async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
             "check `kkt service status` and your user service manager",
         )),
     }
-    let mut all_ok = true;
-    for check in checks {
-        all_ok &= check.ok;
-        println!(
-            "{}: {}: {}",
-            if check.ok { "ok" } else { "problem" },
-            check.name,
-            check.detail
-        );
-        if let Some(fix) = check.fix {
-            println!("  fix: {fix}");
-        }
-    }
+    let (report, all_ok) = doctor_report(checks);
+    print!("{report}");
     if all_ok {
         Ok(())
     } else {
         Err("doctor found problems; see the fixes above".into())
     }
+}
+
+/// The doctor's lines for `checks`, and whether all of them are ok.
+fn doctor_report(checks: Vec<diagnostics::Check>) -> (String, bool) {
+    let mut report = String::new();
+    let mut all_ok = true;
+    for check in checks {
+        all_ok &= check.ok;
+        report.push_str(&format!(
+            "{}: {}: {}\n",
+            if check.ok { "ok" } else { "problem" },
+            check.name,
+            check.detail
+        ));
+        if let Some(fix) = check.fix {
+            report.push_str(&format!("  fix: {fix}\n"));
+        }
+    }
+    (report, all_ok)
 }
 
 /// Runs one command.
@@ -547,6 +642,7 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
             write,
         } => connect(env, &client, connection, write),
         Command::Doctor { connection } => doctor(env, connection).await,
+        Command::Setup { answers } => run_setup(env, answers).await,
     }
 }
 
@@ -611,6 +707,207 @@ fn process_env() -> Env {
         home: var("HOME"),
         xdg_config_home: var("XDG_CONFIG_HOME"),
         xdg_data_home: var("XDG_DATA_HOME"),
+    }
+}
+
+/// `kkt setup`: asks on the terminal if there is one, and does the work
+/// through [`OsSteps`].
+async fn run_setup(env: &Env, flags: SetupFlags) -> Result<(), String> {
+    let answers = flags.answers()?;
+    let ask = TerminalAsk {
+        interactive: std::io::stdin().is_terminal(),
+    };
+    let steps = OsSteps { env };
+    // Steps are synchronous; doctor's checks are async, so they block on
+    // this runtime from inside.
+    tokio::task::block_in_place(|| {
+        setup::run(&answers, Build::CURRENT.version, &ask, &steps).map(|_| ())
+    })
+}
+
+/// Asks on the terminal, or, with none, refuses each question naming the
+/// flag that answers it.
+struct TerminalAsk {
+    interactive: bool,
+}
+
+impl TerminalAsk {
+    fn line(&self, question: setup::Question, prompt: &str) -> Result<String, String> {
+        if !self.interactive {
+            return Err(setup::unanswered(question));
+        }
+        print!("{prompt}");
+        std::io::stdout()
+            .flush()
+            .map_err(|e| format!("could not write to the terminal: {e}"))?;
+        let mut line = String::new();
+        let read = std::io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| format!("could not read the answer: {e}"))?;
+        if read == 0 {
+            return Err(format!("no answer: {}", setup::unanswered(question)));
+        }
+        Ok(line.trim_end_matches(['\r', '\n']).to_string())
+    }
+}
+
+impl setup::Ask for TerminalAsk {
+    fn choose(&self, question: setup::Question, options: &[&str]) -> Result<usize, String> {
+        let mut prompt = format!("{}\n", question.text);
+        for (i, option) in options.iter().enumerate() {
+            prompt.push_str(&format!("  {}. {option}\n", i + 1));
+        }
+        prompt.push_str("Choose a number: ");
+        loop {
+            let answer = self.line(question, &prompt)?;
+            match answer.trim().parse::<usize>() {
+                Ok(n) if (1..=options.len()).contains(&n) => return Ok(n - 1),
+                _ => println!("Type a number from 1 to {}.", options.len()),
+            }
+        }
+    }
+
+    fn confirm(&self, question: setup::Question) -> Result<bool, String> {
+        loop {
+            let answer = self.line(question, &format!("{} [y/n] ", question.text))?;
+            match answer.trim().to_lowercase().as_str() {
+                "y" | "yes" => return Ok(true),
+                "n" | "no" => return Ok(false),
+                _ => println!("Type y or n."),
+            }
+        }
+    }
+
+    fn text(&self, question: setup::Question) -> Result<String, String> {
+        self.line(question, &format!("{} ", question.text))
+    }
+
+    fn tell(&self, text: &str) {
+        println!("{text}");
+    }
+}
+
+/// What `kkt setup` does to this machine.
+struct OsSteps<'a> {
+    env: &'a Env,
+}
+
+impl setup::Steps for OsSteps<'_> {
+    fn install_service(&self, tailscale: bool) -> Result<setup::Installed, String> {
+        if tailscale {
+            return Err("sharing the service over Tailscale is not available yet; \
+                 run `kkt setup --no-tailscale`"
+                .to_string());
+        }
+        service(
+            self.env,
+            ServiceCommand::Install {
+                config: None,
+                db: None,
+                access_key_file: None,
+                no_access_key: false,
+                dry_run: false,
+            },
+        )?;
+        let no_flags = ConnectionFlags {
+            config: None,
+            url: None,
+            key_file: None,
+        };
+        let connection = serve_connection(self.env, no_flags, false)?;
+        Ok(setup::Installed {
+            url: connection.url,
+            key_file: connection.key_file,
+        })
+    }
+
+    fn install_docker(
+        &self,
+        _tailscale: bool,
+    ) -> Result<(setup::Installed, setup::DockerSetup), String> {
+        Err("setting up the server in Docker is not available yet; \
+             see docs/docker.md to do it by hand"
+            .to_string())
+    }
+
+    fn stage_key(&self, key: &str) -> Result<PathBuf, String> {
+        let dir = self
+            .env
+            .config_dir()
+            .ok_or("set HOME to keep the key in ~/.config/kkt")?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        let path = dir.join(format!("{}.partial", config::CLIENT_KEY_FILE_NAME));
+        write_key_file(&path, key, true)?;
+        Ok(path)
+    }
+
+    fn keep_key(&self, staged: &Path, url: &str) -> Result<PathBuf, String> {
+        let dir = staged.parent().unwrap_or(Path::new("."));
+        // One file per server, so a key for another server, which an
+        // earlier setup record may name, is never replaced.
+        let server: String = Sha256::digest(url.as_bytes())
+            .iter()
+            .take(6)
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let path = dir.join(format!("{}-{server}", config::CLIENT_KEY_FILE_NAME));
+        std::fs::rename(staged, &path)
+            .map_err(|e| format!("could not move the key to {}: {e}", path.display()))?;
+        Ok(path)
+    }
+
+    fn discard_key(&self, staged: &Path) -> Result<(), String> {
+        std::fs::remove_file(staged)
+            .map_err(|e| format!("could not remove {}: {e}", staged.display()))
+    }
+
+    fn detect_clients(&self) -> Vec<Client> {
+        let dirs: Vec<PathBuf> = std::env::var_os("PATH")
+            .map(|path| std::env::split_paths(&path).collect())
+            .unwrap_or_default();
+        let on_path = |program: &str| dirs.iter().any(|dir| dir.join(program).is_file());
+        Client::ALL
+            .into_iter()
+            .filter(|client| client.installed(self.env, &on_path))
+            .collect()
+    }
+
+    fn write_record(&self, record: &setup::Record) -> Result<(), String> {
+        let path = setup::record_path(self.env).ok_or("set HOME to keep the setup record")?;
+        let text = record.render()?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        }
+        // Written whole, then renamed over the old one, so a failure leaves
+        // the earlier record.
+        let partial = path.with_extension("toml.partial");
+        std::fs::write(&partial, text)
+            .and_then(|()| std::fs::rename(&partial, &path))
+            .map_err(|e| format!("could not write {}: {e}", path.display()))
+    }
+
+    fn connect(&self, client: Client, record: &setup::Record) -> Result<String, String> {
+        let executable = kkt_path()?;
+        let setup = Setup {
+            env: self.env,
+            url: &record.url,
+            executable: &executable,
+            key_file: record.key_file.as_deref(),
+        };
+        clients::configure(client, &setup, true)
+    }
+
+    fn doctor(&self, record: &setup::Record) -> Result<String, String> {
+        let checks = tokio::runtime::Handle::current().block_on(diagnostics::inspect(
+            &record.url,
+            record.key_file.as_deref(),
+        ))?;
+        match doctor_report(checks) {
+            (report, true) => Ok(report.trim_end().to_string()),
+            (report, false) => Err(report.trim_end().to_string()),
+        }
     }
 }
 
