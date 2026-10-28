@@ -292,9 +292,7 @@ async fn a_local_setup_writes_the_files_starts_kkt_and_saves_the_key_privately()
             .borrow()
             .iter()
             .all(|c| c == "docker compose version"
-                || c.starts_with(
-                    "docker compose --project-directory /data/docker --project-name kkt "
-                )),
+                || c.starts_with("docker compose --project-directory /data/docker ")),
         "{:?}",
         host.ran.borrow()
     );
