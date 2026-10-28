@@ -9,6 +9,7 @@
   <array>
     <string>/Users/sam/.cargo/bin/kkt</string>
     <string>serve</string>
+    <string>--ignore-setup</string>
     <string>--config</string>
     <string>/Users/sam/.config/kkt/config.toml</string>
     <string>--db</string>

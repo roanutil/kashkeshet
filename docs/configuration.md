@@ -23,6 +23,7 @@
 | `--instructions` | built in | A file to send agents in place of `agent-instructions.md` |
 | `--log-file` | stdout | Write the log to this file, kept under about 60 MB (see [Logs](#logs)) |
 | `--log-level` | `info` | How much kkt's own code logs: `error`, `warn`, `info`, `debug` or `trace` |
+| `--ignore-setup` | off | Start even on a machine `kkt setup` set up as a Docker server or a client, or whose kkt service is running. The service passes it |
 | `--dependency-log-level` | `warn` | How much the libraries kkt uses log: `error`, `warn` or `info` |
 
 The server refuses to start with settings that make no sense together, such

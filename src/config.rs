@@ -117,6 +117,8 @@ pub const XDG_CONFIG_HOME_DEFAULT: &str = ".config";
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 /// Where `kkt key create` writes a key, in the config directory.
 pub const ACCESS_KEY_FILE_NAME: &str = "access-key";
+/// The setup record `kkt setup` writes, in the config directory.
+pub const SETUP_FILE_NAME: &str = "setup.toml";
 
 // Client setup and diagnostics.
 pub const CODEX_CONFIG: &str = ".codex/config.toml";
