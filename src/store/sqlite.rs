@@ -22,6 +22,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0009_handoff_notes.sql"),
     include_str!("../../migrations/0010_hidden_entries.sql"),
     include_str!("../../migrations/0011_operator_instructions.sql"),
+    include_str!("../../migrations/0012_operator_channels.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
@@ -220,10 +221,24 @@ pub fn copy_database(from: &Path, to: &Path) -> StoreResult<()> {
 fn migrate(conn: &mut Connection) -> StoreResult<()> {
     let current: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     for (i, sql) in MIGRATIONS.iter().enumerate().skip(current.max(0) as usize) {
-        let tx = conn.transaction()?;
-        tx.execute_batch(sql)?;
-        tx.pragma_update(None, "user_version", (i + 1) as i64)?;
-        tx.commit()?;
+        // SQLite's table-rebuild procedure requires foreign keys off before
+        // the transaction, then an integrity check before committing.
+        conn.pragma_update(None, "foreign_keys", "OFF")?;
+        let result = (|| -> StoreResult<()> {
+            let tx = conn.transaction()?;
+            tx.execute_batch(sql)?;
+            let invalid = tx.prepare("PRAGMA foreign_key_check")?.exists([])?;
+            if invalid {
+                return Err(StoreError::Database(
+                    "migration violates foreign keys".into(),
+                ));
+            }
+            tx.pragma_update(None, "user_version", (i + 1) as i64)?;
+            tx.commit()?;
+            Ok(())
+        })();
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        result?;
     }
     Ok(())
 }
