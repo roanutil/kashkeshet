@@ -76,6 +76,21 @@ pub const DOCKER_IMAGE_USER_ID: u32 = 10001;
 pub const DOCKER_BACKUPS_DIR: &str = "backups";
 /// Where the Compose file mounts the backups folder in the container.
 pub const DOCKER_BACKUPS_MOUNT: &str = "/backups";
+/// The environment variables Compose reads, which would take the place of
+/// the managed folder's settings file if they were set where kkt runs, so
+/// every Docker command runs without them.
+pub const DOCKER_MANAGED_VARIABLES: &[&str] = &[
+    "COMPOSE_FILE",
+    "COMPOSE_PATH_SEPARATOR",
+    "COMPOSE_PROFILES",
+    "COMPOSE_PROJECT_NAME",
+    "COMPOSE_ENV_FILES",
+    "KKT_VERSION",
+    "KKT_PORT",
+    "TS_HOSTNAME",
+    "TS_TAILNET",
+    "TS_AUTHKEY",
+];
 /// How long to wait for someone to log the Tailscale container in.
 pub const DOCKER_LOGIN_WAIT: Duration = Duration::from_secs(10 * 60);
 /// How long to wait for the kkt container to start and make its access key.
