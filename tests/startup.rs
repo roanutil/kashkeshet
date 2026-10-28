@@ -30,6 +30,7 @@ async fn a_bad_allowed_host_stops_the_server_naming_the_setting() {
             "--no-access-key",
         ])
         .env("HOME", &dir)
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
         .kill_on_drop(true)

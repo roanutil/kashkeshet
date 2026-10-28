@@ -113,7 +113,8 @@ out how to organize themselves. Have them tell you what works and what doesn't.
 2. Remove the client entry per your client's instructions and restart the client.
    For some common clients:
 
-   - Claude Code: `claude mcp remove kkt`.
+   - Claude Code: `claude mcp remove kkt`, with `CLAUDE_CONFIG_DIR` set to the
+     directory holding the `.claude.json` you connected (unset for `~/.claude.json`).
    - Codex: delete `[mcp_servers.kkt]` and its nested tables from
      `~/.codex/config.toml`.
    - OpenCode: delete `mcp.kkt` from `~/.config/opencode/opencode.json`.

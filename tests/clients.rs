@@ -21,6 +21,7 @@ impl Home {
     fn env(&self) -> Env {
         Env {
             home: Some(self.0.clone()),
+            claude_config_dir: None,
             xdg_config_home: None,
             xdg_data_home: None,
         }
@@ -44,11 +45,13 @@ fn previews_use_vendor_shapes_and_never_show_the_key() {
     let home = Home::new();
     let key = home.put("key", &format!("{KEY}\n"));
     let env = home.env();
+    let client_config = home.0.join(".claude.json");
     let setup = Setup {
         env: &env,
         url: "http://127.0.0.1:7420/mcp",
         executable: Path::new("/path with ' quote/kkt"),
         key_file: Some(&key),
+        client_config: &client_config,
     };
     for (client, required) in [
         (Client::ClaudeCode, "headersHelper"),
@@ -71,6 +74,29 @@ fn previews_use_vendor_shapes_and_never_show_the_key() {
 }
 
 #[test]
+fn claude_rejects_custom_filenames_before_modifying_files() {
+    let home = Home::new();
+    let original = "{}";
+    let file = home.put("profile/custom.json", original);
+    let env = home.env();
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: None,
+        client_config: &file,
+    };
+    for write in [false, true] {
+        let error = clients::configure(Client::ClaudeCode, &setup, write)
+            .expect_err("unsupported Claude filename");
+        assert!(error.contains("must be named .claude.json"), "{error}");
+        assert_eq!(std::fs::read_to_string(&file).expect("config"), original);
+        assert!(!file.with_file_name("custom.json.bak").exists());
+        assert!(!file.with_file_name(".claude.json").exists());
+    }
+}
+
+#[test]
 fn codex_merge_preserves_comments_other_servers_and_options_and_is_idempotent() {
     let home = Home::new();
     let original = "# keep my comment\nmodel = 'custom'\n[mcp_servers.other]\ncommand = 'other'\n[mcp_servers.kkt]\nurl = 'http://old/mcp'\nbearer_token_env_var = 'OLD_KEY'\ntool_timeout_sec = 91\n";
@@ -82,6 +108,7 @@ fn codex_merge_preserves_comments_other_servers_and_options_and_is_idempotent() 
         url: "https://tail.example/mcp",
         executable: Path::new("/opt/kkt"),
         key_file: Some(&key),
+        client_config: &file,
     };
     clients::configure(Client::Codex, &setup, true).expect("write");
     let first = std::fs::read_to_string(&file).expect("config");
@@ -133,6 +160,7 @@ fn json_clients_merge_without_losing_other_settings_and_back_up_once() {
             url: "http://localhost:7420/mcp",
             executable: Path::new("/opt/kkt"),
             key_file: Some(&key),
+            client_config: &file,
         };
         let out = clients::configure(client, &setup, true).expect("write");
         assert!(!out.contains(KEY));
@@ -210,6 +238,7 @@ fn malformed_client_files_are_left_intact_and_errors_do_not_echo_secrets() {
             url: "http://localhost:7420/mcp",
             executable: Path::new("/opt/kkt"),
             key_file: None,
+            client_config: &file,
         };
         let error = clients::configure(client, &setup, true).expect_err("invalid");
         assert!(!error.contains(KEY));
@@ -222,11 +251,14 @@ fn legacy_antigravity_path_is_used_when_it_is_the_existing_file() {
     let home = Home::new();
     let file = home.put(".gemini/antigravity/mcp_config.json", "{}");
     let env = home.env();
+    let client_config = Client::Agy.file(&env).expect("legacy config path");
+    assert_eq!(client_config, file);
     let setup = Setup {
         env: &env,
         url: "http://localhost:7420/mcp",
         executable: Path::new("/opt/kkt"),
         key_file: None,
+        client_config: &client_config,
     };
     clients::configure(Client::Agy, &setup, true).expect("write");
     assert!(
@@ -248,6 +280,7 @@ fn later_changes_keep_the_original_backup_and_save_the_previous_configuration() 
         url: "http://localhost:7420/mcp",
         executable: Path::new("/opt/kkt"),
         key_file: None,
+        client_config: &file,
     };
     clients::configure(Client::OpenCode, &setup, true).expect("first");
     let first = std::fs::read_to_string(&file).expect("first");
@@ -275,6 +308,7 @@ fn opencode_refuses_key_paths_its_file_substitution_cannot_represent() {
             url: "http://localhost:7420/mcp",
             executable: Path::new("/opt/kkt"),
             key_file: Some(&key),
+            client_config: Path::new(".config/opencode/opencode.json"),
         };
         let error =
             clients::configure(Client::OpenCode, &setup, true).expect_err("unsupported reference");
@@ -296,6 +330,7 @@ fn codex_accepts_inline_server_tables_without_losing_existing_entries() {
         url: "http://localhost:7420/mcp",
         executable: Path::new("/opt/kkt"),
         key_file: None,
+        client_config: &file,
     };
     clients::configure(Client::Codex, &setup, true).expect("inline write");
     let contents = std::fs::read_to_string(file).expect("config");
@@ -329,6 +364,7 @@ fn opencode_local_to_remote_conversion_removes_local_only_options() {
         url: "http://localhost:7420/mcp",
         executable: Path::new("/opt/kkt"),
         key_file: None,
+        client_config: &file,
     };
     clients::configure(Client::OpenCode, &setup, true).expect("convert");
     let parsed: serde_json::Value =
@@ -345,4 +381,39 @@ fn opencode_local_to_remote_conversion_removes_local_only_options() {
         );
     }
     assert_eq!(parsed["mcp"]["other"]["environment"]["KEEP"], "yes");
+}
+
+#[test]
+fn claude_profile_path_does_not_require_home() {
+    let mut env = Home::new().env();
+    env.home = None;
+    env.claude_config_dir = Some(PathBuf::from("/profiles/work"));
+    assert_eq!(
+        Client::ClaudeCode.file(&env).expect("profile path"),
+        PathBuf::from("/profiles/work/.claude.json")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_reports_a_profile_directory_it_cannot_resolve() {
+    let home = Home::new();
+    let file = home.put(".claude.json", "{}");
+    let looped = home.0.join("loop");
+    std::os::unix::fs::symlink(&looped, &looped).expect("symlink loop");
+    let mut env = home.env();
+    env.claude_config_dir = Some(looped.join("profile"));
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: None,
+        client_config: &file,
+    };
+    let error = clients::configure(Client::ClaudeCode, &setup, false)
+        .expect_err("unresolvable profile directory");
+    assert!(
+        error.contains("could not resolve client config path"),
+        "{error}"
+    );
 }

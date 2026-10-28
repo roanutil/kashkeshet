@@ -93,6 +93,7 @@ async fn refused_start(file: &std::path::Path, db: &std::path::Path) -> String {
         .arg("--access-key-file")
         .arg(file)
         .env("HOME", home)
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
         .stdout(Stdio::piped())

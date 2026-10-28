@@ -32,6 +32,8 @@ impl Platform {
 pub struct Env {
     /// `$HOME`.
     pub home: Option<PathBuf>,
+    /// `$CLAUDE_CONFIG_DIR`.
+    pub claude_config_dir: Option<PathBuf>,
     /// `$XDG_CONFIG_HOME`.
     pub xdg_config_home: Option<PathBuf>,
     /// `$XDG_DATA_HOME`.
@@ -97,6 +99,7 @@ mod tests {
     fn env(home: Option<&str>, config: Option<&str>, data: Option<&str>) -> Env {
         Env {
             home: home.map(PathBuf::from),
+            claude_config_dir: None,
             xdg_config_home: config.map(PathBuf::from),
             xdg_data_home: data.map(PathBuf::from),
         }

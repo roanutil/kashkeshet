@@ -188,8 +188,15 @@ pub(super) fn preview(client: Client, setup: &Setup<'_>) -> Result<String, Strin
     if client == Client::ClaudeCode {
         let entry =
             claude_entry(&serde_json::to_string(&doc).map_err(|_| "could not encode config")?)?;
+        let environment = match super::claude_config_dir(setup)? {
+            Some(dir) => format!(
+                "CLAUDE_CONFIG_DIR={}",
+                super::shell_word(dir.to_str().ok_or("the client config path is not UTF-8")?)
+            ),
+            None => "env -u CLAUDE_CONFIG_DIR".to_string(),
+        };
         return Ok(format!(
-            "claude mcp add-json --scope user kkt {}",
+            "{environment} claude mcp add-json --scope user kkt {}",
             super::shell_word(&entry)
         ));
     }
@@ -232,4 +239,36 @@ pub(super) fn claude_entry(text: &str) -> Result<String, String> {
         .and_then(|s| s.get("kkt"))
         .ok_or("missing kkt entry")?;
     serde_json::to_string(entry).map_err(|_| "could not encode Claude config".into())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::clients::Setup;
+    use crate::settings::Env;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn claude_preview_reports_a_non_utf8_profile_directory() {
+        let env = Env {
+            home: None,
+            claude_config_dir: None,
+            xdg_config_home: None,
+            xdg_data_home: None,
+        };
+        let file = PathBuf::from(OsString::from_vec(b"/profiles/\xff/.claude.json".to_vec()));
+        let setup = Setup {
+            env: &env,
+            url: "http://localhost:7420/mcp",
+            executable: Path::new("/opt/kkt"),
+            key_file: None,
+            client_config: &file,
+        };
+        assert_eq!(
+            preview(Client::ClaudeCode, &setup).expect_err("non-UTF-8 directory"),
+            "the client config path is not UTF-8"
+        );
+    }
 }

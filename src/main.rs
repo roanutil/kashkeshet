@@ -83,6 +83,10 @@ enum Command {
         client: String,
         #[command(flatten)]
         connection: ConnectionFlags,
+        /// The client's config file (otherwise the client's default). The
+        /// client must be set up to read this file itself.
+        #[arg(long)]
+        client_config: Option<PathBuf>,
         /// Back up the client's config, then apply the change.
         #[arg(long)]
         write: bool,
@@ -378,7 +382,13 @@ fn client_connection(
     Ok(Connection { url, key_file })
 }
 
-fn connect(env: &Env, client: &str, flags: ConnectionFlags, write: bool) -> Result<(), String> {
+fn connect(
+    env: &Env,
+    client: &str,
+    flags: ConnectionFlags,
+    client_config: Option<PathBuf>,
+    write: bool,
+) -> Result<(), String> {
     let client = match client {
         "claude-code" => Client::ClaudeCode,
         "codex" => Client::Codex,
@@ -390,11 +400,16 @@ fn connect(env: &Env, client: &str, flags: ConnectionFlags, write: bool) -> Resu
     let executable = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|e| format!("could not find kkt's path: {e}"))?;
+    let client_config = match client_config {
+        Some(path) => path,
+        None => client.file(env)?,
+    };
     let setup = Setup {
         env,
         url: &connection.url,
         executable: &executable,
         key_file: connection.key_file.as_deref(),
+        client_config: &client_config,
     };
     println!("{}", clients::configure(client, &setup, write)?);
     Ok(())
@@ -484,8 +499,9 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
         Command::Connect {
             client,
             connection,
+            client_config,
             write,
-        } => connect(env, &client, connection, write),
+        } => connect(env, &client, connection, client_config, write),
         Command::Doctor { connection } => doctor(env, connection).await,
     }
 }
@@ -549,6 +565,7 @@ fn process_env() -> Env {
     };
     Env {
         home: var("HOME"),
+        claude_config_dir: var("CLAUDE_CONFIG_DIR"),
         xdg_config_home: var("XDG_CONFIG_HOME"),
         xdg_data_home: var("XDG_DATA_HOME"),
     }

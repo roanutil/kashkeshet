@@ -152,6 +152,7 @@ mod tests {
     fn env() -> Env {
         Env {
             home: Some(PathBuf::from("/home/sam")),
+            claude_config_dir: None,
             xdg_config_home: None,
             xdg_data_home: None,
         }
@@ -254,6 +255,7 @@ mod tests {
     fn home_paths_need_a_home() {
         let no_home = Env {
             home: None,
+            claude_config_dir: None,
             xdg_config_home: None,
             xdg_data_home: None,
         };

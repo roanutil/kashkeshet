@@ -36,6 +36,7 @@ fn kkt(home: &Path, args: &[&str]) -> Command {
     command
         .args(args)
         .env("HOME", home)
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
         .kill_on_drop(true);

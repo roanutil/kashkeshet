@@ -37,6 +37,7 @@ pub async fn stops_cleanly(signal: &str, log_signal: &str, open: OpenRequest) {
         .arg(dir.join("server.db"))
         .args(["--bind", &addr.to_string(), "--no-access-key"])
         .env("HOME", &dir)
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
         .stdout(Stdio::piped())
