@@ -771,3 +771,49 @@ async fn a_silent_tailscale_container_is_not_called_logged_out() {
         "{said}"
     );
 }
+
+#[tokio::test]
+async fn doctor_does_not_tell_a_docker_or_client_machine_to_start_the_service() {
+    // The server is not answering, as when the Tailscale machine is off the
+    // tailnet. The old fix, `kkt service start`, is wrong on these machines.
+    let said = tailscale_docker_output("ts-doctor-hint", "doctor", Some(LOGIN_NEEDED)).await;
+    assert!(said.contains("problem: server"), "{said}");
+    assert!(!said.contains("kkt service start"), "{said}");
+    assert!(
+        said.contains("see the lines below, or run `kkt status`"),
+        "{said}"
+    );
+    // A client machine's server is on another machine.
+    let home = temp_home("doctor-hint-client");
+    write_record(
+        &home,
+        &format!(
+            "format = 1\nmode = \"client\"\nwritten_by = \"0.4.0\"\nurl = \"http://{}/mcp\"\n",
+            free_bind()
+        ),
+    );
+    let out = tokio::time::timeout(
+        TIMEOUT,
+        Command::new(KKT)
+            .arg("doctor")
+            .env("HOME", &home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("doctor should finish")
+    .expect("run kkt");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!said.contains("kkt service start"), "{said}");
+    assert!(
+        said.contains("the server runs on another machine"),
+        "{said}"
+    );
+    let _ = std::fs::remove_dir_all(&home);
+}
