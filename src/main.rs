@@ -672,7 +672,9 @@ fn docker_check(
             DOCKER_CHECK,
             "not running",
             format!(
-                "start it with `docker compose --project-directory {} up -d`",
+                // From inside the folder: Compose reads a relative
+                // COMPOSE_FILE in .env against the current folder.
+                "start it with `cd {} && docker compose up -d`",
                 clients::shell_word(&shown)
             ),
         ),
