@@ -1,8 +1,9 @@
 //! Looking at, backing up, upgrading, stopping and removing kkt in Docker.
 
-use super::compose::compose;
+use super::compose::{compose, tailscale_status};
 use super::files::{ENV_FILE, set_version, version_in_env, write_embedded, write_env};
 use super::provision::{run, run_attached};
+use super::tailscale::parse_status;
 use super::{DockerError, Folder, Host};
 use crate::config::DOCKER_BACKUPS_MOUNT;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,21 @@ pub struct State {
     pub version: Option<String>,
     /// Whether it is set up to be served over Tailscale.
     pub tailscale: bool,
+    /// The Tailscale container's login, for a setup served over Tailscale.
+    pub login: Option<Login>,
+}
+
+/// Whether the Tailscale container is logged in to the tailnet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Login {
+    LoggedIn,
+    /// Not logged in: the machine's key expired, or it was logged out. It is
+    /// off the tailnet until someone logs it in again.
+    NeedsLogin,
+    /// The Tailscale container does not answer, such as when it is not running.
+    Unreachable,
+    /// Some other state, as Tailscale names it.
+    Other(String),
 }
 
 pub fn status(host: &dyn Host, folder: &Folder) -> Result<State, DockerError> {
@@ -28,6 +44,7 @@ pub fn status(host: &dyn Host, folder: &Folder) -> Result<State, DockerError> {
             running: false,
             version: None,
             tailscale: false,
+            login: None,
         });
     }
     let env = host
@@ -42,13 +59,36 @@ pub fn status(host: &dyn Host, folder: &Folder) -> Result<State, DockerError> {
             detail: done.detail(),
         });
     }
+    let tailscale = env
+        .lines()
+        .any(|l| l.trim() == "COMPOSE_FILE=compose.tailscale.yaml");
+    let login = if tailscale {
+        Some(login_state(host, folder)?)
+    } else {
+        None
+    };
     Ok(State {
         files_present: true,
         running: done.stdout.lines().any(|l| l.trim() == "kkt"),
         version: version_in_env(&env),
-        tailscale: env
-            .lines()
-            .any(|l| l.trim() == "COMPOSE_FILE=compose.tailscale.yaml"),
+        tailscale,
+        login,
+    })
+}
+
+/// Asks the Tailscale container whether it is logged in.
+fn login_state(host: &dyn Host, folder: &Folder) -> Result<Login, DockerError> {
+    let done = run(host, &tailscale_status(folder))?;
+    if !done.success() {
+        return Ok(Login::Unreachable);
+    }
+    Ok(match parse_status(&done.stdout) {
+        Ok(node) => match node.backend_state.as_str() {
+            "Running" => Login::LoggedIn,
+            "NeedsLogin" => Login::NeedsLogin,
+            other => Login::Other(other.to_string()),
+        },
+        Err(_) => Login::Other("an unreadable answer".to_string()),
     })
 }
 

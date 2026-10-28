@@ -1,14 +1,14 @@
 //! Setting kkt up in Docker: files, folder ownership, the Tailscale login,
 //! starting the containers and saving the access key.
 
-use super::compose::{compose, version};
+use super::compose::{compose, tailscale_status, version};
 use super::files::{create_dir, env_text, write_embedded, write_env};
 use super::tailscale::{parse_status, split_name};
 use super::{DockerError, Folder, Host, Inputs, LoginLink};
 use crate::clock::Clock;
 use crate::config::{
-    DOCKER_BACKUPS_MOUNT, DOCKER_IMAGE_USER_ID, DOCKER_LOGIN_WAIT, DOCKER_POLL_INTERVAL,
-    DOCKER_START_WAIT,
+    DOCKER_BACKUPS_MOUNT, DOCKER_IMAGE_USER_ID, DOCKER_LINK_WAIT_POLLS, DOCKER_LOGIN_WAIT,
+    DOCKER_POLL_INTERVAL, DOCKER_START_WAIT,
 };
 use std::path::Path;
 use std::time::Duration;
@@ -113,11 +113,12 @@ async fn log_in(
     login: &dyn LoginLink,
     folder: &Folder,
 ) -> Result<(String, String), DockerError> {
-    let status = compose(
-        folder,
-        &["exec", "-T", "tailscale", "tailscale", "status", "--json"],
-    );
+    let status = tailscale_status(folder);
     let mut said_link = false;
+    // Polls spent logged out with no link, and whether the container has been
+    // restarted for one.
+    let mut without_link = 0;
+    let mut restarted = false;
     let found = poll(clock, DOCKER_LOGIN_WAIT, DOCKER_POLL_INTERVAL, || {
         let done = run(host, &status)?;
         if !done.success() {
@@ -128,6 +129,17 @@ async fn log_in(
         match node.backend_state.as_str() {
             "Running" => Ok(Some(node)),
             "NeedsLogin" => {
+                if node.auth_url.is_none() && !said_link && !restarted {
+                    without_link += 1;
+                    if without_link >= DOCKER_LINK_WAIT_POLLS {
+                        // A node that was logged in before, and whose key then
+                        // expired or was removed, is not asking for a login
+                        // until it starts again.
+                        host.say("Tailscale needs you to log in again. Restarting it to get a login link...");
+                        run_attached(host, &compose(folder, &["restart", "tailscale"]))?;
+                        restarted = true;
+                    }
+                }
                 if let Some(url) = &node.auth_url {
                     if !said_link {
                         login.show(url);

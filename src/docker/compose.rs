@@ -18,6 +18,14 @@ pub(super) fn compose(folder: &Folder, args: &[&str]) -> Command {
     }
 }
 
+/// `tailscale status --json` in the Tailscale container.
+pub(super) fn tailscale_status(folder: &Folder) -> Command {
+    compose(
+        folder,
+        &["exec", "-T", "tailscale", "tailscale", "status", "--json"],
+    )
+}
+
 /// `docker compose version`, which only works if Docker and its Compose
 /// plugin are installed.
 pub(super) fn version() -> Command {

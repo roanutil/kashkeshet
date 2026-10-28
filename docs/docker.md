@@ -206,6 +206,13 @@ connect at all, use Tailscale's access controls.
 
 Either container can be restarted alone.
 
+If the Tailscale machine's key expires, or it is logged out, it drops off the
+tailnet while kkt keeps running on the host. With `kkt setup`, `kkt status`
+and `kkt doctor` say so, and running `kkt setup` again logs it in (see
+[Setup](setup.md#when-the-machine-needs-to-log-in-again)). By hand, restart
+the Tailscale container and use the link in its log:
+`cd '<folder>' && docker compose restart tailscale && docker compose logs tailscale`.
+
 If a machine named `TS_HOSTNAME` is already on your tailnet, Tailscale names
 the new one `<name>-1`, and kkt, which is told the name you set, refuses
 requests to the new name. Remove the old machine in the Tailscale admin
