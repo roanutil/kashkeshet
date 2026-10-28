@@ -239,6 +239,16 @@ The Tailscale container uses userspace networking, so it needs no
 certificates must be enabled for your tailnet in the Tailscale admin
 console.
 
+Tailscale machine keys expire after 180 days by default (your tailnet's
+policy can differ). For a server that should stay connected, open the
+admin console's **Machines** page, find the kkt machine, and choose
+**Disable key expiry** from its menu. Otherwise it needs reauthentication
+when the key expires; see [Tailscale's key expiry guide](https://tailscale.com/docs/features/access-control/key-expiry).
+
+HTTPS certificates put the machine's full DNS name, including its machine
+and tailnet names, in public Certificate Transparency logs. Choose names
+you are comfortable making public; see [Tailscale's HTTPS guide](https://tailscale.com/docs/how-to/set-up-https-certificates).
+
 ## Building the image yourself
 
 ```
