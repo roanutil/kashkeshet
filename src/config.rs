@@ -59,6 +59,12 @@ const _: () = assert!(NEW_ACCESS_KEY_CHARS >= MIN_ACCESS_KEY_BYTES);
 /// Unix permissions of a key file `kkt key create` writes: only the owner
 /// may read or write it.
 pub const ACCESS_KEY_FILE_MODE: u32 = 0o600;
+/// Unix permissions of a backup's folder, which holds a copy of the access
+/// key: only the owner may list or enter it.
+pub const BACKUP_FOLDER_MODE: u32 = 0o700;
+/// The folder, beside the database file, where the server keeps the backups
+/// it makes before upgrading the database.
+pub const UPGRADE_BACKUP_FOLDER: &str = "upgrade-backups";
 /// Smallest allowed `max_response_bytes`. A smaller cap could cut a
 /// registration answer, and with it the agent's token.
 pub const MIN_RESPONSE_BYTES: usize = 1024;
@@ -364,6 +370,9 @@ pub struct Limits {
     /// the live view, which drops the oldest as new ones arrive. A channel
     /// page's "Show previous" button loads this many earlier ones at a time.
     pub web_page_messages: usize,
+    /// How many of the backups the server makes before upgrading the
+    /// database it keeps; older ones are removed.
+    pub upgrade_backups_kept: usize,
 }
 
 impl Limits {
@@ -389,6 +398,7 @@ impl Limits {
         purpose_preview_chars: 120,
         web_session_lifetime: Duration::from_secs(12 * 60 * 60),
         web_page_messages: 100,
+        upgrade_backups_kept: 5,
     };
 
     /// Checks that these limits make sense together. The server refuses to
@@ -413,6 +423,7 @@ impl Limits {
             ),
             ("max_agents", self.max_agents),
             ("web_page_messages", self.web_page_messages),
+            ("upgrade_backups_kept", self.upgrade_backups_kept),
         ];
         if let Some((name, _)) = at_least_one.iter().find(|(_, value)| *value == 0) {
             return Err(InvalidSetting::new(name, "must be at least 1"));

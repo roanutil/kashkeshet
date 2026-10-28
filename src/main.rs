@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use kashkeshet::admission::{Admission, SharedKey};
 use kashkeshet::app::{self, AppConfig, Parts};
+use kashkeshet::backup;
 use kashkeshet::clients::{self, Client, Setup};
 use kashkeshet::clock::{Clock, SystemClock};
 use kashkeshet::config::{
@@ -15,7 +16,7 @@ use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::service::{DryRun, Manager, OsSystem, Spec};
 use kashkeshet::settings::{self, AccessKey, Env, Platform, ServeOptions, ServeSettings};
 use kashkeshet::shutdown::{Shutdown, StopSignals};
-use kashkeshet::store::Db;
+use kashkeshet::store::{self, Db};
 use kashkeshet::{Operator, Revoked};
 use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
@@ -70,6 +71,24 @@ enum Command {
         db: Option<PathBuf>,
         /// The config file, as for `kkt serve`.
         #[arg(long, global = true)]
+        config: Option<PathBuf>,
+    },
+    /// Back up the server's database, config file and access key into a new
+    /// folder inside FOLDER. Safe while the server runs.
+    ///
+    /// The new folder is named for the time and this kkt's version, such as
+    /// kkt-20261028T131500.123Z-v0.3.0, so backups sort by time. It and the
+    /// key in it are readable only by you.
+    Backup {
+        /// Where to put the backup. Created if missing.
+        folder: PathBuf,
+        /// The server's database file. By default the one `kkt serve` uses:
+        /// the config file's `db`, else kashkeshet.db in the per-user data
+        /// directory.
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// The config file, as for `kkt serve`.
+        #[arg(long)]
         config: Option<PathBuf>,
     },
     /// Run `kkt serve` in the background: launchd on macOS, systemd on Linux.
@@ -235,6 +254,11 @@ struct ServeFlags {
     sends_per_minute: Option<u32>,
     #[arg(long, help = format!("Seconds completed waits remain listening [default: {}]", Limits::DEFAULT.waiting_grace.as_secs()))]
     waiting_grace_seconds: Option<u32>,
+    #[arg(long, help = format!(
+        "Backups the server keeps of those it makes before upgrading the database [default: {}]",
+        Limits::DEFAULT.upgrade_backups_kept
+    ))]
+    upgrade_backups_kept: Option<usize>,
     /// A browser origin allowed to call /mcp, e.g. http://localhost:6274 for
     /// MCP Inspector. Repeat for more. By default no browser origin is allowed.
     #[arg(long = "allow-origin")]
@@ -287,6 +311,7 @@ impl ServeFlags {
             max_limit: self.max_limit,
             sends_per_minute: self.sends_per_minute,
             waiting_grace_seconds: self.waiting_grace_seconds,
+            upgrade_backups_kept: self.upgrade_backups_kept,
             allow_origins: list(self.allow_origins),
             allow_hosts: list(self.allow_hosts),
             instructions: self.instructions,
@@ -481,6 +506,7 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
             config,
         } => agent(env, command, db, config).await,
         Command::Service { command } => service(env, command),
+        Command::Backup { folder, db, config } => backup(env, &folder, db, config),
         Command::Key {
             command: KeyCommand::Header { key_file, json },
         } => key_header(env, key_file, json),
@@ -673,21 +699,7 @@ async fn agent(
     db: Option<PathBuf>,
     config: Option<PathBuf>,
 ) -> Result<(), String> {
-    let path = match db {
-        Some(path) => path,
-        None => match read_config(env, config)?.1.db {
-            Some(path) => path,
-            None => env.default_db(Platform::CURRENT).ok_or(
-                "no home directory to find the database in: set HOME or pass --db".to_string(),
-            )?,
-        },
-    };
-    if !path.exists() {
-        return Err(format!(
-            "no database at {}; pass --db with the server's database file",
-            path.display()
-        ));
-    }
+    let path = existing_db(env, db, &read_config(env, config)?.1)?;
     let db = Db::open(&path).map_err(|e| format!("could not open {}: {e}", path.display()))?;
     let operator = Operator::new(db, Arc::new(SystemClock));
     match command {
@@ -718,6 +730,119 @@ async fn agent(
                 Revoked::Already { at } => println!("{name} was already revoked at {at}"),
             }
         }
+    }
+    Ok(())
+}
+
+/// The database file `kkt serve` would use with the config file's `options`,
+/// unless `db` names another. It must exist.
+fn existing_db(env: &Env, db: Option<PathBuf>, options: &ServeOptions) -> Result<PathBuf, String> {
+    let path = match db.or_else(|| options.db.clone()) {
+        Some(path) => path,
+        None => env.default_db(Platform::CURRENT).ok_or(
+            "no home directory to find the database in: set HOME or pass --db".to_string(),
+        )?,
+    };
+    if !path.exists() {
+        return Err(format!(
+            "no database at {}; pass --db with the server's database file",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+/// `kkt backup`: backs up the database `kkt serve` would use (or `db`),
+/// with the config file and access key it would read, into `folder`.
+fn backup(
+    env: &Env,
+    folder: &Path,
+    db: Option<PathBuf>,
+    config: Option<PathBuf>,
+) -> Result<(), String> {
+    let (config_file, options) = read_config(env, config)?;
+    let database = existing_db(env, db, &options)?;
+    let access_key = match (&options.access_key_file, options.no_access_key) {
+        (Some(path), _) => Some(path.clone()),
+        (None, Some(true)) => None,
+        (None, _) => env.access_key_file().filter(|path| path.exists()),
+    };
+    let contents = backup::Contents {
+        database: &database,
+        config: config_file.as_deref(),
+        access_key: access_key.as_deref(),
+    };
+    let written = write_backup(folder, &SystemClock, &contents)?;
+    println!("Backed up to {}", written.display());
+    println!("  database {}", database.display());
+    if let Some(path) = &config_file {
+        println!("  config file {}", path.display());
+    }
+    match &access_key {
+        Some(path) => println!("  access key {}", path.display()),
+        None => println!("  no access key"),
+    }
+    Ok(())
+}
+
+/// Writes a backup of `contents` into `folder`, copying the database with
+/// SQLite's online backup.
+fn write_backup(
+    folder: &Path,
+    clock: &dyn Clock,
+    contents: &backup::Contents,
+) -> Result<PathBuf, String> {
+    backup::write(
+        folder,
+        clock.now(),
+        Build::CURRENT.version,
+        contents,
+        |from, to| store::copy_database(from, to).map_err(|e| e.to_string()),
+    )
+}
+
+/// Before the server upgrades the database's tables, backs it up beside it
+/// (with the config and key files) and prunes those backups to the newest
+/// `keep`. Any failure to back up stops the server before the database is
+/// changed.
+fn backup_before_upgrade(
+    contents: &backup::Contents,
+    keep: usize,
+    clock: &dyn Clock,
+) -> Result<(), String> {
+    let database = contents.database;
+    let Some(upgrade) = store::pending_upgrade(database)
+        .map_err(|e| format!("could not read {}: {e}", database.display()))?
+    else {
+        return Ok(());
+    };
+    let folder = database
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(config::UPGRADE_BACKUP_FOLDER);
+    let written = write_backup(&folder, clock, contents).map_err(|e| {
+        format!(
+            "the database needs upgrading (schema {} to {}), and kkt backs it up first, \
+             but the backup failed, so the server did not start and the database is \
+             unchanged: {e}",
+            upgrade.from, upgrade.to
+        )
+    })?;
+    tracing::info!(
+        "backed up the database to {} before upgrading it from schema {} to {}",
+        written.display(),
+        upgrade.from,
+        upgrade.to
+    );
+    // The backup is made, so the upgrade is safe; an old backup left behind
+    // only takes space.
+    match backup::prune(&folder, keep) {
+        Ok(removed) => {
+            for path in removed {
+                tracing::info!("removed the old backup {}", path.display());
+            }
+        }
+        Err(e) => tracing::warn!("could not remove old backups: {e}"),
     }
     Ok(())
 }
@@ -805,14 +930,27 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
 
 async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String> {
     make_default_key(&settings.access_key)?;
+    let key_file = match &settings.access_key {
+        AccessKey::None => None,
+        AccessKey::File(path) | AccessKey::Default(path) => Some(path.clone()),
+    };
     let Checked {
         db_path,
         bind,
         config,
     } = check_settings(settings, sources)?;
+    let clock = Arc::new(SystemClock);
+    backup_before_upgrade(
+        &backup::Contents {
+            database: &db_path,
+            config: sources.file.as_ref().map(|(path, _)| path.as_path()),
+            access_key: key_file.as_deref(),
+        },
+        config.limits.upgrade_backups_kept,
+        clock.as_ref(),
+    )?;
     let db =
         Db::open(&db_path).map_err(|e| format!("could not open {}: {e}", db_path.display()))?;
-    let clock = Arc::new(SystemClock);
     let run = ServerRun::new(Build::CURRENT, &config);
     let access = match config.admission.key_source() {
         Some(file) => format!("access key from {file}"),

@@ -32,6 +32,8 @@ pub struct ServeOptions {
     pub max_limit: Option<usize>,
     pub sends_per_minute: Option<u32>,
     pub waiting_grace_seconds: Option<u32>,
+    /// How many backups made before upgrading the database to keep.
+    pub upgrade_backups_kept: Option<usize>,
     pub allow_origins: Option<Vec<String>>,
     pub allow_hosts: Option<Vec<String>>,
     pub instructions: Option<PathBuf>,
@@ -57,6 +59,7 @@ impl ServeOptions {
         max_limit: None,
         sends_per_minute: None,
         waiting_grace_seconds: None,
+        upgrade_backups_kept: None,
         allow_origins: None,
         allow_hosts: None,
         instructions: None,
@@ -81,6 +84,7 @@ impl ServeOptions {
             waiting_grace_seconds: self
                 .waiting_grace_seconds
                 .or(fallback.waiting_grace_seconds),
+            upgrade_backups_kept: self.upgrade_backups_kept.or(fallback.upgrade_backups_kept),
             allow_origins: self.allow_origins.or(fallback.allow_origins),
             allow_hosts: self.allow_hosts.or(fallback.allow_hosts),
             instructions: self.instructions.or(fallback.instructions),
@@ -103,6 +107,7 @@ impl ServeOptions {
             "max_limit" => self.max_limit.is_some(),
             "sends_per_minute" => self.sends_per_minute.is_some(),
             "waiting_grace" => self.waiting_grace_seconds.is_some(),
+            "upgrade_backups_kept" => self.upgrade_backups_kept.is_some(),
             "allow_origin" | "allow_origins" => self.allow_origins.is_some(),
             "allow_host" | "allow_hosts" => self.allow_hosts.is_some(),
             "instructions" => self.instructions.is_some(),
@@ -161,6 +166,9 @@ impl ServeOptions {
                     .waiting_grace_seconds
                     .map(|s| std::time::Duration::from_secs(u64::from(s)))
                     .unwrap_or(defaults.waiting_grace),
+                upgrade_backups_kept: self
+                    .upgrade_backups_kept
+                    .unwrap_or(defaults.upgrade_backups_kept),
                 ..defaults
             },
             allow_origins: self.allow_origins.unwrap_or_default(),

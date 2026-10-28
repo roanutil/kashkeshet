@@ -38,6 +38,7 @@ require reading another's internals.
 | `diagnostics.rs` | Read-only key and HTTP/MCP connection checks, in our own result types | Register agents or change server data |
 | `config.rs` | Every limit, fixed setting and default, and the startup checks | Hold logic beyond checking settings |
 | `provenance/` | What produced a server run | |
+| `backup/` | Backup folders: their names, contents, file modes, and pruning the ones made before database upgrades | Copy the database itself (it is given the store's `copy_database`); read the clock |
 | `events.rs` | New-message notifications for waiting agents and the web page | Decide who may see a message |
 | `shutdown.rs` | The stop signal (Ctrl-C, SIGTERM) and the `Shutdown` that ends the server | |
 | `logs.rs` | A log file the server writes itself, rolled over and pruned by `config::LogPolicy`, timed by the injected `Clock` | Decide what is logged (that is `main.rs`'s filter) |
@@ -179,6 +180,9 @@ Where the tests are:
 - `tests/kkt.rs`, `tests/serve.rs`, `tests/startup.rs`, `tests/key.rs`: the
   `kkt` command, `kkt serve` with its config file and defaults, settings it
   must refuse, and `kkt key create`.
+- `tests/backup.rs`: `kkt backup` while agents write, restoring the result,
+  and the backup `kkt serve` makes (or fails to make) before upgrading a
+  database.
 - `tests/agent.rs`: `kkt agent` revoking an agent in the database of a
   running server, and listing agents.
 - `tests/clients.rs`, `tests/connect_cli.rs`: client config preservation,
@@ -197,7 +201,9 @@ Where the tests are:
   including with open event streams and pending message waits.
 - `tests/docker_files.rs`: the Tailscale Compose file and `serve.json` agree
   on where Serve proxies to, kkt is not on Tailscale's network, and kkt is
-  published only on the host's loopback.
+  published only on the host's loopback. Both Compose files take the image
+  version from `.env` and mount `./backups`, which git and image builds
+  ignore.
 - `tests/common/`: starts a server on a free port for the tests above.
 
 ## Working with other agents
