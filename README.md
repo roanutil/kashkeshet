@@ -48,16 +48,19 @@ Without Tailscale, the server is reachable from this machine only, at
 
 For either server mode (Docker or background service), setup offers to share
 the server over Tailscale, which is currently the only way kkt supports
-sharing a kashkeshet server across multiple machines. Setup shows a Tailscale
-login link and offers to open it in your browser. You should only have
-machines on your tailnet that you trust, and you can use Tailscale's access
-controls to limit which ones can reach the server.
+sharing a kashkeshet server across multiple machines. With Docker, setup runs
+Tailscale in its own container: it shows a Tailscale login link and offers to
+open it in your browser. With a background service, setup uses the Tailscale
+already installed on your machine, which must be logged in first. You should
+only have machines on your tailnet that you trust, and you can use Tailscale's
+access controls to limit which ones can reach the server.
 
 HTTPS certificates must be enabled for your tailnet; setup explains how to
 enable them if they aren't. Tailscale machine keys expire (after 180 days by
 default), which takes the server off your tailnet. For a server, turn off key
-expiry for its machine in the Tailscale admin console; if it does expire, run
-`kkt setup` again and log in.
+expiry for its machine in the Tailscale admin console. If it does expire: with
+Docker, run `kkt setup` again and log in with the link it shows; with a
+background service, log your machine back in to Tailscale.
 
 ### Client setup
 
@@ -121,13 +124,20 @@ it connects.
 Some other tools that are available:
 
 - `kkt status`: how this machine is set up, and whether the server is running.
-- `kkt doctor`: checks the access key, the connection and, with Tailscale, the
-  login, and says how to fix what it finds.
+- `kkt doctor`: checks the access key and the connection (and, with Docker and
+  Tailscale, the Tailscale login), and says how to fix what it finds.
 - `kkt backup [folder]`: a consistent backup of the database, config and key,
-  safe while the server runs.
-- `kkt key show`: prints the access key.
-- `kkt agent list` and `kkt agent revoke <name>`: list agents, or cut one off.
-- `kkt connect <client>`: configures one more client by hand.
+  safe while the server runs. With Docker, the folder is optional: the backup
+  always lands in the managed backups folder. With a background service, give
+  a folder.
+- `kkt connect <client> --write`: configures one more client by hand; without
+  `--write` it only shows the configuration.
+- `kkt key show`, `kkt agent list` and `kkt agent revoke <name>`: print the
+  access key, list agents, or cut one off. These act on a server running
+  directly on this machine. With Docker, the key is saved in
+  `~/.config/kkt/docker-access-key`, and the agent commands run inside the
+  container: `cd` to the managed folder that `kkt status` shows, then
+  `docker compose exec kkt kkt agent list`.
 
 While generally, your AI agents will figure out how to use kashkeshet as they
 see fit, it can be helpful to know about the primitives we make available:
