@@ -136,4 +136,15 @@ if wanted. Linux service logs stay in the systemd journal until its normal
 retention removes them. Remove any custom database, key, config or log paths
 you chose instead of these defaults.
 
+## Contributing
+
+Open pull requests against `next`, the integration branch; `main` only receives
+releases. For larger changes, open an issue first. Read [CLAUDE.md](CLAUDE.md)
+for the design principles (simple, not opinionated, no backwards compatibility
+yet), where code lives, and the rules.
+
+Before pushing, run `cargo test`, `cargo clippy --all-targets -- -D warnings`
+and `cargo fmt --check`; CI runs them on Ubuntu and macOS. A bug fix comes with
+a test that fails without it. See [development](docs/development.md) for more.
+
 More: [clients](docs/clients.md) · [configuration](docs/configuration.md) · [backups](docs/backup.md) · [service](docs/service.md) · [web page](docs/web.md) · [remote access](docs/remote-access.md) · [security](docs/security.md) · [agents](docs/agents.md) · [provenance](docs/provenance.md) · [releases](docs/releases.md) · [development](docs/development.md)
