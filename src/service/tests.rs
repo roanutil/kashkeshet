@@ -113,6 +113,7 @@ fn mac_spec() -> Spec {
         program: PathBuf::from("/Users/sam/.cargo/bin/kkt"),
         args: [
             "serve",
+            "--ignore-setup",
             "--config",
             "/Users/sam/.config/kkt/config.toml",
             "--db",
@@ -131,6 +132,7 @@ fn linux_spec() -> Spec {
         program: PathBuf::from("/home/sam/.cargo/bin/kkt"),
         args: [
             "serve",
+            "--ignore-setup",
             "--config",
             "/home/sam/.config/kkt/config.toml",
             "--db",

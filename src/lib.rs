@@ -16,6 +16,7 @@ pub mod names;
 pub mod provenance;
 pub mod service;
 pub mod settings;
+pub mod setup;
 pub mod shutdown;
 pub mod store;
 pub mod web;
