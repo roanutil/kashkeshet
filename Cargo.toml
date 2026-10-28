@@ -23,6 +23,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 rmcp = { version = "3.7.0", features = ["server", "client", "macros", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
 rusqlite = { version = "0.40.2", features = ["backup", "bundled"] }
 schemars = "1.2.3"
+semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
