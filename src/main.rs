@@ -15,6 +15,7 @@ use kashkeshet::names::OsEntropy;
 use kashkeshet::provenance::{self, Build, ServerRun};
 use kashkeshet::service::{DryRun, Manager, OsSystem, Spec};
 use kashkeshet::settings::{self, AccessKey, Env, Platform, ServeOptions, ServeSettings};
+use kashkeshet::setup;
 use kashkeshet::shutdown::{Shutdown, StopSignals};
 use kashkeshet::store::{self, Db};
 use kashkeshet::{Operator, Revoked};
@@ -51,6 +52,11 @@ enum Command {
         /// ($XDG_CONFIG_HOME/kkt/config.toml), if it exists.
         #[arg(long)]
         config: Option<PathBuf>,
+        /// Start even though `kkt setup` set this machine up otherwise: as a
+        /// Docker server, a client, or with the service running. The service
+        /// passes it, since it is the server setup meant.
+        #[arg(long)]
+        ignore_setup: bool,
         #[command(flatten)]
         flags: ServeFlags,
     },
@@ -496,7 +502,16 @@ async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
 /// Runs one command.
 async fn run(env: &Env, command: Command) -> Result<(), String> {
     match command {
-        Command::Serve { config, flags } => serve_from_config(env, config, flags).await,
+        Command::Serve {
+            config,
+            ignore_setup,
+            flags,
+        } => {
+            if !ignore_setup {
+                check_setup(env)?;
+            }
+            serve_from_config(env, config, flags).await
+        }
         Command::Key {
             command: KeyCommand::Create { path, force, show },
         } => create_key(env, path, force, show),
@@ -584,6 +599,39 @@ fn process_env() -> Env {
         xdg_config_home: var("XDG_CONFIG_HOME"),
         xdg_data_home: var("XDG_DATA_HOME"),
     }
+}
+
+/// This machine's setup record, if `kkt setup` wrote one.
+fn read_setup(env: &Env) -> Result<Option<setup::Record>, String> {
+    let Some(path) = setup::record_path(env) else {
+        return Ok(None);
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => setup::Record::parse(&text, &path).map(Some),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("could not read {}: {e}", path.display())),
+    }
+}
+
+/// Refuses to start a server on a machine `kkt setup` set up otherwise.
+fn check_setup(env: &Env) -> Result<(), String> {
+    let record = read_setup(env)?;
+    let service_running = match record.as_ref().map(|r| &r.mode) {
+        Some(setup::Mode::Service { .. }) => {
+            let state = Manager::for_this_os(env).and_then(|m| m.state(&OsSystem));
+            match state {
+                Ok(state) => Some(state.running),
+                Err(e) => {
+                    // Not knowing is no reason to refuse: a server already
+                    // on the port stops this one with its own message.
+                    eprintln!("warning: could not tell whether the kkt service is running: {e}");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    setup::guard(record.as_ref(), service_running, false)
 }
 
 /// `kkt serve`: flags over the config file over the defaults, with the
@@ -1246,7 +1294,8 @@ fn service_plan(
             .map(str::to_string)
             .ok_or_else(|| format!("{} is not valid UTF-8", path.display()))
     };
-    let mut args = vec!["serve".to_string()];
+    // The service is the server `kkt setup` meant, so it never stops itself.
+    let mut args = vec!["serve".to_string(), "--ignore-setup".to_string()];
     let mut dirs = Vec::new();
     if let Some(config) = &loaded.config_file {
         args.extend(["--config".to_string(), text(config)?]);
