@@ -1083,3 +1083,108 @@ async fn operator_editor_works_in_preview() {
     let clock = Arc::new(FixedClock::new(start_time()));
     operator_editor_works(preview(1, clock, &Shutdown::new())).await;
 }
+
+async fn channel_creation_works(source: Arc<dyn Source>) {
+    let before = source.overview().await.unwrap();
+    let member = before.agents[0].agent.name.clone();
+    let app = site(source.clone());
+    let (_, html) = get(&app, "/").await;
+    assert!(html.contains("Create a channel"));
+    assert!(html.contains(&format!("name=\"member_{member}\"")));
+    let token = form_token_in(&html);
+    let fields = format!("name=feedback&purpose=Help+desk&open=false&member_{member}=yes");
+    assert_eq!(
+        get(&app, "/channels/create").await.0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    for invalid in [fields.clone(), format!("{fields}&form_token=bad")] {
+        assert_eq!(
+            post(&app, "/channels/create", &invalid).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let forged = HttpRequest::builder()
+        .method("POST")
+        .uri("/channels/create")
+        .header("Host", "localhost")
+        .header("Origin", "http://elsewhere.example")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!("{fields}&form_token={token}")))
+        .unwrap();
+    assert_eq!(
+        app.clone().oneshot(forged).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    for invalid in [
+        "name=closed&open=false",
+        "name=&open=true",
+        "name=bad%0Aname&open=true",
+        "name=unknown&open=false&member_missing-agent=yes",
+        "name=test&open=other",
+    ] {
+        assert_ne!(
+            post(
+                &app,
+                "/channels/create",
+                &format!("{invalid}&form_token={token}")
+            )
+            .await
+            .0,
+            StatusCode::SEE_OTHER
+        );
+    }
+    assert_eq!(
+        source.overview().await.unwrap().channels.len(),
+        before.channels.len()
+    );
+    let (status, location) = post(
+        &app,
+        "/channels/create",
+        &format!("{fields}&form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let location = location.unwrap();
+    let id = location.strip_prefix("/channels/").unwrap();
+    let view = source.channel(id.into(), None).await.unwrap();
+    assert_eq!(view.channel.name, "feedback");
+    assert_eq!(view.channel.purpose.as_deref(), Some("Help desk"));
+    assert!(!view.channel.open);
+    assert_eq!(view.channel.created_by, "operator");
+    assert_eq!(view.members.len(), 1);
+    assert_eq!(view.members[0].name, member);
+    assert_eq!(view.messages.len(), 1);
+    assert!(view.messages[0].from_operator);
+    assert_eq!(view.messages[0].body, "The operator created the channel.");
+    assert!(view.messages[0].run_id.is_some());
+    let (_, html) = get(&app, &location).await;
+    assert!(!html.contains("/agents/operator"));
+    let (status, location) = post(
+        &app,
+        "/channels/create",
+        &format!("name=public&open=true&form_token={token}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let view = source
+        .channel(location.unwrap()[10..].into(), None)
+        .await
+        .unwrap();
+    assert!(view.channel.open);
+    assert!(view.members.is_empty());
+}
+
+#[tokio::test]
+async fn channel_creation_through_rules() {
+    channel_creation_works(rules_source().await).await;
+}
+
+#[tokio::test]
+async fn channel_creation_through_preview() {
+    channel_creation_works(preview(
+        1,
+        Arc::new(FixedClock::new(start_time())),
+        &Shutdown::new(),
+    ))
+    .await;
+}

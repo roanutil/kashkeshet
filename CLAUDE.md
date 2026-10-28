@@ -34,7 +34,7 @@ require reading another's internals.
 | `docker/` | Running kkt in Docker: the Compose files embedded in the program, the folder kkt manages for them, and the commands that set up, start, back up, upgrade and stop it, through its `Host` contract | Touch the system except through `Host`; decide setup answers or keep the setup record |
 | `hosts.rs` | Which `Host` names the server answers to, for `/mcp` and the web page | Touch storage, rules, or HTTP library types |
 | `service/` | Running the server as a launchd or systemd service: the service files and the commands that manage them, through its `System` contract | Touch the system except through `System`; decide server settings (`main.rs` passes them in) |
-| `setup/` | What `kkt setup` set this machine up as (service, Docker or client): the setup record's format, the questions setup asks (`Ask`), and whether `kkt serve` may run here (`guard`) | Read or write files, or run programs, itself; ask questions except through `Ask` |
+| `setup/` | `kkt setup`: the order of its questions and steps (`run`), what this machine was set up as (service, Docker or client) in the setup record, and whether `kkt serve` may run here (`guard`) | Read or write files, or run programs, itself (that goes through `Steps`); talk to the person except through `Ask` |
 | `settings/` | Gathering a server's settings from flags, the config file and defaults; default paths | Read files or environment variables itself; check limits (that is `config.rs`) |
 | `clients/` | Client MCP configuration, its vendor formats, backups and header-helper output | Start the server; expose key contents in previews or errors |
 | `diagnostics.rs` | Read-only key and HTTP/MCP connection checks, in our own result types | Register agents or change server data |
@@ -105,7 +105,7 @@ over tokio's broadcast receiver, `shutdown::Shutdown` over tokio-util's
 cancellation token, `store` over rusqlite. rmcp stays in `mcp.rs` and
 `app.rs`; askama stays in `web/`; axum stays in `web/`, `app.rs`, `main.rs`
 and `examples/web_preview.rs`, which serve the router; toml stays in
-`settings/`, `setup/` and `clients/`; toml_edit stays in `clients/`; reqwest stays in
+`settings/`, `setup/` and `clients/`; toml_edit stays in `clients/` and `settings/`; reqwest stays in
 `diagnostics.rs`; clap stays in `main.rs` and `examples/`.
 
 **Settings and defaults.** Every limit or fixed value lives in `config.rs`,
@@ -184,7 +184,8 @@ Where the tests are:
   `kkt` command, `kkt serve` with its config file and defaults, settings it
   must refuse, and `kkt key create`.
 - `tests/setup.rs`: `kkt serve` refusing, or not, on a machine with a setup
-  record.
+  record; `kkt setup` for a client machine against a real server, with no
+  terminal.
 - `tests/backup.rs`: `kkt backup` while agents write, restoring the result,
   and the backup `kkt serve` makes (or fails to make) before upgrading a
   database.
