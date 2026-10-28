@@ -185,7 +185,8 @@ Where the tests are:
   must refuse, and `kkt key create`.
 - `tests/setup.rs`: `kkt serve` refusing, or not, on a machine with a setup
   record; `kkt setup` for a client machine against a real server, with no
-  terminal.
+  terminal, and for Docker with a fake `docker`; `kkt doctor`'s last line
+  for each kind of setup.
 - `tests/backup.rs`: `kkt backup` while agents write, restoring the result,
   and the backup `kkt serve` makes (or fails to make) before upgrading a
   database.

@@ -400,14 +400,20 @@ fn empty_home(name: &str) -> PathBuf {
 }
 
 /// A `docker` that does nothing and succeeds, except that asking the kkt
-/// container for its key prints `key`. Put in its own folder for PATH.
+/// container for its key prints `key`, and listing running services lists
+/// kkt when `FAKE_KKT_RUNNING` is set. Put in its own folder for PATH.
 fn fake_docker(dir: &Path, key: &str) -> PathBuf {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).expect("bin");
     let docker = bin.join("docker");
     std::fs::write(
         &docker,
-        format!("#!/bin/sh\ncase \"$*\" in *\"kkt key show\"*) echo '{key}' ;; esac\nexit 0\n"),
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n\
+             *\"kkt key show\"*) echo '{key}' ;;\n\
+             *\"ps --status running --services\"*) [ -n \"$FAKE_KKT_RUNNING\" ] && echo kkt ;;\n\
+             esac\nexit 0\n"
+        ),
     )
     .expect("fake docker");
     #[cfg(unix)]
@@ -488,4 +494,93 @@ async fn docker_setup_works_from_a_home_with_nothing_in_it() {
     server.kill().await.expect("stop kkt");
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// `kkt doctor` with a Docker record for `folder`, `bin` as PATH, and the
+/// fake kkt container running or not. Returns what it printed.
+async fn doctor_for_docker(home: &Path, bin: &Path, folder: &Path, running: bool) -> String {
+    write_record(
+        home,
+        &format!(
+            "format = 1\nmode = \"docker\"\nwritten_by = \"0.4.0\"\n\
+             url = \"http://{}/mcp\"\n\n[docker]\nfolder = \"{}\"\ntailscale = false\n",
+            free_bind(),
+            folder.display()
+        ),
+    );
+    let mut command = Command::new(KKT);
+    command
+        .arg("doctor")
+        .env("HOME", home)
+        .env("PATH", bin)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("FAKE_KKT_RUNNING")
+        .kill_on_drop(true);
+    if running {
+        command.env("FAKE_KKT_RUNNING", "1");
+    }
+    let out = tokio::time::timeout(TIMEOUT, command.output())
+        .await
+        .expect("doctor should finish")
+        .expect("run kkt");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+#[tokio::test]
+async fn on_a_docker_machine_doctor_reports_the_container_not_the_service() {
+    let home = temp_home("doctor-docker");
+    let bin = fake_docker(&home, "unused");
+    let folder = home.join("docker files");
+    std::fs::create_dir_all(&folder).expect("folder");
+    std::fs::write(folder.join(".env"), "KKT_VERSION=0.4.0\n").expect(".env");
+
+    let said = doctor_for_docker(&home, &bin, &folder, true).await;
+    assert!(
+        said.contains("ok: this machine's kkt in Docker: running kkt 0.4.0"),
+        "{said}"
+    );
+    assert!(!said.contains("this machine's kkt service"), "{said}");
+
+    let said = doctor_for_docker(&home, &bin, &folder, false).await;
+    assert!(
+        said.contains("problem: this machine's kkt in Docker: not running"),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "docker compose --project-directory '{}' up -d",
+            folder.display()
+        )),
+        "{said}"
+    );
+
+    std::fs::remove_file(folder.join(".env")).expect("remove .env");
+    let said = doctor_for_docker(&home, &bin, &folder, true).await;
+    assert!(said.contains("its files are missing from"), "{said}");
+    assert!(said.contains("run `kkt setup` again"), "{said}");
+
+    // No docker at all.
+    std::fs::write(folder.join(".env"), "KKT_VERSION=0.4.0\n").expect(".env");
+    let said = doctor_for_docker(&home, &home.join("no-bin"), &folder, true).await;
+    assert!(
+        said.contains("problem: this machine's kkt in Docker: "),
+        "{said}"
+    );
+    assert!(said.contains("check that Docker is running"), "{said}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn on_a_client_machine_doctor_has_no_line_about_a_server_here() {
+    let home = temp_home("doctor-client");
+    write_record(&home, CLIENT);
+    let (_, said) = kkt(&home, &["doctor"]).await;
+    assert!(said.contains("https://kkt.tail1234.ts.net/mcp"), "{said}");
+    assert!(!said.contains("this machine's kkt"), "{said}");
+    let _ = std::fs::remove_dir_all(&home);
 }

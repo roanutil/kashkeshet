@@ -601,27 +601,17 @@ const SERVICE_CHECK: &str = "this machine's kkt service";
 async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
     let connection = client_connection(env, flags, false)?;
     let mut checks = diagnostics::inspect(&connection.url, connection.key_file.as_deref()).await?;
-    // This line is about the kkt service installed on this machine, whatever
-    // server `--url` points at, so the name says so.
-    match Manager::for_this_os(env).and_then(|manager| manager.state(&OsSystem)) {
-        Ok(state) if !state.installed => checks.push(diagnostics::Check::ok(
-            SERVICE_CHECK,
-            "not installed; optional when running `kkt serve` in a terminal",
-        )),
-        Ok(state) if state.running => checks.push(diagnostics::Check::ok(
-            SERVICE_CHECK,
-            "installed and running",
-        )),
-        Ok(_) => checks.push(diagnostics::Check::problem(
-            SERVICE_CHECK,
-            "installed but not running",
-            "run `kkt service start`",
-        )),
-        Err(error) => checks.push(diagnostics::Check::problem(
-            SERVICE_CHECK,
-            error.to_string(),
-            "check `kkt service status` and your user service manager",
-        )),
+    // The last line is about this machine, whatever server `--url` points
+    // at: how `kkt setup` set it up, or else its kkt service.
+    match read_setup(env)?.map(|record| record.mode) {
+        // The server is elsewhere; the lines above are about it.
+        Some(setup::Mode::Client) => {}
+        Some(setup::Mode::Docker(install)) => {
+            let folder = docker::Folder(install.folder);
+            let state = docker::status(&docker::OsHost, &folder);
+            checks.push(docker_check(state, &folder));
+        }
+        Some(setup::Mode::Service { .. }) | None => checks.push(service_check(env)),
     }
     let (report, all_ok) = doctor_report(checks);
     print!("{report}");
@@ -629,6 +619,68 @@ async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
         Ok(())
     } else {
         Err("doctor found problems; see the fixes above".into())
+    }
+}
+
+/// The doctor's line about the kkt service on this machine.
+fn service_check(env: &Env) -> diagnostics::Check {
+    match Manager::for_this_os(env).and_then(|manager| manager.state(&OsSystem)) {
+        Ok(state) if !state.installed => diagnostics::Check::ok(
+            SERVICE_CHECK,
+            "not installed; optional when running `kkt serve` in a terminal",
+        ),
+        Ok(state) if state.running => {
+            diagnostics::Check::ok(SERVICE_CHECK, "installed and running")
+        }
+        Ok(_) => diagnostics::Check::problem(
+            SERVICE_CHECK,
+            "installed but not running",
+            "run `kkt service start`",
+        ),
+        Err(error) => diagnostics::Check::problem(
+            SERVICE_CHECK,
+            error.to_string(),
+            "check `kkt service status` and your user service manager",
+        ),
+    }
+}
+
+/// The name of the doctor line about kkt in Docker on this machine.
+const DOCKER_CHECK: &str = "this machine's kkt in Docker";
+
+/// The doctor's line about kkt in Docker, from what `docker::status` found
+/// in the managed `folder`.
+fn docker_check(
+    state: Result<docker::State, docker::DockerError>,
+    folder: &docker::Folder,
+) -> diagnostics::Check {
+    let shown = folder.path().display().to_string();
+    match state {
+        Ok(state) if !state.files_present => diagnostics::Check::problem(
+            DOCKER_CHECK,
+            format!("its files are missing from {shown}"),
+            "run `kkt setup` again",
+        ),
+        Ok(state) if state.running => diagnostics::Check::ok(
+            DOCKER_CHECK,
+            format!(
+                "running kkt {}",
+                state.version.as_deref().unwrap_or("(version unknown)")
+            ),
+        ),
+        Ok(_) => diagnostics::Check::problem(
+            DOCKER_CHECK,
+            "not running",
+            format!(
+                "start it with `docker compose --project-directory {} up -d`",
+                clients::shell_word(&shown)
+            ),
+        ),
+        Err(error) => diagnostics::Check::problem(
+            DOCKER_CHECK,
+            error.to_string(),
+            "check that Docker is running, then run `kkt status`",
+        ),
     }
 }
 
