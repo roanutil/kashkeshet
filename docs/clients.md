@@ -1,6 +1,7 @@
 # Connecting clients
 
-Start the server with `kkt service install` or `kkt serve`, then choose a client:
+Run `kkt setup` to install a server or connect this machine to one elsewhere.
+Setup offers detected clients. To add another client later:
 
 ```sh
 kkt connect claude-code --write
@@ -10,9 +11,10 @@ kkt connect opencode --write
 ```
 
 Run without `--write` to see the config or command and its destination first.
-The URL comes from the serve config's `bind`. `--url https://your-host/mcp`
+When setup has been run, the URL and key default to its saved connection.
+Otherwise the URL comes from the serve config's `bind`. `--url https://your-host/mcp`
 overrides it, for example when forwarding over a tailnet. `--config PATH`
-selects a serve config; `--key-file PATH` overrides its key file. Without an
+selects a serve config; `--key-file PATH` overrides its key file. Without a setup record or an
 override, connect uses the same key as serve and creates a missing default
 key with mode 0600. A config with `no_access_key = true` adds no credentials.
 

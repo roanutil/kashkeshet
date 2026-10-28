@@ -1,4 +1,8 @@
-# Docker
+# Docker by hand
+
+For guided installation, run `kkt setup --mode docker` (see [setup](setup.md)).
+This page covers Compose files you manage yourself; `kkt upgrade` manages
+only the Docker folder recorded by setup.
 
 The image runs `kkt serve --bind 0.0.0.0:7420 --allow-any-bind`. A container
 has to listen on its own network interface, so it uses `--allow-any-bind`;

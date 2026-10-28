@@ -25,8 +25,14 @@ broken.
 The folder and the key in it are readable only by you. Keep backups as
 private as the key itself.
 
-`kkt backup` uses the database, config file and key that `kkt serve` would
-use. Give `--db` or `--config` if the server uses others.
+After `kkt setup`, `kkt backup` follows the saved mode: it backs up the
+service's database or asks the managed Docker server to back up and copies
+the result to the host folder you named. Client-only machines refer you to
+the server owner.
+
+Without a setup record, `kkt backup` uses the database, config file and key
+that `kkt serve` would use. Give `--db` or `--config` if the server uses
+others.
 
 ## Before an upgrade
 

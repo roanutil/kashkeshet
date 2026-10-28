@@ -1,5 +1,9 @@
 # Running in the background
 
+`kkt setup --mode service` installs the service and connects your clients
+(see [setup](setup.md)). The commands below also work when managing a
+service by hand.
+
 `kkt service install` runs `kkt serve` as a service of your login: a
 launchd user agent on macOS, a systemd user unit on Linux. It starts the
 server now and at each login, and starts it again only if it fails. A clean
