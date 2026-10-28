@@ -124,18 +124,6 @@ mod tests {
         assert_eq!(link.open_failure(), None);
     }
 
-    #[cfg(unix)]
-    fn script(name: &str, body: &str) -> String {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("kkt-opener-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("opener");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path.display().to_string()
-    }
-
     /// Waits for `link` to report a failure, for up to a few seconds.
     #[cfg(unix)]
     fn failure_of(link: &TerminalLink) -> Option<String> {
@@ -148,37 +136,45 @@ mod tests {
         None
     }
 
+    // These tests run programs that already exist, never a script a test
+    // writes just before running it: running a just-written file can fail
+    // with "Text file busy" while other threads of the test program start
+    // processes, which made them fail now and then.
+
     #[cfg(unix)]
     #[test]
     fn an_opener_that_exists_but_fails_is_reported_without_waiting_for_it() {
-        let link = TerminalLink::with_opener(script("fails", "exit 7"));
+        // `false` ignores the link and exits with status 1.
+        let link = TerminalLink::with_opener("false");
         assert!(link.open("https://example.com/a").is_ok());
         let why = failure_of(&link).expect("the failure is reported");
-        assert!(why.contains("exit status: 7"), "{why}");
+        assert!(why.contains("exit status: 1"), "{why}");
         // Reported once.
         assert_eq!(link.open_failure(), None);
     }
 
     #[cfg(unix)]
     #[test]
-    fn an_opener_that_works_reports_no_failure() {
+    fn an_opener_that_works_gets_the_link_and_reports_no_failure() {
+        let opener = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/opener-writes-its-argument-to-a-file.sh"
+        );
+        // The fixture treats the link as the path of a file to write to.
         let marker = std::env::temp_dir().join(format!("kkt-opened-{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
-        let link = TerminalLink::with_opener(script(
-            "works",
-            &format!("echo \"$1\" > '{}'", marker.display()),
-        ));
-        assert!(link.open("https://example.com/a").is_ok());
+        let link = TerminalLink::with_opener(opener);
+        assert!(link.open(marker.to_str().unwrap()).is_ok());
+        // The shell makes the file, empty, a moment before it writes to it:
+        // wait for what is written, not for the file.
+        let written = || std::fs::read_to_string(&marker).unwrap_or_default();
         for _ in 0..500 {
-            if marker.exists() {
+            if !written().is_empty() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(
-            std::fs::read_to_string(&marker).unwrap().trim(),
-            "https://example.com/a"
-        );
+        assert_eq!(written().trim(), "opened");
         assert_eq!(link.open_failure(), None);
         let _ = std::fs::remove_file(&marker);
     }
