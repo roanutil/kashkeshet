@@ -31,8 +31,9 @@ use. Give `--db` or `--config` if the server uses others.
 ## Before an upgrade
 
 When a new version of kkt starts and finds a database made by an older one,
-it upgrades the database's tables. First it backs the database up, with the
-config file and key, into `upgrade-backups` beside the database file. It
+it upgrades the database's tables. First it backs up the database (only the
+database, since nothing else changes) into `upgrade-backups` beside the
+database file. It
 keeps the newest 5 of these and removes older ones; set
 `upgrade_backups_kept` (or `--upgrade-backups-kept`) to keep a different
 number. Backups you make with `kkt backup` are never removed.

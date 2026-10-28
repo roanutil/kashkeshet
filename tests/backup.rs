@@ -368,7 +368,9 @@ async fn an_upgrade_backs_up_the_database_first_and_keeps_the_newest_backups() {
     }
     std::fs::write(folder.join("notes.txt"), "mine").expect("other file");
 
+    // With the default access key, which the upgrade backup must not copy.
     let mut args = serve_args(&db, &free_bind());
+    args.retain(|a| a != "--no-access-key");
     args.extend(["--upgrade-backups-kept".into(), "2".into()]);
     let (mut server, log) = start(kkt(
         &home,
@@ -391,6 +393,13 @@ async fn an_upgrade_backs_up_the_database_first_and_keeps_the_newest_backups() {
         "{names:?}"
     );
     assert!(folder.join("notes.txt").exists());
+    assert!(home.join(".config/kkt/access-key").exists());
+    let mut files: Vec<String> = std::fs::read_dir(&backups[1])
+        .expect("list backup")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["about.txt", "kashkeshet.db"]);
     // The backup is the database as it was before the upgrade.
     let copy = backups[1].join("kashkeshet.db");
     assert_eq!(schema_version(&copy), 1);

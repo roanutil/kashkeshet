@@ -699,7 +699,12 @@ async fn agent(
     db: Option<PathBuf>,
     config: Option<PathBuf>,
 ) -> Result<(), String> {
-    let path = existing_db(env, db, &read_config(env, config)?.1)?;
+    // An explicit --db needs nothing from the config file, so it is not read.
+    let config_db = match db {
+        Some(_) => None,
+        None => read_config(env, config)?.1.db,
+    };
+    let path = existing_db(env, db, config_db)?;
     let db = Db::open(&path).map_err(|e| format!("could not open {}: {e}", path.display()))?;
     let operator = Operator::new(db, Arc::new(SystemClock));
     match command {
@@ -734,10 +739,14 @@ async fn agent(
     Ok(())
 }
 
-/// The database file `kkt serve` would use with the config file's `options`,
+/// The database file `kkt serve` would use given the config file's `db`,
 /// unless `db` names another. It must exist.
-fn existing_db(env: &Env, db: Option<PathBuf>, options: &ServeOptions) -> Result<PathBuf, String> {
-    let path = match db.or_else(|| options.db.clone()) {
+fn existing_db(
+    env: &Env,
+    db: Option<PathBuf>,
+    config_db: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    let path = match db.or(config_db) {
         Some(path) => path,
         None => env.default_db(Platform::CURRENT).ok_or(
             "no home directory to find the database in: set HOME or pass --db".to_string(),
@@ -761,7 +770,7 @@ fn backup(
     config: Option<PathBuf>,
 ) -> Result<(), String> {
     let (config_file, options) = read_config(env, config)?;
-    let database = existing_db(env, db, &options)?;
+    let database = existing_db(env, db, options.db.clone())?;
     let access_key = match (&options.access_key_file, options.no_access_key) {
         (Some(path), _) => Some(path.clone()),
         (None, Some(true)) => None,
@@ -801,16 +810,12 @@ fn write_backup(
     )
 }
 
-/// Before the server upgrades the database's tables, backs it up beside it
-/// (with the config and key files) and prunes those backups to the newest
-/// `keep`. Any failure to back up stops the server before the database is
-/// changed.
-fn backup_before_upgrade(
-    contents: &backup::Contents,
-    keep: usize,
-    clock: &dyn Clock,
-) -> Result<(), String> {
-    let database = contents.database;
+/// Before the server upgrades the tables in `database`, backs it up beside
+/// it and prunes those backups to the newest `keep`. Only the database: an
+/// upgrade changes nothing else, and a copy of the key in the data folder
+/// would be one more place it could leak from. Any failure to back up stops
+/// the server before the database is changed.
+fn backup_before_upgrade(database: &Path, keep: usize, clock: &dyn Clock) -> Result<(), String> {
     let Some(upgrade) = store::pending_upgrade(database)
         .map_err(|e| format!("could not read {}: {e}", database.display()))?
     else {
@@ -820,7 +825,12 @@ fn backup_before_upgrade(
         .parent()
         .unwrap_or(Path::new("."))
         .join(config::UPGRADE_BACKUP_FOLDER);
-    let written = write_backup(&folder, clock, contents).map_err(|e| {
+    let contents = backup::Contents {
+        database,
+        config: None,
+        access_key: None,
+    };
+    let written = write_backup(&folder, clock, &contents).map_err(|e| {
         format!(
             "the database needs upgrading (schema {} to {}), and kkt backs it up first, \
              but the backup failed, so the server did not start and the database is \
@@ -930,25 +940,13 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
 
 async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String> {
     make_default_key(&settings.access_key)?;
-    let key_file = match &settings.access_key {
-        AccessKey::None => None,
-        AccessKey::File(path) | AccessKey::Default(path) => Some(path.clone()),
-    };
     let Checked {
         db_path,
         bind,
         config,
     } = check_settings(settings, sources)?;
     let clock = Arc::new(SystemClock);
-    backup_before_upgrade(
-        &backup::Contents {
-            database: &db_path,
-            config: sources.file.as_ref().map(|(path, _)| path.as_path()),
-            access_key: key_file.as_deref(),
-        },
-        config.limits.upgrade_backups_kept,
-        clock.as_ref(),
-    )?;
+    backup_before_upgrade(&db_path, config.limits.upgrade_backups_kept, clock.as_ref())?;
     let db =
         Db::open(&db_path).map_err(|e| format!("could not open {}: {e}", db_path.display()))?;
     let run = ServerRun::new(Build::CURRENT, &config);

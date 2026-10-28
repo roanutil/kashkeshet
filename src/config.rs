@@ -63,7 +63,7 @@ pub const ACCESS_KEY_FILE_MODE: u32 = 0o600;
 /// key: only the owner may list or enter it.
 pub const BACKUP_FOLDER_MODE: u32 = 0o700;
 /// The folder, beside the database file, where the server keeps the backups
-/// it makes before upgrading the database.
+/// of the database it makes before upgrading it.
 pub const UPGRADE_BACKUP_FOLDER: &str = "upgrade-backups";
 /// Smallest allowed `max_response_bytes`. A smaller cap could cut a
 /// registration answer, and with it the agent's token.

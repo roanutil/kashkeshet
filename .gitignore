@@ -37,6 +37,8 @@ __pycache__/
 # Compose secrets, and backups, which hold a copy of the access key
 .env
 /backups/
+# The backups kkt serve makes beside a database before upgrading it.
+upgrade-backups/
 
 # Node modules for tests/web_script
 node_modules/

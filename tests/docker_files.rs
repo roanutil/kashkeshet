@@ -102,6 +102,11 @@ fn both_compose_files_mount_the_backups_folder() {
 
 #[test]
 fn backups_never_go_into_git_or_an_image() {
-    assert!(read(".gitignore").lines().any(|l| l == "/backups/"));
-    assert!(read(".dockerignore").lines().any(|l| l == "backups"));
+    let gitignore = read(".gitignore");
+    assert!(gitignore.lines().any(|l| l == "/backups/"));
+    // No leading slash: an upgrade backup sits beside a database anywhere.
+    assert!(gitignore.lines().any(|l| l == "upgrade-backups/"));
+    let dockerignore = read(".dockerignore");
+    assert!(dockerignore.lines().any(|l| l == "backups"));
+    assert!(dockerignore.lines().any(|l| l == "**/upgrade-backups"));
 }
