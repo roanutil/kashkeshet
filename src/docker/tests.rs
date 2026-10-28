@@ -102,6 +102,20 @@ impl Host for FakeHost {
     }
 
     fn write_file(&self, path: &Path, contents: &str, private: bool) -> io::Result<()> {
+        // Like a real disk: the folder a file goes in must be there.
+        let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let has_parent = self.dirs.borrow().contains(&parent)
+            || self
+                .files
+                .borrow()
+                .keys()
+                .any(|f| f.parent() == Some(&parent));
+        if !has_parent {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{} has no folder", path.display()),
+            ));
+        }
         self.files
             .borrow_mut()
             .insert(path.to_path_buf(), (contents.to_string(), private));
@@ -697,5 +711,28 @@ fn status_does_not_call_a_container_stopped_when_compose_failed() {
         err.to_string()
             .contains("Cannot connect to the Docker daemon"),
         "{err}"
+    );
+}
+
+#[tokio::test]
+async fn the_key_goes_in_a_folder_that_did_not_exist_yet() {
+    let host = FakeHost::new(working(""));
+    provision(
+        &host,
+        &*host.clock,
+        &folder(),
+        &plain(),
+        Path::new("/home/me/.config/kkt/docker-access-key"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        host.dirs
+            .borrow()
+            .contains(&PathBuf::from("/home/me/.config/kkt"))
+    );
+    assert_eq!(
+        host.file("/home/me/.config/kkt/docker-access-key").unwrap(),
+        (format!("{KEY}\n"), true)
     );
 }
