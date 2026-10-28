@@ -909,6 +909,32 @@ struct TerminalAsk {
 }
 
 impl TerminalAsk {
+    fn confirm_with(
+        question: setup::Question,
+        mut line: impl FnMut(&str) -> Result<String, String>,
+    ) -> Result<bool, String> {
+        let choices = match question.default {
+            Some(true) => "[Y/n]",
+            Some(false) => "[y/N]",
+            None => "[y/n]",
+        };
+        let prompt = format!("{} {choices} ", question.text);
+        loop {
+            let answer = line(&prompt)?;
+            match answer.trim().to_lowercase().as_str() {
+                "y" | "yes" => return Ok(true),
+                "n" | "no" => return Ok(false),
+                "" => {
+                    if let Some(default) = question.default {
+                        return Ok(default);
+                    }
+                    println!("Type y or n.");
+                }
+                _ => println!("Type y or n."),
+            }
+        }
+    }
+
     fn line(&self, question: setup::Question, prompt: &str) -> Result<String, String> {
         if !self.interactive {
             return Err(setup::unanswered(question));
@@ -945,14 +971,7 @@ impl setup::Ask for TerminalAsk {
     }
 
     fn confirm(&self, question: setup::Question) -> Result<bool, String> {
-        loop {
-            let answer = self.line(question, &format!("{} [y/n] ", question.text))?;
-            match answer.trim().to_lowercase().as_str() {
-                "y" | "yes" => return Ok(true),
-                "n" | "no" => return Ok(false),
-                _ => println!("Type y or n."),
-            }
-        }
+        Self::confirm_with(question, |prompt| self.line(question, prompt))
     }
 
     fn text(&self, question: setup::Question) -> Result<String, String> {
@@ -2143,4 +2162,89 @@ fn service_plan(
         },
         new_key,
     })
+}
+
+#[cfg(test)]
+mod terminal_ask_tests {
+    use super::*;
+    use kashkeshet::setup::Ask;
+
+    fn question(default: Option<bool>) -> setup::Question<'static> {
+        setup::Question {
+            text: "Connect Codex to kkt?",
+            flag: "--clients",
+            default,
+        }
+    }
+
+    #[test]
+    fn enter_accepts_the_displayed_default() {
+        for (default, prompt, expected) in [
+            (true, "Connect Codex to kkt? [Y/n] ", true),
+            (false, "Connect Codex to kkt? [y/N] ", false),
+        ] {
+            for answer in ["", "  "] {
+                let got = TerminalAsk::confirm_with(question(Some(default)), |shown| {
+                    assert_eq!(shown, prompt);
+                    Ok(answer.to_string())
+                });
+                assert_eq!(got, Ok(expected));
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_answers_override_any_default() {
+        for default in [None, Some(true), Some(false)] {
+            for (answer, expected) in [("y", true), (" YES ", true), ("n", false), (" No ", false)]
+            {
+                assert_eq!(
+                    TerminalAsk::confirm_with(question(default), |_| Ok(answer.into())),
+                    Ok(expected)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn without_a_default_enter_and_invalid_answers_ask_again() {
+        let mut answers = ["", "maybe", "n"].into_iter();
+        let got = TerminalAsk::confirm_with(question(None), |prompt| {
+            assert_eq!(prompt, "Connect Codex to kkt? [y/n] ");
+            Ok(answers.next().expect("another answer").to_string())
+        });
+        assert_eq!(got, Ok(false));
+        assert_eq!(answers.next(), None);
+    }
+
+    #[test]
+    fn an_invalid_answer_does_not_accept_a_default() {
+        let mut answers = ["maybe", "n"].into_iter();
+        assert_eq!(
+            TerminalAsk::confirm_with(question(Some(true)), |_| {
+                Ok(answers.next().expect("another answer").to_string())
+            }),
+            Ok(false)
+        );
+        assert_eq!(answers.next(), None);
+    }
+
+    #[test]
+    fn a_default_never_answers_without_a_terminal() {
+        let ask = TerminalAsk { interactive: false };
+        for default in [None, Some(true), Some(false)] {
+            assert_eq!(
+                ask.confirm(question(default)),
+                Err(setup::unanswered(question(default)))
+            );
+        }
+    }
+
+    #[test]
+    fn a_read_failure_is_returned_even_with_a_default() {
+        assert_eq!(
+            TerminalAsk::confirm_with(question(Some(true)), |_| Err("no answer".into())),
+            Err("no answer".into())
+        );
+    }
 }
