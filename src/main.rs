@@ -607,8 +607,15 @@ async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
     // at: how `kkt setup` set it up, or else its kkt service.
     match read_setup(env)?.map(|record| record.mode) {
         // The server is elsewhere; the lines above are about it.
-        Some(setup::Mode::Client) => {}
+        Some(setup::Mode::Client) => point_server_fix_at(
+            &mut checks,
+            "the server runs on another machine: check its URL and key (running `kkt setup` again can change them)",
+        ),
         Some(setup::Mode::Docker(install)) => {
+            point_server_fix_at(
+                &mut checks,
+                "this machine runs kkt in Docker: see the lines below, or run `kkt status`",
+            );
             let folder = docker::Folder(install.folder);
             let state = docker::status(&docker::OsHost, &folder);
             checks.extend(docker_checks(state, &folder));
@@ -621,6 +628,17 @@ async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
         Ok(())
     } else {
         Err("doctor found problems; see the fixes above".into())
+    }
+}
+
+/// Replaces the fix on a failed server check, which tells the person to
+/// start the kkt service, with `fix`, for a machine where that is not how kkt
+/// runs.
+fn point_server_fix_at(checks: &mut [diagnostics::Check], fix: &str) {
+    for check in checks.iter_mut() {
+        if check.name == diagnostics::SERVER_CHECK && !check.ok {
+            check.fix = Some(fix.to_string());
+        }
     }
 }
 
