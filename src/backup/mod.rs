@@ -124,19 +124,19 @@ fn fill(
     if let Some(key) = contents.access_key {
         copy_private(key, &into.join(ACCESS_KEY_FILE))?;
     }
-    let shown = |path: Option<&Path>| match path {
-        Some(path) => path.display().to_string(),
-        None => "(none)".to_string(),
+    let source = |path: Option<&Path>| match path {
+        Some(path) => format!("copy of {}", path.display()),
+        None => "none".to_string(),
     };
     let about = format!(
         "kkt {version} backup made {}\n\
-         {DATABASE_FILE}: copy of {}\n\
-         {CONFIG_FILE}: copy of {}\n\
-         {ACCESS_KEY_FILE}: copy of {}\n",
+         {DATABASE_FILE}: {}\n\
+         {CONFIG_FILE}: {}\n\
+         {ACCESS_KEY_FILE}: {}\n",
         crate::clock::to_text(at),
-        contents.database.display(),
-        shown(contents.config),
-        shown(contents.access_key),
+        source(Some(contents.database)),
+        source(contents.config),
+        source(contents.access_key),
     );
     std::fs::write(into.join(ABOUT_FILE), about)
         .map_err(|e| format!("could not write {}: {e}", into.join(ABOUT_FILE).display()))
