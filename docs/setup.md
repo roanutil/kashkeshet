@@ -84,10 +84,14 @@ kkt setup --mode docker --tailscale --clients none
 | `--key-file PATH` | A client-only machine's existing server key file |
 | `--clients claude-code,codex,opencode,agy` | Which clients to connect; `none` skips them |
 | `--yes` | Connect every detected client without asking |
+| `--ts-hostname NAME` | Docker Tailscale node name to request (default `kkt`) |
+| `--ts-authkey-file PATH` | Docker Tailscale auth key file instead of an interactive login link |
 
 `--yes` does not choose the server mode, Tailscale setting, or a remote
 URL/key for you. A Docker Tailscale login may still need a person to open
-the link.
+the link. For unattended Docker login, pass `--ts-authkey-file` with a
+private file holding an auth key; keep that file out of shared logs and
+repositories.
 
 ## Managing the saved setup
 

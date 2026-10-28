@@ -59,6 +59,31 @@ the database, it first backs it up inside the volume, in
 `/data/.local/share/kashkeshet/upgrade-backups`, and refuses to start if it
 can't. Making your own backup first, as above, also puts one on the host.
 
+## Upgrading a manual install from 0.3.0 or earlier
+
+Those images have no `kkt backup` command. Before changing `KKT_VERSION`,
+stop kkt and copy the complete data volume with the old image:
+
+```sh
+docker compose stop kkt
+docker compose run --rm --no-deps --entrypoint sh kkt -c '
+  mkdir /backups/before-upgrade &&
+  cp -R /data/. /backups/before-upgrade/'
+```
+
+Use a new folder name for each snapshot; `mkdir` refuses to overwrite an
+existing one. This is a copy made while the server is stopped, including
+its database, key and config. Keep it private. On Linux it belongs to user
+10001, so use `sudo` when reading or copying it. If copying fails, leave
+the old version selected and fix the problem before upgrading.
+
+After the copy succeeds, change `KKT_VERSION` to the new release and run
+`docker compose up -d`. Later backups can use `kkt backup` as above. The
+snapshot keeps the original `/data` layout; its database is under
+`.local/share/kashkeshet/`, not at the top level like a `kkt backup` folder.
+A manual Compose install stays manually managed: `kkt upgrade` uses only
+the Docker folder recorded by `kkt setup`.
+
 ## Rolling back
 
 Set `KKT_VERSION` back to the old version, then put back a database made by
