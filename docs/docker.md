@@ -1,4 +1,8 @@
-# Docker
+# Docker by hand
+
+For guided installation, run `kkt setup --mode docker` (see [setup](setup.md)).
+This page covers Compose files you manage yourself; `kkt upgrade` manages
+only the Docker folder recorded by setup.
 
 The image runs `kkt serve --bind 0.0.0.0:7420 --allow-any-bind`. A container
 has to listen on its own network interface, so it uses `--allow-any-bind`;
@@ -8,11 +12,24 @@ Tailscale container.
 
 ## Setup
 
-The Compose files run the kkt version named in `.env`; there is no default.
+Choose a [published release](https://github.com/sam-mfb/kashkeshet/releases)
+and download its files into a new folder. Replace `X.Y.Z` below with that
+version, without the `v`. Keep the files and image on the same release;
+the backup commands in this guide need 0.4.0 or later.
 
-```
-cp .env.example .env      # then set KKT_VERSION, such as 0.3.0
+```sh
+mkdir kkt && cd kkt
+KKT_VERSION=X.Y.Z
+curl -fsSLO "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/compose.yaml"
+curl -fsSL "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/.env.example" -o .env
 mkdir backups
+```
+
+Set `KKT_VERSION` in `.env` to the same version. There is no default.
+Before the first start, set the backups folder's ownership on Linux as
+explained below, then run:
+
+```sh
 docker compose up -d
 ```
 
@@ -55,7 +72,59 @@ the database, it first backs it up inside the volume, in
 `/data/.local/share/kashkeshet/upgrade-backups`, and refuses to start if it
 can't. Making your own backup first, as above, also puts one on the host.
 
-## Rolling back
+## Upgrading a manual install from 0.3.0 or earlier
+
+Those images have no `kkt backup` command. Before changing `KKT_VERSION`,
+stop kkt and copy the complete data volume with the old image:
+
+```sh
+docker compose stop kkt
+docker compose run --rm --no-deps --entrypoint sh kkt -c '
+  mkdir -m 700 /backups/before-upgrade &&
+  cp -R /data/. /backups/before-upgrade/'
+```
+
+Use a new folder name for each snapshot; `mkdir` refuses to overwrite an
+existing one. This is a copy made while the server is stopped, including
+its database, key and config. Keep it private. On Linux it belongs to user
+10001, so use `sudo` when reading or copying it. If copying fails, leave
+the old version selected and fix the problem before upgrading.
+
+After the copy succeeds, change `KKT_VERSION` to the new release and run
+`docker compose up -d`. Later backups can use `kkt backup` as above. The
+snapshot keeps the original `/data` layout; its database is under
+`.local/share/kashkeshet/`, not at the top level like a `kkt backup` folder.
+A manual Compose install stays manually managed: `kkt upgrade` uses only
+the Docker folder recorded by `kkt setup`.
+
+### Restoring this raw snapshot
+
+A stopped server can leave committed data in `kashkeshet.db-wal`. This raw
+snapshot keeps that file too. Unlike a `kkt backup` folder, its `.db` file
+alone may not contain the data. Do not use the single-file restore below
+for this snapshot.
+
+Set `KKT_VERSION` back to the old version, then restore the database and
+its WAL together, if the snapshot has one. Discard the current database's
+WAL and shared-memory file; never reuse them with the restored database:
+
+```sh
+docker compose stop kkt
+docker compose run --rm --no-deps --entrypoint sh kkt -c '
+  cd /data/.local/share/kashkeshet &&
+  rm -f kashkeshet.db-wal kashkeshet.db-shm &&
+  cp /backups/before-upgrade/.local/share/kashkeshet/kashkeshet.db . &&
+  if [ -f /backups/before-upgrade/.local/share/kashkeshet/kashkeshet.db-wal ]; then
+    cp /backups/before-upgrade/.local/share/kashkeshet/kashkeshet.db-wal .
+  fi'
+docker compose up -d
+```
+
+Do not start the server if copying fails; fix the error and repeat the
+restore first. The snapshot's key and config are under `.config/kkt/` if
+you also need to restore them.
+
+## Rolling back a `kkt backup` copy
 
 Set `KKT_VERSION` back to the old version, then put back a database made by
 that version or before: a backup made before the upgrade has the database
@@ -98,6 +167,19 @@ kkt connect claude-code --url http://127.0.0.1:7420/mcp --key-file ~/.config/kkt
 ```
 
 ## With Tailscale
+
+In the folder from **Setup**, download the Tailscale files from the same
+release (`KKT_VERSION` is the version chosen above):
+
+```sh
+mkdir -p tailscale
+curl -fsSLO "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/compose.tailscale.yaml"
+curl -fsSL "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/tailscale/serve.json" -o tailscale/serve.json
+```
+
+Set the values in the table below, including
+`COMPOSE_FILE=compose.tailscale.yaml` in `.env`, then run `docker compose up -d`.
+Every later Compose command uses that file as well.
 
 `compose.tailscale.yaml` runs the `tailscale/tailscale` image as a separate
 container beside kkt, on the same Compose network. kkt is published on the

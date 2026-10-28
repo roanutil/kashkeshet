@@ -23,6 +23,9 @@ can't be reached that way there.
 
 ## Tailscale
 
+`kkt setup --tailscale` handles sharing for a service or Docker server
+(see [setup](setup.md#tailscale)). The steps below are for manual setups.
+
 With Docker, [Docker](docker.md#with-tailscale) sets this up for you. Without
 it:
 
