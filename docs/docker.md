@@ -67,7 +67,7 @@ stop kkt and copy the complete data volume with the old image:
 ```sh
 docker compose stop kkt
 docker compose run --rm --no-deps --entrypoint sh kkt -c '
-  mkdir /backups/before-upgrade &&
+  mkdir -m 700 /backups/before-upgrade &&
   cp -R /data/. /backups/before-upgrade/'
 ```
 
