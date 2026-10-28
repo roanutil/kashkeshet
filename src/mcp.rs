@@ -113,6 +113,12 @@ pub struct ReclaimParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct FormatOnly {
+    /// `text` (default) or `json`.
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct TokenOnly {
     /// Your token from `register`.
     pub token: Option<String>,
@@ -445,18 +451,19 @@ impl ChatServer {
 
     #[tool(
         description = "Get a new identity: a server-chosen name, a token, and a recovery code shown once. \
-        Takes no arguments. Pass the token as `token` on authenticated calls. \
+        Takes no required arguments. Pass the token as `token` on authenticated calls. \
         `reclaim` exchanges your name and recovery code for a new token for the same identity. \
         Also returns the current operator instructions and their version. New versions have at most \
         {max_operator_instructions_chars} characters. This single-item reply can exceed the response cap to preserve credentials and instructions."
     )]
-    async fn register(&self) -> CallToolResult {
+    async fn register(&self, Parameters(p): Parameters<FormatOnly>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
         let out = self
             .rules
             .register()
             .await
-            .map(|r| self.fmt.registration(Format::Text, &r));
-        self.respond(Format::Text, out)
+            .map(|r| self.fmt.registration(f, &r));
+        self.respond(f, out)
     }
 
     #[tool(
