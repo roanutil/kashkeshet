@@ -1210,6 +1210,37 @@ impl setup::Steps for OsSteps<'_> {
             (report, false) => Err(report.trim_end().to_string()),
         }
     }
+
+    fn check_address(&self, url: &str) -> Result<(), String> {
+        let mut checks =
+            tokio::runtime::Handle::current().block_on(diagnostics::inspect_address(url))?;
+        point_server_fix_at(
+            &mut checks,
+            "check the address, and that the server is running on its machine",
+        );
+        only_problems(checks)
+    }
+
+    fn check_key(&self, url: &str, key: &setup::ClientKey) -> Result<(), String> {
+        let runtime = tokio::runtime::Handle::current();
+        let checks = match key {
+            setup::ClientKey::None => runtime.block_on(diagnostics::inspect_with_key(url, None)),
+            setup::ClientKey::Typed(key) => {
+                runtime.block_on(diagnostics::inspect_with_key(url, Some(key)))
+            }
+            setup::ClientKey::File(path) => runtime.block_on(diagnostics::inspect(url, Some(path))),
+        }?;
+        only_problems(checks)
+    }
+}
+
+/// The doctor's lines for the problems in `checks` as an error, if any.
+fn only_problems(checks: Vec<diagnostics::Check>) -> Result<(), String> {
+    let problems: Vec<_> = checks.into_iter().filter(|check| !check.ok).collect();
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(doctor_report(problems).0.trim_end().to_string())
 }
 
 /// Runs doctor's connection checks on `url`, again every

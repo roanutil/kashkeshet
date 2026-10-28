@@ -156,7 +156,27 @@ pub fn unreachable(checks: &[Check]) -> bool {
 pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, String> {
     let mut checks = Vec::new();
     let key = key_file(key_path, &mut checks);
-    let client = Client::builder()
+    probe(url, key.as_deref(), checks).await
+}
+
+/// Checks only that a server answers at `url` and accepts its host name,
+/// without a key.
+pub async fn inspect_address(url: &str) -> Result<Vec<Check>, String> {
+    let client = http_client()?;
+    let url = Url::parse(url).map_err(|_| "invalid diagnostic URL")?;
+    let mut checks = Vec::new();
+    reach(&client, &url, &mut checks).await;
+    Ok(checks)
+}
+
+/// Checks a server as [`inspect`] does, with the key given as text (`None`
+/// for no key) rather than in a file.
+pub async fn inspect_with_key(url: &str, key: Option<&str>) -> Result<Vec<Check>, String> {
+    probe(url, key, Vec::new()).await
+}
+
+fn http_client() -> Result<Client, String> {
+    Client::builder()
         .timeout(DOCTOR_TIMEOUT)
         .connect_timeout(DOCTOR_TIMEOUT)
         .redirect(Policy::none())
@@ -164,8 +184,12 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
         .https_only(false)
         .user_agent(concat!("kkt-doctor/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|e| format!("could not construct the diagnostic HTTP client: {e}"))?;
-    let url = Url::parse(url).map_err(|_| "invalid diagnostic URL")?;
+        .map_err(|e| format!("could not construct the diagnostic HTTP client: {e}"))
+}
+
+/// Adds whether the server answers at `url` and accepts its host name to
+/// `checks`. Returns whether both did.
+async fn reach(client: &Client, url: &Url, checks: &mut Vec<Check>) -> bool {
     let response = match client.get(url.clone()).send().await {
         Ok(response) => response,
         Err(e) => {
@@ -174,7 +198,7 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
                 e.to_string(),
                 "run `kkt service start` or `kkt serve`, and check --url and the bind setting",
             ));
-            return Ok(checks);
+            return false;
         }
     };
     checks.push(Check::ok(SERVER_CHECK, format!("reachable at {url}")));
@@ -187,10 +211,19 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
                 url.host_str().unwrap_or("")
             ),
         ));
-        return Ok(checks);
+        return false;
     }
     checks.push(Check::ok("Host", "accepted"));
-    drop(response);
+    true
+}
+
+/// Adds the server checks for `url`, using `key`, to `checks`.
+async fn probe(url: &str, key: Option<&str>, mut checks: Vec<Check>) -> Result<Vec<Check>, String> {
+    let client = http_client()?;
+    let url = Url::parse(url).map_err(|_| "invalid diagnostic URL")?;
+    if !reach(&client, &url, &mut checks).await {
+        return Ok(checks);
+    }
     let request = json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
         "protocolVersion": DOCTOR_PROTOCOL_VERSION,
         "capabilities": {}, "clientInfo":{"name":"kkt-doctor", "version":env!("CARGO_PKG_VERSION")}
@@ -200,7 +233,7 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
         .header("Accept", "application/json, text/event-stream")
         .header("Content-Type", "application/json")
         .body(request.to_string());
-    if let Some(key) = &key {
+    if let Some(key) = key {
         post = post.bearer_auth(key);
     }
     let response = match post.send().await {
@@ -233,7 +266,7 @@ pub async fn inspect(url: &str, key_path: Option<&Path>) -> Result<Vec<Check>, S
             .delete(url)
             .header("mcp-session-id", session)
             .header("MCP-Protocol-Version", DOCTOR_PROTOCOL_VERSION);
-        if let Some(key) = &key {
+        if let Some(key) = key {
             delete = delete.bearer_auth(key);
         }
         match delete.send().await {

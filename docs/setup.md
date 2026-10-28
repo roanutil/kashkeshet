@@ -81,6 +81,12 @@ Have the server's MCP URL (ending in `/mcp`) and a copy of its access key.
 Setup can ask for the key or use an existing private file. It records the
 remote connection without starting a local server.
 
+Setup checks the address as soon as it is given: the server must answer
+there and accept the host name. It then checks that the server accepts the
+key. These checks change nothing. If one fails, setup says what was wrong
+and asks again; when the answer came from `--url` or `--key-file`, it stops
+with an error naming the flag.
+
 ```sh
 kkt setup --mode client --url https://kkt.tail1234.ts.net/mcp \
   --key-file /private/path/server-key --clients codex,claude-code

@@ -282,6 +282,8 @@ async fn setup_client(home: &Path, url: &str, key: &Path, extra: &[&str]) -> (bo
     kkt(home, &args).await
 }
 
+/// The key is checked as soon as it is given, so setup stops before any
+/// other step, naming the flag.
 #[tokio::test]
 async fn a_rejected_key_leaves_the_earlier_setup() {
     let (mut server, url, _) = keyed_server("wrong-key-server").await;
@@ -296,8 +298,15 @@ async fn a_rejected_key_leaves_the_earlier_setup() {
     assert!(made, "{said}");
     let (ok, said) = setup_client(&home, &url, &wrong, &["--clients", "none"]).await;
     assert!(!ok, "{said}");
-    assert!(said.contains("problem: "), "{said}");
-    assert!(said.contains("nothing was recorded"), "{said}");
+    assert!(said.contains("--key-file"), "{said}");
+    assert!(
+        said.contains("problem: key accepted: server returned 401"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("ok: "),
+        "only the problems are shown: {said}"
+    );
     assert_eq!(record_text(&home), EARLIER);
     server.kill().await.expect("stop kkt");
     let _ = std::fs::remove_dir_all(&home);
@@ -318,6 +327,12 @@ async fn an_unreachable_server_leaves_the_earlier_setup() {
     let url = format!("http://{}/mcp", free_bind());
     let (ok, said) = setup_client(&home, &url, &key, &["--clients", "codex"]).await;
     assert!(!ok, "{said}");
+    assert!(said.contains("--url"), "{said}");
+    assert!(said.contains("problem: server: "), "{said}");
+    assert!(
+        said.contains("check the address, and that the server is running on its machine"),
+        "{said}"
+    );
     assert_eq!(record_text(&home), EARLIER);
     assert!(
         !home.join(".codex/config.toml").exists(),

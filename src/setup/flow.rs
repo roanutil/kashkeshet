@@ -98,6 +98,12 @@ pub trait Steps {
     /// Checks the connection to the server in `record`. Returns the report,
     /// or the report as an error when it found problems.
     fn doctor(&self, record: &Record) -> Result<String, String>;
+    /// Checks, changing nothing, that a server answers at `url` and accepts
+    /// its host name. Returns the problems found as an error.
+    fn check_address(&self, url: &str) -> Result<(), String>;
+    /// Checks, changing nothing, that the server at `url` accepts `key`.
+    /// Returns the problems found as an error.
+    fn check_key(&self, url: &str, key: &ClientKey) -> Result<(), String>;
 }
 
 const MODE: Question = Question {
@@ -146,7 +152,7 @@ pub fn run(
         }
     };
     let plan = match purpose {
-        Purpose::Client => Plan::Client(client_answers(answers, ask)?),
+        Purpose::Client => Plan::Client(client_answers(answers, ask, steps)?),
         server => {
             let tailscale = match answers.tailscale {
                 Some(answer) => answer,
@@ -174,9 +180,9 @@ pub fn run(
         ),
         Plan::Client(ClientAnswers { url, key }) => {
             let (key_file, staged) = match key {
-                Key::None => (None, None),
-                Key::File(path) => (Some(path), None),
-                Key::Typed(key) => {
+                ClientKey::None => (None, None),
+                ClientKey::File(path) => (Some(path), None),
+                ClientKey::Typed(key) => {
                     let staged = steps.stage_key(&key)?;
                     (Some(staged.clone()), Some(staged))
                 }
@@ -249,10 +255,13 @@ enum Plan {
 /// Where a client-only machine's server is, and its key.
 struct ClientAnswers {
     url: String,
-    key: Key,
+    key: ClientKey,
 }
 
-enum Key {
+/// The key a client-only machine uses for its server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClientKey {
+    /// The server has no key.
     None,
     /// A file given with `--key-file`, used where it is.
     File(PathBuf),
@@ -260,29 +269,72 @@ enum Key {
     Typed(String),
 }
 
-fn client_answers(answers: &Answers, ask: &dyn Ask) -> Result<ClientAnswers, String> {
-    let url = match &answers.url {
-        Some(url) => url.clone(),
-        None => ask.text(URL)?,
+/// Asks for the server's address and key, checking each as soon as it is
+/// given and asking again on a problem. An answer given as a flag is
+/// checked the same way, and a problem with it ends setup.
+fn client_answers(
+    answers: &Answers,
+    ask: &dyn Ask,
+    steps: &dyn Steps,
+) -> Result<ClientAnswers, String> {
+    let url = loop {
+        let url = match &answers.url {
+            Some(url) => url.trim().to_string(),
+            None => ask.text(URL)?.trim().to_string(),
+        };
+        match check_address(&url, steps) {
+            Ok(()) => break url,
+            Err(problem) if answers.url.is_some() => return Err(flag_failed(URL, &problem)),
+            Err(problem) => ask.tell(&format!("That address did not work:\n{problem}")),
+        }
     };
-    let url = url.trim().to_string();
+    let key = loop {
+        let key = match &answers.key_file {
+            Some(path) => ClientKey::File(path.clone()),
+            None => match typed_key(&ask.text(KEY)?) {
+                Ok(key) => key,
+                Err(problem) => {
+                    ask.tell(&problem);
+                    continue;
+                }
+            },
+        };
+        match steps.check_key(&url, &key) {
+            Ok(()) => break key,
+            Err(problem) if answers.key_file.is_some() => return Err(flag_failed(KEY, &problem)),
+            Err(problem) => ask.tell(&format!("The server did not accept that key:\n{problem}")),
+        }
+    };
+    Ok(ClientAnswers { url, key })
+}
+
+fn check_address(url: &str, steps: &dyn Steps) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(format!(
             "{url:?} is not a server address: it starts with http:// or https://"
         ));
     }
-    let key = match &answers.key_file {
-        Some(path) => Key::File(path.clone()),
-        None => match ask.text(KEY)?.trim() {
-            "" => Key::None,
-            key => {
-                crate::config::check_access_key(key)
-                    .map_err(|e| format!("that key is not valid: {e}"))?;
-                Key::Typed(key.to_string())
-            }
-        },
-    };
-    Ok(ClientAnswers { url, key })
+    steps.check_address(url)
+}
+
+/// The key typed in answer to [`KEY`]: none when blank.
+fn typed_key(text: &str) -> Result<ClientKey, String> {
+    match text.trim() {
+        "" => Ok(ClientKey::None),
+        key => {
+            crate::config::check_access_key(key)
+                .map_err(|e| format!("that key is not valid: {e}"))?;
+            Ok(ClientKey::Typed(key.to_string()))
+        }
+    }
+}
+
+/// The error for an answer given as a flag that failed its check.
+fn flag_failed(question: Question, problem: &str) -> String {
+    format!(
+        "the answer given with {} did not pass its check, so nothing was changed:\n{problem}",
+        question.flag
+    )
 }
 
 /// The clients to connect: those given with `--clients`, or each one found
