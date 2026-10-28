@@ -77,8 +77,11 @@ curl -fsSLO https://raw.githubusercontent.com/sam-mfb/kashkeshet/main/compose.ta
 curl -fsSL https://raw.githubusercontent.com/sam-mfb/kashkeshet/main/tailscale/serve.json -o tailscale/serve.json
 ```
 
-Set `TS_AUTHKEY`, `TS_HOSTNAME` and `TS_TAILNET` in `.env`, then
-`docker compose -f compose.tailscale.yaml up -d`. kkt is at
+Set `TS_AUTHKEY`, `TS_HOSTNAME` and `TS_TAILNET` in `.env`, and add the line
+`COMPOSE_FILE=compose.tailscale.yaml`. That makes every `docker compose`
+command here (upgrade, backup, `down`) use the Tailscale file; without it
+they would use `compose.yaml`, which leaves out kkt's tailnet name and the
+Tailscale container. Then `docker compose up -d`. kkt is at
 `https://<TS_HOSTNAME>.<TS_TAILNET>/`; connect other machines with
 `--url https://<TS_HOSTNAME>.<TS_TAILNET>/mcp` and a copy of the key. Use
 Tailscale's access controls (ACLs) to limit who can reach it. Anyone who can

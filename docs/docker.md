@@ -71,8 +71,9 @@ docker compose up -d
 
 For a backup made before an upgrade, copy from
 `upgrade-backups/<name>/kashkeshet.db` instead; that folder is in the same
-directory. With Tailscale, add `-f compose.tailscale.yaml` after
-`docker compose` in each command.
+directory. With Tailscale, set `COMPOSE_FILE=compose.tailscale.yaml` in
+`.env` (or add `-f compose.tailscale.yaml` after `docker compose` in each
+command), as for every other command here.
 
 ## The access key
 
@@ -129,6 +130,7 @@ Values in `.env`:
 
 | Name | Meaning |
 |---|---|
+| `COMPOSE_FILE` | `compose.tailscale.yaml`, so that every `docker compose` command uses it. Without it, commands such as `up -d`, `exec` and `down` use `compose.yaml`, which has no Tailscale container and no tailnet name for kkt |
 | `TS_AUTHKEY` | A Tailscale auth key |
 | `TS_HOSTNAME` | The machine name kkt gets on the tailnet (`kkt`) |
 | `TS_TAILNET` | Your tailnet's DNS name, such as `tail1234.ts.net` |
