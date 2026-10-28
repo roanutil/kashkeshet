@@ -10,6 +10,7 @@ pub mod clients;
 pub mod clock;
 pub mod config;
 pub mod diagnostics;
+pub mod docker;
 pub mod hosts;
 pub mod logs;
 pub mod names;
