@@ -43,6 +43,10 @@ services:
       - --allow-any-bind
       - --allow-host
       - ${TS_HOSTNAME}.${TS_TAILNET:?set TS_TAILNET in .env}
+      # KKT_ALLOW_HOSTS (comma-separated) adds more, such as
+      # host.docker.internal for agents in other containers.
+      - --allow-host
+      - ${KKT_ALLOW_HOSTS:-localhost}
 
 volumes:
   kkt-data:

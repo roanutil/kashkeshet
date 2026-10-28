@@ -462,6 +462,8 @@ async fn docker_setup_works_from_a_home_with_nothing_in_it() {
             "--no-tailscale",
             "--clients",
             "none",
+            "--allow-host",
+            "host.docker.internal",
         ])
         .args(["--docker-project", "kkt-test", "--docker-port", &port])
         .env("HOME", &home)
@@ -499,6 +501,17 @@ async fn docker_setup_works_from_a_home_with_nothing_in_it() {
     let record = record_text(&home);
     assert!(record.contains("mode = \"docker\""), "{record}");
     assert!(record.contains(&format!("url = \"{url}\"")), "{record}");
+    // The extra host name reaches the managed settings file.
+    let data = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/kashkeshet")
+    } else {
+        home.join(".local/share/kashkeshet")
+    };
+    let env = std::fs::read_to_string(data.join("docker/.env")).expect("managed .env");
+    assert!(
+        env.contains("KKT_ALLOW_HOSTS=host.docker.internal\n"),
+        "{env}"
+    );
     assert!(
         said.contains(&format!("the web page is at http://127.0.0.1:{port}/")),
         "{said}"
@@ -619,6 +632,8 @@ async fn setup_waits_for_a_server_it_set_up_that_answers_late() {
             "docker",
             "--no-tailscale",
             "--clients",
+            "none",
+            "--allow-host",
             "none",
         ])
         .args(["--docker-project", "kkt-test", "--docker-port", &port])

@@ -254,8 +254,15 @@ mod flow {
     }
 
     impl Steps for Fake {
-        fn install_service(&self, tailscale: bool) -> Result<Installed, String> {
-            self.did(format!("install service tailscale={tailscale}"));
+        fn install_service(
+            &self,
+            tailscale: bool,
+            allow_hosts: &[String],
+        ) -> Result<Installed, String> {
+            self.did(format!(
+                "install service tailscale={tailscale}{}",
+                hosts(allow_hosts)
+            ));
             if self.fail_install {
                 return Err("launchctl failed".into());
             }
@@ -264,8 +271,15 @@ mod flow {
                 key_file: Some("/home/sam/.config/kkt/access-key".into()),
             })
         }
-        fn install_docker(&self, tailscale: bool) -> Result<(Installed, DockerSetup), String> {
-            self.did(format!("install docker tailscale={tailscale}"));
+        fn install_docker(
+            &self,
+            tailscale: bool,
+            allow_hosts: &[String],
+        ) -> Result<(Installed, DockerSetup), String> {
+            self.did(format!(
+                "install docker tailscale={tailscale}{}",
+                hosts(allow_hosts)
+            ));
             Ok((
                 Installed {
                     url: "https://kkt.tail1234.ts.net/mcp".into(),
@@ -320,6 +334,14 @@ mod flow {
         }
     }
 
+    /// How a fake install shows the extra host names: nothing when none.
+    fn hosts(allow_hosts: &[String]) -> String {
+        match allow_hosts {
+            [] => String::new(),
+            hosts => format!(" hosts={}", hosts.join(",")),
+        }
+    }
+
     /// A key long enough to be valid.
     const KEY: &str = "0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -363,6 +385,7 @@ mod flow {
             Reply::Choose(0),
             Reply::Confirm(true),
             Reply::Confirm(true),
+            Reply::Confirm(true),
             Reply::Confirm(false),
         ]);
         let steps = Fake {
@@ -376,6 +399,7 @@ mod flow {
             [
                 "--mode",
                 "--tailscale or --no-tailscale",
+                "--allow-host host.docker.internal, or --allow-host none",
                 "--clients",
                 "--clients"
             ]
@@ -383,7 +407,7 @@ mod flow {
         assert_eq!(
             steps.done(),
             [
-                "install service tailscale=true",
+                "install service tailscale=true hosts=host.docker.internal",
                 "doctor",
                 "connect claude-code key=/home/sam/.config/kkt/access-key",
                 "record service http://127.0.0.1:7420/mcp"
@@ -410,18 +434,46 @@ mod flow {
         let answers = Answers {
             purpose: Some(Purpose::Docker),
             tailscale: Some(false),
+            allow_hosts: Some(vec!["host.docker.internal".into()]),
             yes: true,
             ..Answers::default()
         };
         let record = run(&answers, "0.4.0", &ask, &steps).expect("setup");
         assert!(matches!(record.mode, Mode::Docker(ref d) if !d.tailscale));
         assert!(ask.asked.borrow().is_empty());
+        assert!(
+            steps
+                .done()
+                .contains(&"install docker tailscale=false hosts=host.docker.internal".to_string())
+        );
         let connected: Vec<String> = steps
             .done()
             .into_iter()
             .filter(|d| d.starts_with("connect"))
             .collect();
         assert_eq!(connected.len(), 2, "{connected:?}");
+    }
+
+    #[test]
+    fn saying_no_containers_adds_no_host_names() {
+        let ask = Script::with(vec![Reply::Confirm(false)]);
+        let steps = Fake::default();
+        let answers = Answers {
+            purpose: Some(Purpose::Docker),
+            tailscale: Some(false),
+            clients: Some(Vec::new()),
+            ..Answers::default()
+        };
+        run(&answers, "0.4.0", &ask, &steps).expect("setup");
+        assert_eq!(
+            *ask.asked.borrow(),
+            ["--allow-host host.docker.internal, or --allow-host none"]
+        );
+        assert!(
+            steps
+                .done()
+                .contains(&"install docker tailscale=false".to_string())
+        );
     }
 
     #[test]
@@ -482,6 +534,7 @@ mod flow {
         let answers = Answers {
             purpose: Some(Purpose::Service),
             tailscale: Some(false),
+            allow_hosts: Some(Vec::new()),
             clients: Some(Vec::new()),
             ..Answers::default()
         };

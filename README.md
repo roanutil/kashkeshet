@@ -44,7 +44,9 @@ There are two ways you can run your kashkeshet server:
   the background, as a service that starts at login.
 
 Without Tailscale, the server is reachable from this machine only, at
-`http://127.0.0.1:7420`.
+`http://127.0.0.1:7420`. Setup also asks whether agents in Docker
+containers on this machine will use the server; if so, they reach it at
+`http://host.docker.internal:7420/mcp`.
 
 For either server mode (Docker or background service), setup offers to share
 the server over Tailscale, which is currently the only way kkt supports

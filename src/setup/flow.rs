@@ -50,6 +50,9 @@ pub struct Answers {
     pub url: Option<String>,
     /// For a client: a file holding the server's access key.
     pub key_file: Option<PathBuf>,
+    /// For a server: host names it answers to besides its own, such as
+    /// `host.docker.internal`. Empty means none.
+    pub allow_hosts: Option<Vec<String>>,
     /// The clients to connect. Empty means none.
     pub clients: Option<Vec<Client>>,
     /// Answer yes to every yes-or-no question that has no flag of its own,
@@ -67,10 +70,17 @@ pub struct Installed {
 /// What `kkt setup` does to the machine. The real implementation is in
 /// `main.rs`.
 pub trait Steps {
-    /// Installs and starts the server as a service.
-    fn install_service(&self, tailscale: bool) -> Result<Installed, String>;
-    /// Sets up and starts the server in Docker.
-    fn install_docker(&self, tailscale: bool) -> Result<(Installed, DockerSetup), String>;
+    /// Installs and starts the server as a service that also answers to
+    /// `allow_hosts`.
+    fn install_service(&self, tailscale: bool, allow_hosts: &[String])
+    -> Result<Installed, String>;
+    /// Sets up and starts the server in Docker, also answering to
+    /// `allow_hosts`.
+    fn install_docker(
+        &self,
+        tailscale: bool,
+        allow_hosts: &[String],
+    ) -> Result<(Installed, DockerSetup), String>;
     /// Saves an access key typed in for a client-only machine where nothing
     /// uses it yet, readable only by its owner, and returns where.
     fn stage_key(&self, key: &str) -> Result<PathBuf, String>;
@@ -98,6 +108,13 @@ const TAILSCALE: Question = Question {
     text: "Share the server over Tailscale, so your other machines can reach it?",
     flag: "--tailscale or --no-tailscale",
 };
+const CONTAINERS: Question = Question {
+    text: "Will agents in Docker containers on this machine use this server? They reach it as \
+           host.docker.internal.",
+    flag: "--allow-host host.docker.internal, or --allow-host none",
+};
+/// The name Docker gives containers for the machine they run on.
+const DOCKER_HOST: &str = "host.docker.internal";
 const URL: Question = Question {
     text: "The server's MCP address, such as https://kkt.tail1234.ts.net/mcp:",
     flag: "--url",
@@ -135,19 +152,24 @@ pub fn run(
                 Some(answer) => answer,
                 None => ask.confirm(TAILSCALE)?,
             };
-            Plan::Server(server, tailscale)
+            let allow_hosts = match &answers.allow_hosts {
+                Some(hosts) => hosts.clone(),
+                None if ask.confirm(CONTAINERS)? => vec![DOCKER_HOST.to_string()],
+                None => Vec::new(),
+            };
+            Plan::Server(server, tailscale, allow_hosts)
         }
     };
     let chosen = choose_clients(answers, ask, steps)?;
 
     let (mode, installed, staged) = match plan {
-        Plan::Server(Purpose::Docker, tailscale) => {
-            let (installed, docker) = steps.install_docker(tailscale)?;
+        Plan::Server(Purpose::Docker, tailscale, allow_hosts) => {
+            let (installed, docker) = steps.install_docker(tailscale, &allow_hosts)?;
             (Mode::Docker(docker), installed, None)
         }
-        Plan::Server(_, tailscale) => (
+        Plan::Server(_, tailscale, allow_hosts) => (
             Mode::Service { tailscale },
-            steps.install_service(tailscale)?,
+            steps.install_service(tailscale, &allow_hosts)?,
             None,
         ),
         Plan::Client(ClientAnswers { url, key }) => {
@@ -218,9 +240,9 @@ pub fn run(
 
 /// What setup will do, once every question is answered.
 enum Plan {
-    /// Run the server here: as a service or in Docker, and whether over
-    /// Tailscale.
-    Server(Purpose, bool),
+    /// Run the server here: as a service or in Docker, whether over
+    /// Tailscale, and the other host names it answers to.
+    Server(Purpose, bool, Vec<String>),
     Client(ClientAnswers),
 }
 
