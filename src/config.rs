@@ -397,7 +397,7 @@ impl Limits {
         member_preview: 3,
         purpose_preview_chars: 120,
         web_session_lifetime: Duration::from_secs(12 * 60 * 60),
-        web_page_messages: 100,
+        web_page_messages: 50,
         upgrade_backups_kept: 5,
     };
 
