@@ -23,6 +23,9 @@ can't be reached that way there.
 
 ## Tailscale
 
+With Docker, [Docker](docker.md#with-tailscale) sets this up for you. Without
+it:
+
 `tailscale serve` serves the loopback port over HTTPS on your tailnet, at a
 name such as `my-mac.tail1234.ts.net`:
 
