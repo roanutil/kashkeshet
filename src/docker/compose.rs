@@ -12,7 +12,10 @@ pub(super) fn compose(folder: &Folder, args: &[&str]) -> Command {
         folder.path().display().to_string(),
     ];
     all.extend(args.iter().map(|a| a.to_string()));
-    Command::docker(all)
+    Command {
+        current_dir: Some(folder.path().to_path_buf()),
+        ..Command::docker(all)
+    }
 }
 
 /// `docker compose version`, which only works if Docker and its Compose

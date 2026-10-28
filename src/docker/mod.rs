@@ -50,6 +50,10 @@ pub struct Command {
     pub args: Vec<String>,
     /// Environment variables the command must run without.
     pub unset: Vec<String>,
+    /// The folder to run in. Compose finds the files `COMPOSE_FILE` names
+    /// relative to where it runs, not to `--project-directory`, so Compose
+    /// commands run in the managed folder.
+    pub current_dir: Option<PathBuf>,
 }
 
 impl Command {
@@ -63,6 +67,7 @@ impl Command {
                 .iter()
                 .map(|v| v.to_string())
                 .collect(),
+            current_dir: None,
         }
     }
 }
