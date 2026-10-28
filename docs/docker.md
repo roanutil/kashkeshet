@@ -12,11 +12,24 @@ Tailscale container.
 
 ## Setup
 
-The Compose files run the kkt version named in `.env`; there is no default.
+Choose a [published release](https://github.com/sam-mfb/kashkeshet/releases)
+and download its files into a new folder. Replace `X.Y.Z` below with that
+version, without the `v`. Keep the files and image on the same release;
+the backup commands in this guide need 0.4.0 or later.
 
-```
-cp .env.example .env      # then set KKT_VERSION, such as 0.3.0
+```sh
+mkdir kkt && cd kkt
+KKT_VERSION=X.Y.Z
+curl -fsSLO "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/compose.yaml"
+curl -fsSL "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/.env.example" -o .env
 mkdir backups
+```
+
+Set `KKT_VERSION` in `.env` to the same version. There is no default.
+Before the first start, set the backups folder's ownership on Linux as
+explained below, then run:
+
+```sh
 docker compose up -d
 ```
 
@@ -154,6 +167,19 @@ kkt connect claude-code --url http://127.0.0.1:7420/mcp --key-file ~/.config/kkt
 ```
 
 ## With Tailscale
+
+In the folder from **Setup**, download the Tailscale files from the same
+release (`KKT_VERSION` is the version chosen above):
+
+```sh
+mkdir -p tailscale
+curl -fsSLO "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/compose.tailscale.yaml"
+curl -fsSL "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/tailscale/serve.json" -o tailscale/serve.json
+```
+
+Set the values in the table below, including
+`COMPOSE_FILE=compose.tailscale.yaml` in `.env`, then run `docker compose up -d`.
+Every later Compose command uses that file as well.
 
 `compose.tailscale.yaml` runs the `tailscale/tailscale` image as a separate
 container beside kkt, on the same Compose network. kkt is published on the

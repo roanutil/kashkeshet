@@ -102,7 +102,21 @@ selected if needed).
 3. Remove the installed binary: `$CARGO_HOME/bin/kkt`, or
    `~/.cargo/bin/kkt` if `CARGO_HOME` is unset.
 
-To remove saved data too, delete the database folder:
+To remove **Docker data** too, first note the managed folder printed by
+`kkt status`, and make any backup you want to keep. After `kkt uninstall`,
+run this before deleting the managed folder:
+
+```sh
+docker compose --project-directory '/path/to/managed/docker' down -v
+```
+
+This deletes the Docker database/key volume and, when used, the Tailscale
+state volume. For manual Docker, run `docker compose down -v` in its folder
+with the correct `COMPOSE_FILE` selected. The host folder still holds the
+Compose files and backups; delete it separately if wanted. Remove the
+saved host key (normally `~/.config/kkt/docker-access-key`) too.
+
+To remove **service or terminal server data**, delete the database folder:
 `~/Library/Application Support/kashkeshet/` on macOS, or
 `~/.local/share/kashkeshet/` on Linux (`$XDG_DATA_HOME/kashkeshet/` if set).
 On both platforms, the key and config are `access-key` and `config.toml`
