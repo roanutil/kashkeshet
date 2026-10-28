@@ -36,8 +36,14 @@ use `http://127.0.0.1:7420/mcp`.
 
 ## Tailscale
 
-For a Docker server, setup starts a Tailscale container and prints a login
-link. Open it and sign in. Setup waits up to ten minutes; if interrupted or
+For a Docker server, setup starts a Tailscale container and shows a login
+link. At a terminal it says "Press Enter to open it in your browser (or open
+it yourself)": Enter opens the link with `open` (macOS) or `xdg-open`
+(Linux), and setup never opens a browser unless you ask. If opening fails,
+setup says so and the link stays on the screen. With no terminal, as in a
+script, it only prints the link. Sign in with the link; setup keeps watching
+for the login while it waits for Enter, so signing in some other way works
+too. Setup waits up to ten minutes; if interrupted or
 timed out, run setup again to resume with the saved container state. It
 reads the node's actual DNS name, including any suffix Tailscale adds when
 a name is already taken, and configures kkt to accept it.
