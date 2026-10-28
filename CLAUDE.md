@@ -38,6 +38,7 @@ require reading another's internals.
 | `settings/` | Gathering a server's settings from flags, the config file and defaults; default paths | Read files or environment variables itself; check limits (that is `config.rs`) |
 | `clients/` | Client MCP configuration, its vendor formats, backups and header-helper output | Start the server; expose key contents in previews or errors |
 | `diagnostics.rs` | Read-only key and HTTP/MCP connection checks, in our own result types | Register agents or change server data |
+| `tailscale/` | Sharing a service-mode server over the host's existing Tailscale login, through its injected `Host` contract | Change login or network preferences; edit kkt config or service files |
 | `config.rs` | Every limit, fixed setting and default, and the startup checks | Hold logic beyond checking settings |
 | `provenance/` | What produced a server run | |
 | `backup/` | Backup folders: their names, contents, file modes, and pruning the ones made before database upgrades | Copy the database itself (it is given the store's `copy_database`); read the clock |
