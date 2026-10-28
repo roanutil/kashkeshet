@@ -1108,14 +1108,52 @@ impl setup::Steps for OsSteps<'_> {
     }
 
     fn doctor(&self, record: &setup::Record) -> Result<String, String> {
-        let checks = tokio::runtime::Handle::current().block_on(diagnostics::inspect(
+        // A server set up just now may not answer yet; a client's server
+        // either answers or the address is wrong, so it isn't waited for.
+        let wait = match record.mode {
+            setup::Mode::Client => std::time::Duration::ZERO,
+            _ => config::SETUP_SERVER_WAIT,
+        };
+        let checks = tokio::runtime::Handle::current().block_on(inspect_until_reachable(
             &record.url,
             record.key_file.as_deref(),
+            &SystemClock,
+            wait,
         ))?;
         match doctor_report(checks) {
             (report, true) => Ok(report.trim_end().to_string()),
             (report, false) => Err(report.trim_end().to_string()),
         }
+    }
+}
+
+/// Runs doctor's connection checks on `url`, again every
+/// `SETUP_SERVER_POLL` while the server doesn't answer at all, for up to
+/// `wait` on `clock`. Returns the last checks.
+async fn inspect_until_reachable(
+    url: &str,
+    key_file: Option<&Path>,
+    clock: &dyn Clock,
+    wait: std::time::Duration,
+) -> Result<Vec<diagnostics::Check>, String> {
+    let end = clock.now() + chrono::Duration::from_std(wait).unwrap_or(chrono::Duration::MAX);
+    let every =
+        chrono::Duration::from_std(config::SETUP_SERVER_POLL).unwrap_or(chrono::Duration::MAX);
+    let mut said = false;
+    loop {
+        let began = clock.now();
+        let checks = diagnostics::inspect(url, key_file).await?;
+        if !diagnostics::unreachable(&checks) || began >= end {
+            return Ok(checks);
+        }
+        if !said {
+            println!(
+                "Waiting for the server to answer at {url} (a new Tailscale node gets its \
+                 HTTPS certificate on first use)..."
+            );
+            said = true;
+        }
+        clock.sleep_until(began + every).await;
     }
 }
 
