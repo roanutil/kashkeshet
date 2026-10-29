@@ -182,6 +182,8 @@ fn both_compose_setups_keep_both_default_keys_in_the_data_volume() {
     assert!(dockerfile.contains("ENV HOME=/data"));
     let env = kashkeshet::settings::Env {
         home: Some("/data".into()),
+        claude_config_dir: None,
+        codex_home: None,
         xdg_config_home: None,
         xdg_data_home: None,
     };
