@@ -540,6 +540,89 @@ sys.exit(9)
     );
 }
 
+/// Make `dir` read-only; false if writing there still works (as root).
+#[cfg(unix)]
+fn read_only(dir: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).expect("read-only");
+    std::fs::write(dir.join("probe"), "").is_err()
+}
+
+#[cfg(unix)]
+fn writable(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).expect("writable");
+}
+
+#[cfg(unix)]
+#[test]
+fn backup_failures_name_the_variable_that_chose_the_path() {
+    let home = Home::new();
+    let profile = home.0.join("profile");
+    for (client, variable, file, original) in [
+        ("codex", "CODEX_HOME", "config.toml", ""),
+        ("claude-code", "CLAUDE_CONFIG_DIR", ".claude.json", "{}"),
+    ] {
+        home.put(&format!("profile/{file}"), original);
+        if !read_only(&profile) {
+            writable(&profile);
+            return;
+        }
+        let out = home
+            .command()
+            .args(["connect", client, "--write"])
+            .env(variable, &profile)
+            .output()
+            .expect("run kkt");
+        writable(&profile);
+        assert!(!out.status.success(), "{client}: {}", text(&out));
+        assert!(
+            text(&out).contains(&format!("(from {variable})")),
+            "{client}: {}",
+            text(&out)
+        );
+        std::fs::remove_dir_all(&profile).expect("reset profile");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_claude_restore_reports_both_errors_and_the_variable() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Home::new();
+    let profile = home.0.join("profile");
+    home.put("profile/.claude.json", "{}");
+    if !read_only(&profile) {
+        writable(&profile);
+        return;
+    }
+    writable(&profile);
+    // Claude fails after its profile becomes read-only, so kkt cannot restore.
+    let script = home.put(
+        "bin/claude",
+        "#!/bin/sh\nchmod 500 \"$CLAUDE_CONFIG_DIR\"\nexit 9\n",
+    );
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).expect("executable");
+    let path = format!(
+        "{}:{}",
+        home.0.join("bin").display(),
+        std::env::var("PATH").expect("PATH")
+    );
+    let out = home
+        .command()
+        .args(["connect", "claude-code", "--write"])
+        .env("CLAUDE_CONFIG_DIR", &profile)
+        .env("PATH", path)
+        .output()
+        .expect("kkt");
+    writable(&profile);
+    assert!(!out.status.success());
+    let out = text(&out);
+    assert!(out.contains("claude mcp failed"), "{out}");
+    assert!(out.contains("could not restore"), "{out}");
+    assert!(out.contains("(from CLAUDE_CONFIG_DIR)"), "{out}");
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn doctor_cli_reports_typed_service_state_without_real_manager_commands() {

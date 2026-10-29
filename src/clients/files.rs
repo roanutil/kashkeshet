@@ -143,7 +143,8 @@ pub(super) fn apply_claude(
     })();
     if let Err(error) = applied {
         match original {
-            Some(text) => atomic(client_config, text).map_err(from)?,
+            Some(text) => atomic(client_config, text)
+                .map_err(|e| from(format!("{error}; could not restore: {e}")))?,
             None if client_config.exists() => fs::remove_file(client_config).map_err(|e| {
                 from(format!(
                     "{error}; could not restore {}: {e}",
