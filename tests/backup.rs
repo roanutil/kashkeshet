@@ -258,9 +258,11 @@ async fn backups_taken_while_agents_write_restore_to_a_working_server() {
 }
 
 #[tokio::test]
-async fn a_backup_keeps_its_copy_of_the_key_private() {
+async fn a_backup_keeps_both_keys_private_and_restores_them() {
     let home = temp_home("key");
     let (success, text) = finish(kkt(&home, &["key", "create"])).await;
+    assert!(success, "{text}");
+    let (success, text) = finish(kkt(&home, &["key", "create", "--web"])).await;
     assert!(success, "{text}");
     let db = home.join("kashkeshet.db");
     drop(kashkeshet::store::Db::open(&db).expect("make a database"));
@@ -291,12 +293,51 @@ async fn a_backup_keeps_its_copy_of_the_key_private() {
         std::fs::read(backup.join("access-key")).expect("key copy"),
         std::fs::read(home.join(".config/kkt/access-key")).expect("key")
     );
+    assert_eq!(
+        std::fs::read(backup.join("web-key")).unwrap(),
+        std::fs::read(home.join(".config/kkt/web-key")).unwrap()
+    );
+    let restored = temp_home("keys-restored");
+    let config_dir = restored.join(".config/kkt");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    for file in ["access-key", "web-key"] {
+        std::fs::copy(backup.join(file), config_dir.join(file)).unwrap();
+    }
+    let bind = free_bind();
+    let mut command = kkt(&restored, &["serve", "--bind", &bind, "--db"]);
+    command.arg(backup.join("kashkeshet.db"));
+    let (mut server, _) = start(command).await;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let web = std::fs::read_to_string(config_dir.join("web-key")).unwrap();
+    let response = http
+        .post(format!("http://{bind}/login"))
+        .header("origin", format!("http://{bind}"))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("key={}", web.trim()))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.headers().contains_key("set-cookie"));
+    let access = std::fs::read_to_string(config_dir.join("access-key")).unwrap();
+    let response = http
+        .post(format!("http://{bind}/mcp"))
+        .bearer_auth(access.trim())
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    server.kill().await.unwrap();
+    std::fs::remove_dir_all(restored).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = |p: &Path| std::fs::metadata(p).expect("meta").permissions().mode() & 0o777;
         assert_eq!(mode(&backup), 0o700);
         assert_eq!(mode(&backup.join("access-key")), 0o600);
+        assert_eq!(mode(&backup.join("web-key")), 0o600);
     }
     let _ = std::fs::remove_dir_all(&home);
 }

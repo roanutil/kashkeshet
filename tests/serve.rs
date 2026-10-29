@@ -369,6 +369,16 @@ async fn no_access_key_runs_open_and_makes_no_key() {
     let (mut child, line) = start(kkt(&home, &["serve", "--bind", &bind, "--no-access-key"])).await;
     assert!(line.contains("no access key"), "{line}");
     assert!(!home.join(".config/kkt/access-key").exists());
+    assert!(!home.join(".config/kkt/web-key").exists());
+    assert_eq!(
+        reqwest::Client::new()
+            .get(format!("http://{bind}/"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
     let status = reqwest::Client::new()
         .post(format!("http://{bind}/mcp"))
         .send()

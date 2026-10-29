@@ -47,3 +47,37 @@ async fn a_bad_allowed_host_stops_the_server_naming_the_setting() {
     );
     assert!(text.contains("invalid setting: allow_host"), "{text}");
 }
+
+#[tokio::test]
+async fn a_bad_or_reused_web_key_stops_the_server_without_printing_it() {
+    let dir = std::env::temp_dir().join(format!("kashkeshet-startup-web-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let keys = dir.join(".config/kkt");
+    std::fs::create_dir_all(&keys).unwrap();
+    let access = "access-0123456789abcdef0123456789abcdef";
+    std::fs::write(keys.join("access-key"), access).unwrap();
+    for web in ["short-secret", access] {
+        std::fs::write(keys.join("web-key"), web).unwrap();
+        let run = Command::new(KKT)
+            .args(["serve", "--bind", "127.0.0.1:0"])
+            .env("HOME", &dir)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .kill_on_drop(true)
+            .output();
+        let out = tokio::time::timeout(REFUSAL_TIMEOUT, run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!out.status.success());
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(text.contains("invalid setting: web_key_file"), "{text}");
+        assert!(!text.contains(web));
+        assert!(!text.contains(access));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

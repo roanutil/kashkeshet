@@ -39,7 +39,8 @@ To publish kkt on a port other than 7420 of the host's `127.0.0.1`, add
 
 Everything kkt keeps is under `/data`, in the `kkt-data` volume: the
 database (`/data/.local/share/kashkeshet/kashkeshet.db`), the access key
-(`/data/.config/kkt/access-key`, made on first start) and the config file
+(`/data/.config/kkt/access-key`), the operator web key
+(`/data/.config/kkt/web-key`, both made on first start), and the config file
 (`/data/.config/kkt/config.toml`, if you make one). The `backups` folder
 beside the Compose file is mounted at `/backups`.
 
@@ -164,6 +165,36 @@ Both Compose files pass it to kkt as `--allow-host`. Use this, not
 file's own `--allow-host` replaces the config file's list.
 
 ## The access key
+
+The container keeps two different keys in its persistent `/data` volume.
+The access key is for agents only; read the operator web key to log in:
+
+```sh
+docker compose exec kkt kkt key show --web
+```
+
+For `compose.tailscale.yaml`, add `-f compose.tailscale.yaml` to these
+commands. `kkt setup --mode docker` saves host copies as
+`~/.config/kkt/docker-access-key` and `~/.config/kkt/docker-web-key`, both
+mode 0600. On that host, `kkt key show --web` reads the web copy. Client
+configurations receive only the access key. An agent running as the host's
+user can still read both files.
+
+Rotate the server's web key inside its container, then restart it:
+
+```sh
+docker compose exec kkt kkt key create --web --force
+docker compose restart kkt
+```
+
+The restart loads the new key and ends all existing sessions. Rerun
+`kkt setup --mode docker` with the same settings to refresh the host copies.
+Changing the host copy alone does not change the container's key.
+
+Backups include `access-key` and `web-key`, each with mode 0600. Restore
+both into `/data/.config/kkt/` beside the config file before restarting;
+the database goes back to its original data path. See the backup's
+`about.txt` for the source paths.
 
 kkt never prints the key in its logs. To read it:
 

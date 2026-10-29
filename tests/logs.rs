@@ -130,13 +130,14 @@ async fn the_log_file_has_the_servers_lines_and_no_secrets() {
     for _ in 0..5 {
         tokens.push(token_in(&register(&bind, &key).await));
     }
+    let web_key = read(&home.join(".config/kkt/web-key")).trim().to_string();
     let login = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("client")
         .post(format!("http://{bind}/login"))
         .header("content-type", "application/x-www-form-urlencoded")
-        .body(format!("key={key}"))
+        .body(format!("key={web_key}"))
         .send()
         .await
         .expect("log in");
@@ -170,6 +171,8 @@ async fn the_log_file_has_the_servers_lines_and_no_secrets() {
     assert!(!text.contains('\u{1b}'), "{text}");
     // No secrets.
     assert!(!text.contains(&key), "the key is in the log");
+    assert!(!text.contains(&web_key), "the web key is in the log");
+    assert!(text.contains("created a new web key at"));
     assert!(!text.contains(&session), "the session ID is in the log");
     for token in &tokens {
         assert!(!text.contains(token.as_str()), "a token is in the log");

@@ -78,6 +78,14 @@ async fn a_dry_run_shows_absolute_paths_and_changes_nothing() {
         said.contains(&format!("Would write {}:", service_file(&home).display())),
         "{said}"
     );
+    assert!(
+        said.contains(&format!(
+            "Would create a new web key at {}",
+            config_dir.join("web-key").display()
+        )),
+        "{said}"
+    );
+    assert!(!config_dir.join("web-key").exists());
     let exe = Path::new(KKT).canonicalize().expect("kkt path");
     for path in [exe, config_dir.join("config.toml"), default_db(&home)] {
         assert!(
@@ -277,4 +285,17 @@ async fn no_access_key_installs_without_a_key() {
     );
     assert!(!key.exists());
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[tokio::test]
+async fn a_bad_existing_web_key_is_checked_even_when_the_access_key_is_new() {
+    let home = temp_home("bad-web");
+    let keys = home.join(".config/kkt");
+    std::fs::create_dir_all(&keys).unwrap();
+    std::fs::write(keys.join("web-key"), "too-short").unwrap();
+    let out = kkt(&home, &["service", "install", "--dry-run"]).await;
+    assert!(!out.status.success());
+    assert!(text(&out).contains("web_key_file"));
+    assert!(!keys.join("access-key").exists());
+    std::fs::remove_dir_all(home).unwrap();
 }

@@ -78,7 +78,7 @@ enum Command {
         #[command(flatten)]
         flags: ServeFlags,
     },
-    /// Manage the access key.
+    /// Manage the access and web keys.
     Key {
         #[command(subcommand)]
         command: KeyCommand,
@@ -328,7 +328,7 @@ enum ServiceCommand {
 
 #[derive(Subcommand, Debug)]
 enum KeyCommand {
-    /// Print the access-key header for client helper commands.
+    /// Print the access-key header for client helper commands (never the web key).
     Header {
         /// The key file (otherwise the default access-key path).
         #[arg(long)]
@@ -337,14 +337,20 @@ enum KeyCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Print the access key, and nothing else. The server never logs it.
+    /// Print the selected key, and nothing else. The server never logs it.
     Show {
+        /// Show the operator web key instead of the agents' access key.
+        #[arg(long)]
+        web: bool,
         /// The key file (otherwise the default access-key path).
         #[arg(long)]
         key_file: Option<PathBuf>,
     },
-    /// Write a new random access key to a file only you can read.
+    /// Write a new random key to a file only you can read.
     Create {
+        /// Create the operator web key instead of the agents' access key.
+        #[arg(long)]
+        web: bool,
         /// Where to write it. By default ~/.config/kkt/access-key
         /// ($XDG_CONFIG_HOME/kkt/access-key).
         #[arg(long)]
@@ -415,7 +421,7 @@ struct ServeFlags {
     #[arg(long)]
     instructions: Option<PathBuf>,
     /// A file holding the access key. Every /mcp request must send
-    /// `Authorization: Bearer <key>`, and the web page asks for it [default:
+    /// `Authorization: Bearer <key>`. The web page uses a separate web-key beside it [default:
     /// ~/.config/kkt/access-key, created if missing]
     #[arg(long)]
     access_key_file: Option<PathBuf>,
@@ -551,7 +557,7 @@ fn serve_connection(env: &Env, flags: ConnectionFlags, create: bool) -> Result<C
         .map_err(|e| sources.invalid(e))?;
     let url = diagnostics::endpoint(settings.bind, flags.url.as_deref())?;
     if create {
-        make_default_key(&settings.access_key)?;
+        make_default_key(&settings.access_key, "access")?;
     }
     let key_file = match settings.access_key {
         AccessKey::None => None,
@@ -590,23 +596,79 @@ fn kkt_path() -> Result<PathBuf, String> {
 }
 
 fn key_header(env: &Env, path: Option<PathBuf>, json: bool) -> Result<(), String> {
-    let path = path
-        .or_else(|| env.access_key_file())
-        .ok_or("set HOME or pass --key-file")?;
+    let path = selected_key_path(env, path, false)?;
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("could not read key file {}: {e}", path.display()))?;
     println!("{}", clients::header(text.trim(), json)?);
     Ok(())
 }
 
-fn key_show(env: &Env, path: Option<PathBuf>) -> Result<(), String> {
-    let path = path
-        .or_else(|| env.access_key_file())
-        .ok_or("set HOME or pass --key-file")?;
+fn key_show(env: &Env, path: Option<PathBuf>, web: bool) -> Result<(), String> {
+    let path = selected_key_path(env, path, web)?;
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("could not read key file {}: {e}", path.display()))?;
     println!("{}", text.trim());
     Ok(())
+}
+
+/// Resolve a key without reading its contents or creating a file. An explicit
+/// path names the selected key itself; otherwise use this machine's setup.
+fn selected_key_path(env: &Env, path: Option<PathBuf>, web: bool) -> Result<PathBuf, String> {
+    if let Some(path) = path {
+        return Ok(path);
+    }
+    let access = match read_setup(env)? {
+        Some(record) => {
+            if web && matches!(record.mode, setup::Mode::Client) {
+                return Err(
+                    "the web key is on the server's machine; run `kkt key show --web` there".into(),
+                );
+            }
+            let access = record.key_file.ok_or("keys are disabled for this setup")?;
+            if web && matches!(record.mode, setup::Mode::Docker(_)) {
+                return Ok(access.with_file_name(config::DOCKER_WEB_KEY_FILE_NAME));
+            }
+            access
+        }
+        None => {
+            let (_, options) = read_config(env, None)?;
+            let settings = options
+                .resolve(PathBuf::new(), env.access_key_file())
+                .map_err(|e| e.to_string())?;
+            match settings.access_key {
+                AccessKey::None => return Err("keys are disabled in the serve config".into()),
+                AccessKey::File(path) | AccessKey::Default(path) => path,
+            }
+        }
+    };
+    Ok(if web {
+        settings::web_key_path(&access)
+    } else {
+        access
+    })
+}
+
+fn local_web_key(env: &Env) -> Result<Option<PathBuf>, String> {
+    if let Some(record) = read_setup(env)? {
+        if matches!(record.mode, setup::Mode::Client) {
+            return Ok(None);
+        }
+        return Ok(record.key_file.as_deref().map(|access| {
+            if matches!(record.mode, setup::Mode::Docker(_)) {
+                access.with_file_name(config::DOCKER_WEB_KEY_FILE_NAME)
+            } else {
+                settings::web_key_path(access)
+            }
+        }));
+    }
+    let (_, options) = read_config(env, None)?;
+    let settings = options
+        .resolve(PathBuf::new(), env.access_key_file())
+        .map_err(|e| e.to_string())?;
+    Ok(match settings.web_key {
+        AccessKey::None => None,
+        AccessKey::File(path) | AccessKey::Default(path) => Some(path),
+    })
 }
 
 /// The name of the doctor line about the service on this machine.
@@ -615,6 +677,9 @@ const SERVICE_CHECK: &str = "this machine's kkt service";
 async fn doctor(env: &Env, flags: ConnectionFlags) -> Result<(), String> {
     let connection = client_connection(env, flags, false)?;
     let mut checks = diagnostics::inspect(&connection.url, connection.key_file.as_deref()).await?;
+    if let Some(path) = local_web_key(env)? {
+        checks.extend(diagnostics::inspect_web_key(&path));
+    }
     // The last line is about this machine, whatever server `--url` points
     // at: how `kkt setup` set it up, or else its kkt service.
     match read_setup(env)?.map(|record| record.mode) {
@@ -795,8 +860,14 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
             serve_from_config(env, config, flags).await
         }
         Command::Key {
-            command: KeyCommand::Create { path, force, show },
-        } => create_key(env, path, force, show),
+            command:
+                KeyCommand::Create {
+                    path,
+                    force,
+                    show,
+                    web,
+                },
+        } => create_key(env, path, force, show, web),
         Command::Agent {
             command,
             db,
@@ -811,8 +882,8 @@ async fn run(env: &Env, command: Command) -> Result<(), String> {
             command: KeyCommand::Header { key_file, json },
         } => key_header(env, key_file, json),
         Command::Key {
-            command: KeyCommand::Show { key_file },
-        } => key_show(env, key_file),
+            command: KeyCommand::Show { key_file, web },
+        } => key_show(env, key_file, web),
         Command::Connect {
             client,
             connection,
@@ -1096,6 +1167,12 @@ impl setup::Steps for OsSteps<'_> {
             }
             None => connection.url,
         };
+        if let Some(access) = &connection.key_file {
+            println!(
+                "The web key is in {}. Read it with `kkt key show --web`.",
+                settings::web_key_path(access).display()
+            );
+        }
         Ok(setup::Installed {
             url,
             key_file: connection.key_file,
@@ -1563,6 +1640,12 @@ fn mode_backup(
 }
 
 fn mode_status(env: &Env) -> Result<(), String> {
+    if let Some(path) = local_web_key(env)? {
+        println!(
+            "Web key: {} (read with `kkt key show --web`)",
+            path.display()
+        );
+    }
     let Some(record) = read_setup(env)? else {
         println!(
             "No setup record; checking this machine's kkt service. Run `kkt setup` to configure this machine."
@@ -1647,6 +1730,13 @@ fn mode_upgrade(env: &Env, allow_downgrade: bool) -> Result<(), String> {
                 .ok_or("set HOME to find the backup folder")?
                 .join(config::SERVICE_BACKUP_FOLDER);
             backup(env, &folder, None, None)?;
+            if let Some(key) = &plan.new_web_key {
+                new_key_file(key, false)?;
+                println!(
+                    "Created a new web key at {}. Read it with `kkt key show --web`.",
+                    key.display()
+                );
+            }
             let manager = Manager::for_this_os(env).map_err(|e| e.to_string())?;
             for line in manager
                 .install(&OsSystem, &plan.spec)
@@ -1700,7 +1790,7 @@ fn mode_uninstall(env: &Env) -> Result<(), String> {
 }
 
 /// `kkt backup`: backs up the database `kkt serve` would use (or `db`),
-/// with the config file and access key it would read, into `folder`.
+/// with the config file and existing keys it would read, into `folder`.
 fn backup(
     env: &Env,
     folder: &Path,
@@ -1714,12 +1804,26 @@ fn backup(
         (None, Some(true)) => None,
         (None, _) => env.access_key_file().filter(|path| path.exists()),
     };
+    let web_key = match access_key.as_deref().map(settings::web_key_path) {
+        Some(path) => match path.try_exists() {
+            Ok(true) => Some(path),
+            // Installations from before separate web keys have none until
+            // their first start or service upgrade.
+            Ok(false) => None,
+            Err(e) => return Err(format!("could not inspect {}: {e}", path.display())),
+        },
+        None => None,
+    };
     let contents = backup::Contents {
         database: &database,
         config: config_file.as_deref(),
         access_key: access_key.as_deref(),
+        web_key: web_key.as_deref(),
     };
     let written = write_backup(folder, &SystemClock, &contents)?;
+    if let Some(path) = &web_key {
+        println!("  web key {}", path.display());
+    }
     println!("Backed up to {}", written.display());
     println!("  database {}", database.display());
     if let Some(path) = &config_file {
@@ -1767,6 +1871,7 @@ fn backup_before_upgrade(database: &Path, keep: usize, clock: &dyn Clock) -> Res
         database,
         config: None,
         access_key: None,
+        web_key: None,
     };
     let written = write_backup(&folder, clock, &contents).map_err(|e| {
         format!(
@@ -1835,6 +1940,7 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
         allow_hosts,
         instructions,
         access_key,
+        web_key,
         log_file,
         log_level,
         dependency_log_level,
@@ -1857,8 +1963,28 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
             Admission::SharedKey(read_key(&path, sources)?)
         }
     };
+    let web_admission = match web_key {
+        AccessKey::None => Admission::Open,
+        AccessKey::File(path) | AccessKey::Default(path) => {
+            let text = std::fs::read_to_string(&path).map_err(|e| {
+                format!(
+                    "invalid setting: web_key_file could not be read from {}: {e}",
+                    path.display()
+                )
+            })?;
+            if let Admission::SharedKey(access) = &admission
+                && access.matches(text.trim().as_bytes())
+            {
+                return Err("invalid setting: web_key_file must contain a different key from access_key_file".into());
+            }
+            let key = SharedKey::new(&text, path.display().to_string())
+                .map_err(|e| format!("invalid setting: web_key_file: {}", e.rule))?;
+            Admission::SharedKey(key)
+        }
+    };
     let config = AppConfig {
         admission,
+        web_admission,
         limits,
         allowed_origins: allow_origins,
         allowed_hosts,
@@ -1877,7 +2003,8 @@ fn check_settings(settings: ServeSettings, sources: &Sources) -> Result<Checked,
 }
 
 async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String> {
-    make_default_key(&settings.access_key)?;
+    make_default_key(&settings.access_key, "access")?;
+    make_default_key(&settings.web_key, "web")?;
     let Checked {
         db_path,
         bind,
@@ -1928,7 +2055,7 @@ async fn serve(settings: ServeSettings, sources: &Sources) -> Result<(), String>
 /// and says how to use it. The key itself is printed only with `--show`.
 /// Makes the default key file if it is the one in use and does not exist
 /// yet, and logs where it is (never the key).
-fn make_default_key(access_key: &AccessKey) -> Result<(), String> {
+fn make_default_key(access_key: &AccessKey, kind: &str) -> Result<(), String> {
     let AccessKey::Default(path) = access_key else {
         return Ok(());
     };
@@ -1940,7 +2067,7 @@ fn make_default_key(access_key: &AccessKey) -> Result<(), String> {
             .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     }
     write_key_file(path, &SharedKey::generate(&OsEntropy), false)?;
-    tracing::info!("created a new access key at {}", path.display());
+    tracing::info!("created a new {kind} key at {}", path.display());
     Ok(())
 }
 
@@ -1955,14 +2082,39 @@ fn read_key(path: &Path, sources: &Sources) -> Result<SharedKey, String> {
     SharedKey::new(&text, path.display().to_string()).map_err(|e| sources.invalid(e))
 }
 
-fn create_key(env: &Env, path: Option<PathBuf>, force: bool, show: bool) -> Result<(), String> {
-    let path = match path {
-        Some(path) => path,
-        None => env
-            .access_key_file()
-            .ok_or("no home directory to keep the key in: set HOME or pass --path".to_string())?,
+fn create_key(
+    env: &Env,
+    path: Option<PathBuf>,
+    force: bool,
+    show: bool,
+    web: bool,
+) -> Result<(), String> {
+    if web
+        && path.is_none()
+        && matches!(
+            read_setup(env)?.map(|r| r.mode),
+            Some(setup::Mode::Docker(_))
+        )
+    {
+        return Err("rotate the web key inside the container: `docker compose exec kkt kkt key create --web --force`, then restart kkt and rerun setup to refresh the host copy".into());
+    }
+    let path = if web {
+        selected_key_path(env, path, true)?
+    } else {
+        path.or_else(|| env.access_key_file())
+            .ok_or("set HOME or pass --path")?
     };
     let key = new_key_file(&path, force)?;
+    if web {
+        println!(
+            "Wrote a new web key to {}. Restart the server to use it and end existing web sessions.",
+            path.display()
+        );
+        if show {
+            println!("{key}");
+        }
+        return Ok(());
+    }
     let shown = path.display();
     println!("Wrote a new access key to {shown}");
     println!();
@@ -2048,6 +2200,9 @@ fn service(env: &Env, command: ServiceCommand) -> Result<(), String> {
                     .install(&dry, &plan.spec)
                     .map_err(|e| e.to_string())?;
                 let mut said = vec!["Dry run: nothing was changed.".to_string()];
+                if let Some(key) = &plan.new_web_key {
+                    said.push(format!("Would create a new web key at {}", key.display()));
+                }
                 if let Some(key) = &plan.new_key {
                     said.push(format!(
                         "Would create a new access key at {}",
@@ -2058,6 +2213,13 @@ fn service(env: &Env, command: ServiceCommand) -> Result<(), String> {
                 Ok(said)
             } else {
                 let mut said = Vec::new();
+                if let Some(key) = &plan.new_web_key {
+                    new_key_file(key, false)?;
+                    said.push(format!(
+                        "Created a new web key at {}. Read it with `kkt key show --web`.",
+                        key.display()
+                    ));
+                }
                 if let Some(key) = &plan.new_key {
                     new_key_file(key, false)?;
                     said.push(format!("Created a new access key at {}", key.display()));
@@ -2086,6 +2248,7 @@ fn service(env: &Env, command: ServiceCommand) -> Result<(), String> {
 struct ServicePlan {
     spec: Spec,
     new_key: Option<PathBuf>,
+    new_web_key: Option<PathBuf>,
 }
 
 /// What the service runs: `kkt serve` with absolute paths, since a service
@@ -2163,6 +2326,14 @@ fn service_plan(
         (Some(db), _) | (None, Some(db)) => db.clone(),
         (None, None) => return Err("no database for the service".to_string()),
     };
+    let resolved = options
+        .clone()
+        .resolve(db_in_effect.clone(), env.access_key_file())
+        .map_err(|e| loaded.sources().invalid(e))?;
+    let new_web_key = match &resolved.web_key {
+        AccessKey::Default(path) if !path.exists() => Some(path.clone()),
+        _ => None,
+    };
     // A key about to be made is good by construction, so the check skips
     // it; any other key is read and checked.
     match &new_key {
@@ -2174,9 +2345,14 @@ fn service_plan(
     }
     let db_folder = db_in_effect.parent().map(Path::to_path_buf);
     let sources = loaded.sources();
-    let settings = options
+    let mut settings = options
         .resolve(db_in_effect, env.access_key_file())
         .map_err(|e| sources.invalid(e))?;
+    settings.web_key = if new_web_key.is_some() {
+        AccessKey::None
+    } else {
+        resolved.web_key
+    };
     check_settings(settings, &sources)?;
 
     let text = |path: &Path| {
@@ -2212,6 +2388,7 @@ fn service_plan(
             dirs,
         },
         new_key,
+        new_web_key,
     })
 }
 

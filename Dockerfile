@@ -1,6 +1,6 @@
 # kkt in a container. Build from the repository root:
 #   docker build -t kkt .
-# The database, access key and config live under /data: mount one volume there.
+# The database, access key, web key and config live under /data: mount one volume there.
 
 FROM rust:1-bookworm AS build
 WORKDIR /src

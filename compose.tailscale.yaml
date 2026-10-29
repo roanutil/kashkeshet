@@ -1,7 +1,8 @@
 # kkt in Docker, served over HTTPS on your tailnet by a Tailscale container.
 #   cp .env.example .env     # then fill in the values
 #   docker compose -f compose.tailscale.yaml up -d
-#   docker compose -f compose.tailscale.yaml exec kkt kkt key show
+#   docker compose -f compose.tailscale.yaml exec kkt kkt key show --web  # operator login
+#   docker compose -f compose.tailscale.yaml exec kkt kkt key show        # agents only
 #   docker compose -f compose.tailscale.yaml exec kkt kkt backup /backups
 # kkt and Tailscale are separate containers on the Compose network. Tailscale
 # Serve proxies HTTPS 443 to http://kkt:7420 (see tailscale/serve.json), and
@@ -43,6 +44,7 @@ services:
       - --bind
       - 0.0.0.0:7420
       - --allow-any-bind
+      # Both keys live in the persistent data volume. web-key is beside access-key.
       - --allow-host
       - ${TS_HOSTNAME}.${TS_TAILNET:?set TS_TAILNET in .env}
       # KKT_ALLOW_HOSTS (comma-separated) adds more, such as

@@ -60,6 +60,24 @@ pub fn endpoint(bind: SocketAddr, given: Option<&str>) -> Result<String, String>
     Ok(url.to_string())
 }
 
+/// Check the operator key locally, without sending it to any endpoint.
+pub fn inspect_web_key(path: &Path) -> Vec<Check> {
+    let mut checks = Vec::new();
+    key_file(Some(path), &mut checks);
+    for check in &mut checks {
+        check.name = match check.name {
+            "key file" => "web key file",
+            "key permissions" => "web key permissions",
+            "key contents" => "web key contents",
+            _ => "web key",
+        };
+        if check.fix.is_some() {
+            check.fix = Some("check the operator web key on the server; `kkt key create --web` creates it if missing, then restart the server".into());
+        }
+    }
+    checks
+}
+
 fn key_file(path: Option<&Path>, checks: &mut Vec<Check>) -> Option<String> {
     let Some(path) = path else {
         checks.push(Check::ok("key", "disabled in the serve config"));

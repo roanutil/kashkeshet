@@ -1,4 +1,4 @@
-//! Signing in to the web page when an access key is set: the login form,
+//! Signing in to the web page when a web key is set: the login form,
 //! the session cookie, logout, and the check in front of every page. The
 //! decisions are made by the [`Gate`]; this file only reads and writes
 //! HTTP.

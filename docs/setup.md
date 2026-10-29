@@ -23,14 +23,20 @@ files and settings in a managed `docker` folder under kkt's data directory:
 `~/.local/share/kashkeshet/docker` on Linux (`$XDG_DATA_HOME` if set).
 The files are embedded in the installed binary for its version. Setup
 creates the backups folder, handles its permissions, starts the containers
-and saves their key in `~/.config/kkt/docker-access-key`, readable only by
-you. No Compose download, version entry or manual key copy is needed.
+and saves both keys in `~/.config/kkt/docker-access-key` (agents) and
+`~/.config/kkt/docker-web-key` (operator), each with mode 0600. No Compose download, version entry or manual key copy is needed.
 [Docker](docker.md) describes the separate manual setup.
 
 **Service** uses launchd on macOS or a systemd user service on Linux,
-with the usual config file, database and key paths. It starts now and at
+with the usual config file, database and key paths. Setup creates both
+`~/.config/kkt/access-key` and `~/.config/kkt/web-key` with mode 0600. It starts now and at
 login; see [service](service.md) for logs and start/stop commands. A Linux
 user service normally stops at logout unless lingering is enabled.
+
+Setup gives client configurations only the access key. Read the separate
+operator key with `kkt key show --web` on the server host to log in to the
+web page. `kkt status` names its file and `kkt doctor` checks it locally,
+without sending it to MCP. Client-only setups do not keep the web key.
 
 Without Tailscale, the web page is at <http://127.0.0.1:7420/> and clients
 use `http://127.0.0.1:7420/mcp`.

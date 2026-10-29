@@ -194,3 +194,143 @@ async fn show_without_a_key_file_is_an_error() {
         text(&out)
     );
 }
+
+#[tokio::test]
+async fn web_key_creation_show_and_rotation_are_separate_from_access_key() {
+    let home = temp_home("web");
+    for args in [vec!["key", "create"], vec!["key", "create", "--web"]] {
+        let out = kkt(&home, &args).await;
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    let access_file = home.join(".config/kkt/access-key");
+    let web_file = home.join(".config/kkt/web-key");
+    let access = read_key(&access_file);
+    let web = read_key(&web_file);
+    assert_ne!(access, web);
+    #[cfg(unix)]
+    assert_eq!(mode(&web_file), 0o600);
+    let out = kkt(&home, &["key", "show", "--web"]).await;
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), web);
+    let out = kkt(&home, &["key", "header"]).await;
+    assert!(out.status.success());
+    assert!(!text(&out).contains(&web));
+    let out = kkt(&home, &["key", "create", "--web", "--force"]).await;
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!text(&out).contains(&read_key(&web_file)));
+    assert_ne!(read_key(&web_file), web);
+    assert_eq!(read_key(&access_file), access);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+async fn start_server(home: &Path) -> (tokio::process::Child, String) {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let bind = listener.local_addr().unwrap().to_string();
+    drop(listener);
+    let mut child = Command::new(KKT)
+        .args(["serve", "--bind", &bind])
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    tokio::time::timeout(TIMEOUT, async {
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.contains("listening") {
+                return;
+            }
+        }
+        panic!("server exited before listening");
+    })
+    .await
+    .unwrap();
+    (child, format!("http://{bind}"))
+}
+
+#[tokio::test]
+async fn rotating_the_web_key_and_restarting_ends_old_sessions() {
+    let home = temp_home("web-sessions");
+    let (mut server, base) = start_server(&home).await;
+    let access = read_key(&home.join(".config/kkt/access-key"));
+    let old_web = read_key(&home.join(".config/kkt/web-key"));
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    async fn login(http: &reqwest::Client, base: &str, key: &str) -> reqwest::Response {
+        http.post(format!("{base}/login"))
+            .header("origin", base)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(format!("key={key}"))
+            .send()
+            .await
+            .unwrap()
+    }
+    let login_response = login(&http, &base, &old_web).await;
+    let cookie = login_response.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        http.get(format!("{base}/"))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let out = kkt(&home, &["key", "create", "--web", "--force"]).await;
+    assert!(out.status.success(), "{}", text(&out));
+    let new_web = read_key(&home.join(".config/kkt/web-key"));
+    assert_ne!(old_web, new_web);
+    server.kill().await.unwrap();
+    let (mut server, base) = start_server(&home).await;
+    assert_eq!(
+        http.get(format!("{base}/"))
+            .header("cookie", cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        303
+    );
+    assert_eq!(login(&http, &base, &old_web).await.status(), 401);
+    assert_eq!(login(&http, &base, &access).await.status(), 401);
+    assert!(
+        login(&http, &base, &new_web)
+            .await
+            .headers()
+            .contains_key("set-cookie")
+    );
+    assert_eq!(read_key(&home.join(".config/kkt/access-key")), access);
+    server.kill().await.unwrap();
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
+async fn a_client_only_setup_cannot_show_or_create_a_web_key() {
+    let home = temp_home("web-client");
+    let config = home.join(".config/kkt");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("setup.toml"),
+        "format = 1\nmode = \"client\"\nwritten_by = \"test\"\nurl = \"http://localhost:7420/mcp\"\n").unwrap();
+    for action in ["show", "create"] {
+        let out = kkt(&home, &["key", action, "--web"]).await;
+        assert!(!out.status.success());
+        assert!(
+            text(&out).contains("web key is on the server's machine"),
+            "{}",
+            text(&out)
+        );
+    }
+    assert!(!config.join("web-key").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}

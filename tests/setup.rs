@@ -469,6 +469,7 @@ fn fake_docker(dir: &Path, key: &str) -> PathBuf {
         &docker,
         format!(
             "#!/bin/sh\ncase \"$*\" in\n\
+             *\"kkt key show --web\"*) echo 'web-key-0123456789abcdef0123456789abcdef' ;;\n\
              *\"kkt key show\"*) echo '{key}' ;;\n\
              *\"ps --status running --services\"*) [ -n \"$FAKE_KKT_RUNNING\" ] && echo kkt ;;\n\
              esac\nexit 0\n"
@@ -508,7 +509,7 @@ async fn docker_setup_works_from_a_home_with_nothing_in_it() {
             "docker",
             "--no-tailscale",
             "--clients",
-            "none",
+            "codex",
             "--allow-host",
             "host.docker.internal",
         ])
@@ -530,6 +531,20 @@ async fn docker_setup_works_from_a_home_with_nothing_in_it() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(out.status.success(), "{said}");
+    let web_saved = home.join(".config/kkt/docker-web-key");
+    let web_text = std::fs::read_to_string(&web_saved).expect("saved web key");
+    assert_eq!(web_text.trim(), "web-key-0123456789abcdef0123456789abcdef");
+    assert!(!said.contains(web_text.trim()));
+    let shown = Command::new(KKT)
+        .args(["key", "show", "--web"])
+        .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .output()
+        .await
+        .expect("show web key");
+    assert!(shown.status.success());
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), web_text);
     let saved = home.join(".config/kkt/docker-access-key");
     assert_eq!(
         std::fs::read_to_string(&saved).expect("saved key").trim(),
@@ -544,10 +559,19 @@ async fn docker_setup_works_from_a_home_with_nothing_in_it() {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
+        assert_eq!(
+            std::fs::metadata(&web_saved).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
     let record = record_text(&home);
     assert!(record.contains("mode = \"docker\""), "{record}");
     assert!(record.contains(&format!("url = \"{url}\"")), "{record}");
+    let client_config =
+        std::fs::read_to_string(home.join(".codex/config.toml")).expect("codex config");
+    assert!(!client_config.contains(web_text.trim()));
+    assert!(!client_config.contains("web-key"));
+    assert!(client_config.contains("docker-access-key"));
     // The extra host name reaches the managed settings file.
     let data = if cfg!(target_os = "macos") {
         home.join("Library/Application Support/kashkeshet")
@@ -679,7 +703,7 @@ async fn setup_waits_for_a_server_it_set_up_that_answers_late() {
             "docker",
             "--no-tailscale",
             "--clients",
-            "none",
+            "codex",
             "--allow-host",
             "none",
         ])

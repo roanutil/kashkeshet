@@ -35,6 +35,7 @@ impl Drop for Server {
 pub fn test_config() -> AppConfig {
     AppConfig {
         admission: Admission::Open,
+        web_admission: Admission::Open,
         limits: Limits::DEFAULT,
         allowed_origins: vec!["http://localhost:6274".into()],
         allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
