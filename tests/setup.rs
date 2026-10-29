@@ -262,6 +262,20 @@ async fn with_no_terminal_a_missing_answer_names_its_flag() {
     let (ok, said) = kkt(&home, &["setup", "--mode", "client"]).await;
     assert!(!ok);
     assert!(said.contains("pass --url"), "{said}");
+    for mode in ["docker", "service"] {
+        let (ok, said) = kkt(&home, &["setup", "--mode", mode, "--yes"]).await;
+        assert!(!ok);
+        assert!(
+            said.contains("pass --tailscale or --no-tailscale"),
+            "{said}"
+        );
+        let (ok, said) = kkt(&home, &["setup", "--mode", mode, "--no-tailscale", "--yes"]).await;
+        assert!(!ok);
+        assert!(
+            said.contains("pass --allow-host host.docker.internal, or --allow-host none"),
+            "{said}"
+        );
+    }
     assert!(!home.join(".config/kkt/setup.toml").exists());
     let _ = std::fs::remove_dir_all(&home);
 }

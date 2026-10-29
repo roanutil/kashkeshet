@@ -909,6 +909,29 @@ struct TerminalAsk {
 }
 
 impl TerminalAsk {
+    fn choose_with(
+        question: setup::Question,
+        options: &[&str],
+        default: usize,
+        mut line: impl FnMut(&str) -> Result<String, String>,
+    ) -> Result<usize, String> {
+        let mut prompt = format!("{}\n", question.text);
+        for (i, option) in options.iter().enumerate() {
+            prompt.push_str(&format!("  {}. {option}\n", i + 1));
+        }
+        prompt.push_str(&format!("Choose a number [{}]: ", default + 1));
+        loop {
+            let answer = line(&prompt)?;
+            if answer.trim().is_empty() {
+                return Ok(default);
+            }
+            match answer.trim().parse::<usize>() {
+                Ok(n) if (1..=options.len()).contains(&n) => return Ok(n - 1),
+                _ => println!("Type a number from 1 to {}.", options.len()),
+            }
+        }
+    }
+
     fn confirm_with(
         question: setup::Question,
         mut line: impl FnMut(&str) -> Result<String, String>,
@@ -955,19 +978,15 @@ impl TerminalAsk {
 }
 
 impl setup::Ask for TerminalAsk {
-    fn choose(&self, question: setup::Question, options: &[&str]) -> Result<usize, String> {
-        let mut prompt = format!("{}\n", question.text);
-        for (i, option) in options.iter().enumerate() {
-            prompt.push_str(&format!("  {}. {option}\n", i + 1));
-        }
-        prompt.push_str("Choose a number: ");
-        loop {
-            let answer = self.line(question, &prompt)?;
-            match answer.trim().parse::<usize>() {
-                Ok(n) if (1..=options.len()).contains(&n) => return Ok(n - 1),
-                _ => println!("Type a number from 1 to {}.", options.len()),
-            }
-        }
+    fn choose(
+        &self,
+        question: setup::Question,
+        options: &[&str],
+        default: usize,
+    ) -> Result<usize, String> {
+        Self::choose_with(question, options, default, |prompt| {
+            self.line(question, prompt)
+        })
     }
 
     fn confirm(&self, question: setup::Question) -> Result<bool, String> {
@@ -2206,6 +2225,67 @@ mod terminal_ask_tests {
             flag: "--clients",
             default,
         }
+    }
+
+    fn mode_question() -> setup::Question<'static> {
+        setup::Question {
+            text: "What is this machine for?",
+            flag: "--mode",
+            default: None,
+        }
+    }
+
+    const MODES: [&str; 3] = ["Docker (Recommended)", "Service", "Client"];
+
+    #[test]
+    fn enter_selects_the_displayed_mode_default() {
+        for answer in ["", "  "] {
+            assert_eq!(
+                TerminalAsk::choose_with(mode_question(), &MODES, 0, |prompt| {
+                    assert_eq!(
+                        prompt,
+                        "What is this machine for?\n  1. Docker (Recommended)\n  2. Service\n  3. Client\nChoose a number [1]: "
+                    );
+                    Ok(answer.into())
+                }),
+                Ok(0)
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_mode_choices_override_the_default() {
+        for (answer, expected) in [("1", 0), (" 2 ", 1), ("3", 2)] {
+            assert_eq!(
+                TerminalAsk::choose_with(mode_question(), &MODES, 0, |_| Ok(answer.into())),
+                Ok(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_mode_choices_ask_again() {
+        let mut answers = ["0", "4", "-1", "docker", ""].into_iter();
+        assert_eq!(
+            TerminalAsk::choose_with(mode_question(), &MODES, 0, |_| {
+                Ok(answers.next().expect("another answer").into())
+            }),
+            Ok(0)
+        );
+        assert_eq!(answers.next(), None);
+    }
+
+    #[test]
+    fn the_mode_default_never_replaces_a_missing_answer() {
+        let ask = TerminalAsk { interactive: false };
+        assert_eq!(
+            ask.choose(mode_question(), &MODES, 0),
+            Err(setup::unanswered(mode_question()))
+        );
+        assert_eq!(
+            TerminalAsk::choose_with(mode_question(), &MODES, 0, |_| Err("no answer".into())),
+            Err("no answer".into())
+        );
     }
 
     #[test]

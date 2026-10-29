@@ -15,8 +15,10 @@ pub struct Question<'a> {
 /// Asks questions and says what happened. The terminal implementation is in
 /// `main.rs`; tests use scripted answers.
 pub trait Ask {
-    /// The index of the option chosen from `options`.
-    fn choose(&self, question: Question, options: &[&str]) -> Result<usize, String>;
+    /// The index of the option chosen from `options`. Enter accepts `default`
+    /// at a terminal; without a terminal the question still needs its flag.
+    fn choose(&self, question: Question, options: &[&str], default: usize)
+    -> Result<usize, String>;
     /// Yes or no.
     fn confirm(&self, question: Question) -> Result<bool, String>;
     /// A line of text.

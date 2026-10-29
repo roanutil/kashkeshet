@@ -153,6 +153,10 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 pub const ACCESS_KEY_FILE_NAME: &str = "access-key";
 /// The setup record `kkt setup` writes, in the config directory.
 pub const SETUP_FILE_NAME: &str = "setup.toml";
+/// The zero-based mode option Enter accepts during interactive setup (Docker).
+pub const DEFAULT_SETUP_MODE_INDEX: usize = 0;
+/// Whether Enter allows agents in local containers during interactive setup.
+pub const DEFAULT_SETUP_CONTAINERS: bool = true;
 /// Where `kkt setup` keeps a client-only machine's copy of its server's
 /// key, in the config directory.
 pub const CLIENT_KEY_FILE_NAME: &str = "client-access-key";
