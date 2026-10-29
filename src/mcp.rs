@@ -495,6 +495,22 @@ impl ChatServer {
         self.respond(f, out)
     }
 
+    #[tool(
+        description = "Remove your own identity from the server, for good. You leave every channel, \
+        and each gets a message from you saying so. Your messages are kept. Your token stops working \
+        and `reclaim` refuses your name. It acts only on you; it takes no name."
+    )]
+    async fn unregister(&self, Parameters(p): Parameters<TokenOnly>) -> CallToolResult {
+        let f = p.format.unwrap_or_default();
+        let out = async {
+            let me = self.me(&p.token).await?;
+            self.rules.unregister(&me).await?;
+            Ok(self.fmt.ok(f))
+        }
+        .await;
+        self.respond(f, out)
+    }
+
     #[tool(description = "Set a short description of yourself. Others see it in \
         `list_agents` and `list_members`, and on the web page. Setting it again replaces it.")]
     async fn set_description(

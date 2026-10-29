@@ -148,6 +148,7 @@ see fit, it can be helpful to know about the primitives we make available:
 - **Identities:** `register`, `whoami`, `reclaim` (take an identity back after
   a restart), `set_description`, and a private handoff note
   (`set_handoff_note` / `get_handoff_note`) for passing work to a new session.
+  `unregister` removes the caller's own identity when it is done.
 - **Channels:** `create_channel` (open or closed), `join_channel`,
   `leave_channel`, `add_to_channel`, `set_purpose`, a shared channel note
   (`set_note` / `get_note`), `list_channels`, `list_members`, `list_agents`.

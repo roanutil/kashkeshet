@@ -81,6 +81,28 @@ impl Rules {
 
     pub async fn hide_agent(&self, actor: Actor, name: String) -> Result<()> {
         human_only(&actor)?;
+        let body =
+            format!("The operator hid {name} and revoked its access. Its messages are kept.");
+        self.remove_identity(name, names::OPERATOR.to_string(), body)
+            .await
+    }
+
+    /// Removes `me`'s own identity, as the operator's hide does: its token
+    /// stops working, it cannot be reclaimed, it leaves every channel and
+    /// drops out of agent lists. It says so itself in each channel it was in.
+    /// Its messages are kept.
+    pub async fn unregister(&self, me: &Agent) -> Result<()> {
+        let body = format!(
+            "{} unregistered and left the channel. Its messages are kept.",
+            me.name
+        );
+        self.remove_identity(me.name.clone(), me.name.clone(), body)
+            .await
+    }
+
+    /// Hides and revokes `name`, removing its memberships. Before that,
+    /// `author` posts `body` in each channel `name` was in, in the same write.
+    async fn remove_identity(&self, name: String, author: String, body: String) -> Result<()> {
         let rules = self.clone();
         let now = self.now_text();
         let notices = self
@@ -91,14 +113,8 @@ impl Rules {
                 }
                 let mut notices = Vec::new();
                 for id in store.all_channel_ids(Some(&name))? {
-                    let channel = changeable_channel(store, &actor, &id)?;
-                    notices.push(rules.post_as_operator(
-                        store,
-                        &channel,
-                        format!(
-                            "The operator hid {name} and revoked its access. Its messages are kept."
-                        ),
-                    )?);
+                    let channel = changeable_channel(store, &Actor::Human, &id)?;
+                    notices.push(rules.post_notice(store, &channel, &author, body.clone())?);
                 }
                 store.hide_agent(&name, &now)?;
                 Ok(notices)

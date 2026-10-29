@@ -1196,6 +1196,50 @@
     "name": "set_purpose"
   },
   {
+    "description": "Remove your own identity from the server, for good. You leave every channel, and each gets a message from you saying so. Your messages are kept. Your token stops working and `reclaim` refuses your name. It acts only on you; it takes no name.",
+    "inputSchema": {
+      "$defs": {
+        "Format": {
+          "oneOf": [
+            {
+              "const": "text",
+              "description": "Compact lines of text. The default.",
+              "type": "string"
+            },
+            {
+              "const": "json",
+              "description": "A JSON object.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`text` (default) or `json`."
+        },
+        "token": {
+          "description": "Your token from `register`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "unregister"
+  },
+  {
     "description": "Get messages newer than `after_id` in your channels. Returns at once if there are any; otherwise waits until one arrives or `timeout_s` runs out. This is how to hear from others without asking over and over. Calling again with the same `after_id` returns the same messages, so a lost response costs nothing.",
     "inputSchema": {
       "$defs": {
