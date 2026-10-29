@@ -5,6 +5,7 @@ use crate::clock::testing::FixedClock;
 use crate::events::Notice;
 use crate::names::testing::{SameNameEntropy, SeqEntropy};
 use chrono::TimeZone;
+use futures::FutureExt;
 use std::time::Duration;
 
 struct World {
@@ -2258,6 +2259,89 @@ async fn hiding_an_agent_revokes_it_announces_each_membership_and_keeps_its_name
     let new = w.agent().await;
     assert_ne!(new.name, a.name);
     assert!(new.name.starts_with(&a.name));
+}
+
+#[tokio::test]
+async fn an_agent_unregisters_itself_as_the_operator_would_hide_it() {
+    let w = world().await;
+    let registration = w.rules.register().await.unwrap();
+    let a = w
+        .rules
+        .authenticate(Some(&registration.token))
+        .await
+        .unwrap();
+    let b = w.agent().await;
+    let first = w.channel(&b, "first", false, &[&a]).await;
+    let second = w.channel(&b, "second", true, &[&a]).await;
+    let elsewhere = w.channel(&b, "elsewhere", true, &[]).await;
+    let sent = w
+        .rules
+        .send(&a, first.clone(), "kept agent message".into())
+        .await
+        .unwrap();
+    let mut notices = w.rules.events().subscribe();
+
+    w.rules.unregister(&a).await.unwrap();
+
+    // Its token and recovery code no longer work, and it is gone from lists.
+    assert_eq!(
+        code(w.rules.authenticate(Some(&registration.token)).await),
+        Code::Unauthenticated
+    );
+    assert_eq!(
+        code(
+            w.rules
+                .reclaim(a.name.clone(), registration.recovery_code)
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    assert!(
+        !w.rules
+            .list_agents(&b, None, 100, None)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|x| x.name == a.name)
+    );
+    // It left each channel it was in, saying so itself.
+    for id in [&first, &second] {
+        let view = w.rules.channel_view(id.clone(), None).await.unwrap();
+        assert!(!view.members.iter().any(|m| m.name == a.name));
+        let last = view.messages.last().unwrap();
+        assert_eq!(last.agent, a.name);
+        assert_eq!(
+            last.body,
+            format!(
+                "{} unregistered and left the channel. Its messages are kept.",
+                a.name
+            )
+        );
+        assert_eq!(last.run_id, Some(w.run_id));
+    }
+    // A channel it was not in hears nothing.
+    let view = w.rules.channel_view(elsewhere, None).await.unwrap();
+    assert!(view.messages.iter().all(|m| m.agent != a.name));
+    // Waiting agents hear each notice like any message, and nothing more.
+    // `unregister` publishes before it returns, so both are ready now.
+    let mut heard = Vec::new();
+    for _ in 0..2 {
+        match notices.next().now_or_never() {
+            Some(Some(Notice::Message(m))) => heard.push((m.channel_id, m.agent)),
+            _ => panic!("expected a ready message notice"),
+        }
+    }
+    assert!(notices.next().now_or_never().is_none());
+    heard.sort();
+    let mut expected = vec![(first, a.name.clone()), (second, a.name.clone())];
+    expected.sort();
+    assert_eq!(heard, expected);
+    // Its past messages stay.
+    assert_eq!(
+        w.rules.get_message(&b, sent.id).await.unwrap().body,
+        "kept agent message"
+    );
 }
 
 #[tokio::test]

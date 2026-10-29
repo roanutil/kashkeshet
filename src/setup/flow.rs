@@ -5,6 +5,7 @@
 use super::ask::{Ask, Question};
 use super::record::{DockerSetup, Mode, Record};
 use crate::clients::Client;
+use crate::config::{DEFAULT_SETUP_CONTAINERS, DEFAULT_SETUP_MODE_INDEX};
 use std::path::{Path, PathBuf};
 
 /// What this machine is for, as chosen with `--mode` or asked.
@@ -120,7 +121,7 @@ const CONTAINERS: Question = Question {
     text: "Will agents in Docker containers on this machine use this server? They reach it as \
            host.docker.internal.",
     flag: "--allow-host host.docker.internal, or --allow-host none",
-    default: None,
+    default: Some(DEFAULT_SETUP_CONTAINERS),
 };
 /// The name Docker gives containers for the machine they run on.
 const DOCKER_HOST: &str = "host.docker.internal";
@@ -153,7 +154,7 @@ pub fn run(
         Some(purpose) => purpose,
         None => {
             let options = Purpose::ALL.map(Purpose::describe);
-            Purpose::ALL[ask.choose(MODE, &options)?]
+            Purpose::ALL[ask.choose(MODE, &options, DEFAULT_SETUP_MODE_INDEX)?]
         }
     };
     let plan = match purpose {

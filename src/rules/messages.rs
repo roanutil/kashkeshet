@@ -101,11 +101,23 @@ impl Rules {
         channel: &ChannelFacts,
         body: String,
     ) -> Result<Message> {
+        self.post_notice(store, channel, names::OPERATOR, body)
+    }
+
+    /// Stores a message from `author` in `channel`, saying what changed,
+    /// inside the change's own write, as [`Rules::post_as_operator`] does.
+    pub(super) fn post_notice(
+        &self,
+        store: &dyn Writes,
+        channel: &ChannelFacts,
+        author: &str,
+        body: String,
+    ) -> Result<Message> {
         let created_at = self.now_text();
         let run_id = self.inner.deps.run_id;
         let id = store.insert_message(&NewMessageRecord {
             channel_id: channel.id.clone(),
-            agent: names::OPERATOR.to_string(),
+            agent: author.to_string(),
             body: body.clone(),
             created_at: created_at.clone(),
             run_id,
@@ -114,7 +126,7 @@ impl Rules {
             id,
             channel_id: channel.id.clone(),
             channel_name: channel.name.clone(),
-            agent: names::OPERATOR.to_string(),
+            agent: author.to_string(),
             body,
             created_at,
             run_id: Some(run_id),

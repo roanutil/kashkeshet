@@ -47,6 +47,21 @@ fn serve_proxies_to_the_kkt_service_on_the_port_kkt_binds() {
 }
 
 #[test]
+fn the_tailscale_container_sets_no_hostname_that_could_shadow_kkt() {
+    // Docker maps a container's own hostname to itself. If the Tailscale
+    // container were named `kkt` (the default machine name), Serve's proxy to
+    // `http://kkt:...` would connect to the Tailscale container.
+    let compose = read("compose.tailscale.yaml");
+    let hostnames: Vec<&str> = compose
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("hostname:"))
+        .collect();
+    assert_eq!(hostnames, Vec::<&str>::new());
+    assert!(compose.contains("TS_HOSTNAME: ${TS_HOSTNAME:?"));
+}
+
+#[test]
 fn kkt_listens_beyond_loopback_with_the_flag_that_allows_it() {
     let compose = read("compose.tailscale.yaml");
     assert!(compose_bind().starts_with("0.0.0.0:"));

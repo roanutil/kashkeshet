@@ -7,8 +7,9 @@ kkt setup
 ```
 
 Choose a server in Docker (recommended), a server as a service, or a
-client-only machine. Setup offers the clients it detects, checks the server
-connection with `kkt doctor`, then applies the chosen clients' settings
+client-only machine. At a terminal, Enter chooses Docker; the Tailscale
+question requires an explicit yes or no. Setup offers the clients it detects,
+checks the server connection with `kkt doctor`, then applies the chosen clients' settings
 through `kkt connect`.
 If a step fails, the report explains what to fix; setup may already have
 started a server or changed a client configuration. Restart connected
@@ -99,7 +100,8 @@ with `kkt key show` on a service host, or the manual container command in
 ## Flags and unattended setup
 
 At a terminal, "Connect <client> to kkt?" shows `[Y/n]`: press Enter to
-connect, or type `n` to skip it. Other yes/no questions require an answer.
+connect, or type `n` to skip it. The Tailscale question requires an explicit
+answer.
 
 Each setup question has a flag. Without a terminal, an unanswered question
 is an error naming the flag to supply.
@@ -115,7 +117,7 @@ kkt setup --mode docker --tailscale --clients none
 | `--tailscale` / `--no-tailscale` | Whether to share a server over Tailscale |
 | `--url URL` | A client-only machine's server MCP URL |
 | `--key-file PATH` | A client-only machine's existing server key file |
-| `--clients claude-code,codex,opencode,agy` | Which clients to connect; `none` skips them |
+| `--clients claude-code,codex,opencode,agy,muse-code` | Which clients to connect; `none` skips them |
 | `--yes` | Connect every detected client without asking |
 | `--ts-hostname NAME` | Docker Tailscale node name to request (default `kkt`) |
 | `--ts-authkey-file PATH` | Docker Tailscale auth key file instead of an interactive login link |
@@ -133,6 +135,8 @@ kkt answers only to the host names it knows: `localhost`, `127.0.0.1` and
 `::1`, plus its tailnet name with Tailscale. Agents running in Docker
 containers on the same machine reach it as `host.docker.internal`. Setup
 asks whether such agents will use the server and, if so, allows that name.
+At a terminal, this question shows `[Y/n]`; Enter answers yes. Without a
+terminal, setup still requires `--allow-host`.
 To answer with flags, or to allow other names:
 
 ```sh

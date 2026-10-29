@@ -215,7 +215,13 @@ mod flow {
     }
 
     impl Ask for Script {
-        fn choose(&self, question: Question, options: &[&str]) -> Result<usize, String> {
+        fn choose(
+            &self,
+            question: Question,
+            options: &[&str],
+            default: usize,
+        ) -> Result<usize, String> {
+            assert_eq!(Purpose::ALL[default], Purpose::Docker);
             match self.next(question) {
                 Reply::Choose(i) if i < options.len() => Ok(i),
                 _ => panic!("expected a choice for {}", question.text),
@@ -457,7 +463,7 @@ mod flow {
         assert_eq!(record.mode, Mode::Service { tailscale: true });
         assert_eq!(
             *ask.defaults.borrow(),
-            [None, None, None, Some(true), Some(true)]
+            [None, None, Some(true), Some(true), Some(true)]
         );
         assert_eq!(
             *ask.asked.borrow(),
@@ -578,7 +584,7 @@ mod flow {
     struct Refusing;
 
     impl Ask for Refusing {
-        fn choose(&self, question: Question, _: &[&str]) -> Result<usize, String> {
+        fn choose(&self, question: Question, _: &[&str], _: usize) -> Result<usize, String> {
             Err(unanswered(question))
         }
         fn confirm(&self, question: Question) -> Result<bool, String> {

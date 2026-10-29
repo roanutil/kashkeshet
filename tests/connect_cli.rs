@@ -92,7 +92,8 @@ if failure == 'after':
 
 #[test]
 fn client_config_overrides_select_file_client_previews_writes_and_backups() {
-    // Codex reads only a file named config.toml; the others take any name.
+    // Codex and Muse Code read only a file of their fixed name; the others
+    // take any name.
     for (client, default, name, group, url_field) in [
         (
             "codex",
@@ -113,6 +114,13 @@ fn client_config_overrides_select_file_client_previews_writes_and_backups() {
             ".config/opencode/opencode.json",
             "client.conf",
             "mcp",
+            "url",
+        ),
+        (
+            "muse-code",
+            ".config/muse/settings.json",
+            "settings.json",
+            "mcpServers",
             "url",
         ),
     ] {
@@ -236,6 +244,7 @@ fn connect_writes_where_codex_home_and_xdg_config_home_point() {
     for (client, file) in [
         ("codex", codex_home.join("config.toml")),
         ("opencode", xdg.join("opencode/opencode.json")),
+        ("muse-code", xdg.join("muse/settings.json")),
     ] {
         let out = home
             .command()
@@ -259,6 +268,7 @@ fn connect_writes_where_codex_home_and_xdg_config_home_point() {
     }
     assert!(!home.0.join(".codex").exists());
     assert!(!home.0.join(".config/opencode").exists());
+    assert!(!home.0.join(".config/muse").exists());
 }
 
 #[test]
@@ -269,7 +279,12 @@ fn file_errors_name_the_variable_that_chose_the_path() {
     // A directory where the config file should be cannot be read.
     std::fs::create_dir_all(codex_home.join("config.toml")).expect("codex dir");
     std::fs::create_dir_all(xdg.join("opencode/opencode.json")).expect("opencode dir");
-    for (client, variable) in [("codex", "CODEX_HOME"), ("opencode", "XDG_CONFIG_HOME")] {
+    std::fs::create_dir_all(xdg.join("muse/settings.json")).expect("muse dir");
+    for (client, variable) in [
+        ("codex", "CODEX_HOME"),
+        ("opencode", "XDG_CONFIG_HOME"),
+        ("muse-code", "XDG_CONFIG_HOME"),
+    ] {
         let out = home
             .command()
             .args(["connect", client])
@@ -289,7 +304,7 @@ fn file_errors_name_the_variable_that_chose_the_path() {
 #[test]
 fn a_wrong_config_name_is_refused_before_a_key_is_created() {
     let home = Home::new();
-    for client in ["codex", "claude-code"] {
+    for client in ["codex", "claude-code", "muse-code"] {
         let out = home.run(&["connect", client, "--client-config", "wrong.toml"]);
         assert!(!out.status.success(), "{client}: {}", text(&out));
         assert!(text(&out).contains("must be named"), "{}", text(&out));
@@ -342,6 +357,62 @@ fn connecting_creates_the_default_key_but_preview_does_not_write_client_config()
         config
     );
     assert!(!config_file.with_file_name("config.toml.bak").exists());
+}
+
+#[test]
+fn connect_muse_code_writes_settings_with_schema_version_and_is_idempotent() {
+    let home = Home::new();
+    let key = home.put("key", KEY);
+    let key_arg = key.to_str().expect("key path");
+    let preview = home.run(&["connect", "muse-code", "--key-file", key_arg]);
+    assert!(preview.status.success(), "{}", text(&preview));
+    assert!(
+        text(&preview).contains(".config/muse/settings.json"),
+        "{}",
+        text(&preview)
+    );
+    assert!(
+        text(&preview).contains("Muse Code stores the key"),
+        "{}",
+        text(&preview)
+    );
+    assert!(!text(&preview).contains(KEY));
+    assert!(!home.0.join(".config/muse/settings.json").exists());
+
+    let written = home.run(&["connect", "muse-code", "--key-file", key_arg, "--write"]);
+    assert!(written.status.success(), "{}", text(&written));
+    assert!(
+        text(&written).contains("Muse Code stores the key"),
+        "{}",
+        text(&written)
+    );
+    assert!(!text(&written).contains(KEY));
+    let file = home.0.join(".config/muse/settings.json");
+    let config = std::fs::read_to_string(&file).expect("config");
+    let parsed: serde_json::Value = serde_json::from_str(&config).expect("JSON");
+    assert_eq!(parsed["schema_version"], 1);
+    let entry = &parsed["mcpServers"]["kkt"];
+    assert_eq!(entry["transport"], "streamable_http");
+    assert!(entry["url"].as_str().expect("url").ends_with("/mcp"));
+    assert_eq!(entry["mode"], "optional");
+    assert_eq!(entry["headers"]["Authorization"], format!("Bearer {KEY}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&file).expect("mode").permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let again = home.run(&["connect", "muse-code", "--key-file", key_arg, "--write"]);
+    assert!(again.status.success(), "{}", text(&again));
+    assert!(
+        text(&again).contains("Already configured"),
+        "{}",
+        text(&again)
+    );
+    assert_eq!(std::fs::read_to_string(&file).expect("config"), config);
+    assert!(!home.0.join(".config/muse/settings.json.bak").exists());
 }
 
 #[test]
