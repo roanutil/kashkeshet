@@ -23,6 +23,12 @@ can't be reached that way there.
 
 ## Tailscale
 
+`kkt setup --tailscale` handles sharing for a service or Docker server
+(see [setup](setup.md#tailscale)). The steps below are for manual setups.
+
+With Docker, [Docker](docker.md#with-tailscale) sets this up for you. Without
+it:
+
 `tailscale serve` serves the loopback port over HTTPS on your tailnet, at a
 name such as `my-mac.tail1234.ts.net`:
 

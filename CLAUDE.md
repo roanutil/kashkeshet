@@ -31,20 +31,24 @@ require reading another's internals.
 | `format/` | Turning rule results into text or JSON within the size cap | Query storage or apply rules |
 | `mcp.rs` | Tool definitions; parse parameters, call `rules`, call `format` | Touch storage or decide permissions |
 | `web/` | The human's pages, logging in to them, and the changes the human makes from them. Pages read and change only through web's own contract (`web/source.rs`: `Source` and `Gate`), which the server provides over `rules` and `admission` (`web/real.rs`) and the preview provides from simulated data (`web/preview.rs`, run by `examples/web_preview.rs`). Every change is a form `POST` read through `web/change.rs`'s `Change`, which checks the origin and the viewer's form token | Change anything except through its contract; read a changing form without `Change`; reach `rules` outside `web/real.rs` |
+| `docker/` | Running kkt in Docker: the Compose files embedded in the program, the folder kkt manages for them, and the commands that set up, start, back up, upgrade and stop it, through its `Host` contract | Touch the system except through `Host`; decide setup answers or keep the setup record |
 | `hosts.rs` | Which `Host` names the server answers to, for `/mcp` and the web page | Touch storage, rules, or HTTP library types |
 | `service/` | Running the server as a launchd or systemd service: the service files and the commands that manage them, through its `System` contract | Touch the system except through `System`; decide server settings (`main.rs` passes them in) |
+| `setup/` | `kkt setup`: the order of its questions and steps (`run`), what this machine was set up as (service, Docker or client) in the setup record, and whether `kkt serve` may run here (`guard`) | Read or write files, or run programs, itself (that goes through `Steps`); talk to the person except through `Ask` |
 | `settings/` | Gathering a server's settings from flags, the config file and defaults; default paths | Read files or environment variables itself; check limits (that is `config.rs`) |
 | `clients/` | Client MCP configuration, its vendor formats, backups and header-helper output | Start the server; expose key contents in previews or errors |
 | `diagnostics.rs` | Read-only key and HTTP/MCP connection checks, in our own result types | Register agents or change server data |
+| `tailscale/` | Sharing a service-mode server over the host's existing Tailscale login, through its injected `Host` contract | Change login or network preferences; edit kkt config or service files |
 | `config.rs` | Every limit, fixed setting and default, and the startup checks | Hold logic beyond checking settings |
 | `provenance/` | What produced a server run | |
+| `backup/` | Backup folders: their names, contents, file modes, and pruning the ones made before database upgrades | Copy the database itself (it is given the store's `copy_database`); read the clock |
 | `events.rs` | New-message notifications for waiting agents and the web page | Decide who may see a message |
 | `shutdown.rs` | The stop signal (Ctrl-C, SIGTERM) and the `Shutdown` that ends the server | |
 | `logs.rs` | A log file the server writes itself, rolled over and pruned by `config::LogPolicy`, timed by the injected `Clock` | Decide what is logged (that is `main.rs`'s filter) |
 | `names.rs` | Agent names, channel IDs, and the randomness behind them (`Entropy`) | |
 | `clock.rs` | The current time and waiting (`Clock`), injected so tests can control them | |
 | `app.rs` | Assembling the parts | Hold business logic |
-| `main.rs` | The `kkt` command: its subcommands, and the files and environment they read | Hold business logic |
+| `main.rs` | The `kkt` command: its subcommands, and the files and environment they read; `browser_login.rs`, the terminal prompt that offers to open the Tailscale login link | Hold business logic |
 
 Outside `src/`:
 
@@ -101,7 +105,7 @@ over tokio's broadcast receiver, `shutdown::Shutdown` over tokio-util's
 cancellation token, `store` over rusqlite. rmcp stays in `mcp.rs` and
 `app.rs`; askama stays in `web/`; axum stays in `web/`, `app.rs`, `main.rs`
 and `examples/web_preview.rs`, which serve the router; toml stays in
-`settings/` and `clients/`; toml_edit stays in `clients/`; reqwest stays in
+`settings/`, `setup/` and `clients/`; toml_edit stays in `clients/` and `settings/`; reqwest stays in
 `diagnostics.rs`; clap stays in `main.rs` and `examples/`.
 
 **Settings and defaults.** Every limit or fixed value lives in `config.rs`,
@@ -179,6 +183,13 @@ Where the tests are:
 - `tests/kkt.rs`, `tests/serve.rs`, `tests/startup.rs`, `tests/key.rs`: the
   `kkt` command, `kkt serve` with its config file and defaults, settings it
   must refuse, and `kkt key create`.
+- `tests/setup.rs`: `kkt serve` refusing, or not, on a machine with a setup
+  record; `kkt setup` for a client machine against a real server, with no
+  terminal, and for Docker with a fake `docker`; `kkt doctor`'s last line
+  for each kind of setup.
+- `tests/backup.rs`: `kkt backup` while agents write, restoring the result,
+  and the backup `kkt serve` makes (or fails to make) before upgrading a
+  database.
 - `tests/agent.rs`: `kkt agent` revoking an agent in the database of a
   running server, and listing agents.
 - `tests/clients.rs`, `tests/connect_cli.rs`: client config preservation,
@@ -195,6 +206,11 @@ Where the tests are:
   session ID does.
 - `tests/shutdown.rs`: on Unix, stops a real server with SIGTERM and Ctrl-C,
   including with open event streams and pending message waits.
+- `tests/docker_files.rs`: the Tailscale Compose file and `serve.json` agree
+  on where Serve proxies to, kkt is not on Tailscale's network, and kkt is
+  published only on the host's loopback. Both Compose files take the image
+  version from `.env` and mount `./backups`, which git and image builds
+  ignore.
 - `tests/common/`: starts a server on a free port for the tests above.
 
 ## Working with other agents

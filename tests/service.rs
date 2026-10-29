@@ -87,6 +87,8 @@ async fn a_dry_run_shows_absolute_paths_and_changes_nothing() {
             path.display()
         );
     }
+    // The service is the server setup meant, so `kkt serve` lets it start.
+    assert!(said.contains("--ignore-setup"), "{said}");
     // With no key set, the default one is made at install and passed.
     let key = config_dir.join("access-key");
     assert!(

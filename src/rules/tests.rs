@@ -2509,3 +2509,74 @@ async fn concurrent_instruction_saves_get_distinct_increasing_versions() {
         vec![2, 1]
     );
 }
+
+#[tokio::test]
+async fn operator_channel_creation_is_atomic_and_never_adds_the_operator() {
+    let w = world().await;
+    let a = w.agent().await;
+    let b = w.agent().await;
+    let new = NewChannel {
+        name: "  help  ".into(),
+        purpose: Some("  help desk  ".into()),
+        open: false,
+        members: vec![a.name.clone(), a.name.clone()],
+    };
+    assert_eq!(
+        code(
+            w.rules
+                .create_channel_as_operator(Actor::Agent(a.clone()), new.clone())
+                .await
+        ),
+        Code::Unauthenticated
+    );
+    let created = w
+        .rules
+        .create_channel_as_operator(Actor::Human, new.clone())
+        .await
+        .unwrap();
+    assert_eq!(created.name, "help");
+    assert_eq!(created.created_by, names::OPERATOR);
+    let view = w
+        .rules
+        .channel_view(created.id.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(view.members.len(), 1);
+    assert_eq!(view.members[0].name, a.name);
+    assert_eq!(view.messages[0].agent, names::OPERATOR);
+    assert_eq!(view.messages[0].run_id, Some(w.run_id));
+    assert!(w.visible_ids(&a).await.contains(&created.id));
+    assert!(!w.visible_ids(&b).await.contains(&created.id));
+    let before = w.rules.overview().await.unwrap().channels.len();
+    let limits = Limits::DEFAULT;
+    let broken = Rules::new(Deps {
+        db: w.rules.db().clone(),
+        events: Events::new(),
+        clock: w.clock.clone(),
+        entropy: Arc::new(SeqEntropy::new(15)),
+        sends: SendLimiter::new(limits.sends_per_minute),
+        registrations: RegisterLimiter::new(limits.registrations_per_minute),
+        waiting: Waiting::default(),
+        run_id: i64::MAX,
+        limits,
+    });
+    assert_eq!(
+        code(
+            broken
+                .create_channel_as_operator(Actor::Human, new.clone())
+                .await
+        ),
+        Code::Internal
+    );
+    let mut unknown = new;
+    unknown.members.push("missing-agent".into());
+    assert_eq!(
+        code(
+            w.rules
+                .create_channel_as_operator(Actor::Human, unknown)
+                .await
+        ),
+        Code::NotFound
+    );
+    assert_eq!(w.rules.overview().await.unwrap().channels.len(), before);
+}

@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <section>
+  <details class="panel">
+    <summary>Create a channel</summary>
+    <form method="post" action="/channels/create">
+      <input type="hidden" name="form_token" value="{{ form_token }}">
+      <label>Name <input name="name" required></label>
+      <label>Purpose <textarea name="purpose"></textarea></label>
+      <label>Visibility <select name="open"><option value="true">Open</option><option value="false">Closed</option></select></label>
+      <fieldset><legend>Initial members (required for closed channels)</legend>
+        {% for a in agents %}<label><input type="checkbox" name="member_{{ a.agent.name }}" value="yes"> {{ a.agent.name }}</label>{% else %}<p>No agents registered yet.</p>{% endfor %}
+      </fieldset>
+      <button type="submit">Create channel</button>
+    </form>
+  </details>
   <h2>Channels ({{ channels.len() }})</h2>
   <div class="panel scroll">
   <table class="dashboard" data-dashboard data-now="{{ now }}" data-window="{{ window_secs }}" data-bucket="{{ bucket_secs }}">

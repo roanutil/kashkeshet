@@ -1,6 +1,7 @@
 # Connecting clients
 
-Start the server with `kkt service install` or `kkt serve`, then choose a client:
+Run `kkt setup` to install a server or connect this machine to one elsewhere.
+Setup offers detected clients. To add another client later:
 
 ```sh
 kkt connect claude-code --write
@@ -10,9 +11,10 @@ kkt connect opencode --write
 ```
 
 Run without `--write` to see the config or command and its destination first.
-The URL comes from the serve config's `bind`. `--url https://your-host/mcp`
+When setup has been run, the URL and key default to its saved connection.
+Otherwise the URL comes from the serve config's `bind`. `--url https://your-host/mcp`
 overrides it, for example when forwarding over a tailnet. `--config PATH`
-selects a serve config; `--key-file PATH` overrides its key file. Without an
+selects a serve config; `--key-file PATH` overrides its key file. Without a setup record or an
 override, connect uses the same key as serve and creates a missing default
 key with mode 0600. A config with `no_access_key = true` adds no credentials.
 For every client, `--client-config PATH` takes precedence over the default
@@ -59,13 +61,16 @@ the key intentionally, so use them as helpers rather than in shared logs.
 kkt doctor
 ```
 
-Doctor reads the serve config and checks the key file and mode, server
-reachability, Host acceptance, MCP authentication, and service state. Each
-problem includes a fix. It accepts the same `--config`, `--url` and
+Doctor checks the key file and mode, server
+reachability, Host acceptance, and MCP authentication. With a Docker setup
+it also checks the container state; with a service setup (or no setup
+record) it checks this machine's service. Client-only mode skips local
+server state. Each problem includes a fix. It accepts the same `--config`, `--url` and
 `--key-file` overrides as connect. It does not create keys, register an
 agent, or change server data. Its short MCP session is closed after the
 probe. HTTP redirects are not followed with the key.
-An absent service is optional: the server may be running in a terminal.
+When checking a local service, an absent service is optional: the server
+may be running in a terminal.
 An installed service that has stopped is reported with a start command.
 
 The MCP initialize response exposes the running version. It does not expose

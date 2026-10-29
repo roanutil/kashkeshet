@@ -547,3 +547,114 @@ async fn message_times_since_finds_every_message_in_the_window() {
         .expect("read");
     assert!(none.is_empty());
 }
+
+/// A fresh, empty directory for one test's files.
+fn scratch_dir(test: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("kashkeshet-store-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    dir
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn copies_taken_during_writes_are_whole_and_consistent() {
+    const MESSAGES: i64 = 400;
+    let dir = scratch_dir("copy");
+    let path = dir.join("live.db");
+    let db = Db::open(&path).expect("open");
+    db.write(|w| {
+        let run_id = w.insert_server_run(&run("1.0.0"))?;
+        w.insert_agent(&NewAgentRecord {
+            name: "a".into(),
+            token_hash: vec![0],
+            recovery_hash: None,
+            created_at: T.into(),
+            last_seen: None,
+            run_id,
+        })?;
+        w.insert_channel(&NewChannelRecord {
+            id: "ch_1".into(),
+            name: "general".into(),
+            purpose: None,
+            open: true,
+            created_by: "a".into(),
+            created_at: T.into(),
+        })
+    })
+    .await
+    .expect("seed");
+
+    let writer = {
+        let db = db.clone();
+        tokio::spawn(async move {
+            for i in 0..MESSAGES {
+                db.write(move |w| {
+                    w.insert_message(&NewMessageRecord {
+                        channel_id: "ch_1".into(),
+                        agent: "a".into(),
+                        body: format!("message {i}"),
+                        created_at: T.into(),
+                        run_id: 1,
+                    })
+                })
+                .await
+                .expect("insert");
+            }
+        })
+    };
+    let copies = {
+        let (path, dir) = (path.clone(), dir.clone());
+        tokio::task::spawn_blocking(move || {
+            (0..8)
+                .map(|i| {
+                    let copy = dir.join(format!("copy-{i}.db"));
+                    copy_database(&path, &copy).expect("copy");
+                    copy
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let copies = copies.await.expect("copies");
+    writer.await.expect("writer");
+
+    let mut counts = Vec::new();
+    for copy in &copies {
+        assert!(!std::path::PathBuf::from(format!("{}-wal", copy.display())).exists());
+        let conn = rusqlite::Connection::open(copy).expect("open copy");
+        let check: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .expect("integrity check");
+        assert_eq!(check, "ok");
+        // Each message was its own transaction, so a consistent copy holds
+        // the first n and nothing else.
+        let (count, highest): (i64, Option<i64>) = conn
+            .query_row("SELECT count(*), max(id) FROM messages", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .expect("count");
+        assert!(count <= MESSAGES);
+        assert_eq!(highest.unwrap_or(0), count);
+        counts.push(count);
+        drop(conn);
+        let reopened = Db::open(copy).expect("a copy opens as a database");
+        let agent = reopened.read(|r| r.agent("a")).await.expect("read copy");
+        assert!(agent.is_some());
+    }
+    assert!(
+        counts.iter().any(|&n| n > 0 && n < MESSAGES),
+        "no copy was taken while messages were being written: {counts:?}"
+    );
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[test]
+fn a_copy_never_replaces_an_existing_file() {
+    let dir = scratch_dir("copy-exists");
+    let path = dir.join("live.db");
+    drop(Db::open(&path).expect("open"));
+    let copy = dir.join("copy.db");
+    std::fs::write(&copy, "keep me").expect("existing file");
+    assert!(copy_database(&path, &copy).is_err());
+    assert_eq!(std::fs::read_to_string(&copy).expect("read"), "keep me");
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+}

@@ -59,6 +59,67 @@ const _: () = assert!(NEW_ACCESS_KEY_CHARS >= MIN_ACCESS_KEY_BYTES);
 /// Unix permissions of a key file `kkt key create` writes: only the owner
 /// may read or write it.
 pub const ACCESS_KEY_FILE_MODE: u32 = 0o600;
+/// Unix permissions of a backup's folder, which holds a copy of the access
+/// key: only the owner may list or enter it.
+pub const BACKUP_FOLDER_MODE: u32 = 0o700;
+/// The folder, beside the database file, where the server keeps the backups
+/// of the database it makes before upgrading it.
+pub const UPGRADE_BACKUP_FOLDER: &str = "upgrade-backups";
+/// The Compose project name for kkt in Docker, so the containers and volumes
+/// are named the same whatever the folder holding the Compose files is called.
+pub const DOCKER_PROJECT: &str = "kkt";
+/// The folder, in the per-user data directory, that `kkt setup` keeps
+/// the Docker install's files in.
+pub const DOCKER_FOLDER: &str = "docker";
+/// Where `kkt setup` saves the Docker server's access key, in the config
+/// directory.
+pub const DOCKER_KEY_FILE_NAME: &str = "docker-access-key";
+/// The machine name `kkt setup` asks for on the tailnet.
+pub const DEFAULT_TS_HOSTNAME: &str = "kkt";
+/// How long `kkt setup` waits for a server it just set up to answer before
+/// its connection check gives up. A new Tailscale node gets its HTTPS
+/// certificate on the first request, which can take a while.
+pub const SETUP_SERVER_WAIT: Duration = Duration::from_secs(2 * 60);
+/// How often `kkt setup` asks while it waits.
+pub const SETUP_SERVER_POLL: Duration = Duration::from_secs(2);
+/// The user ID the kkt image runs as. A host folder it writes backups to
+/// must belong to it.
+pub const DOCKER_IMAGE_USER_ID: u32 = 10001;
+/// The folder inside the managed Docker folder that is mounted at
+/// [`DOCKER_BACKUPS_MOUNT`] in the container.
+pub const DOCKER_BACKUPS_DIR: &str = "backups";
+/// Where the Compose file mounts the backups folder in the container.
+pub const DOCKER_BACKUPS_MOUNT: &str = "/backups";
+/// The environment variables Compose reads, which would take the place of
+/// the managed folder's settings file if they were set where kkt runs, so
+/// every Docker command runs without them.
+pub const DOCKER_MANAGED_VARIABLES: &[&str] = &[
+    "COMPOSE_FILE",
+    "COMPOSE_PATH_SEPARATOR",
+    "COMPOSE_PROFILES",
+    "COMPOSE_PROJECT_NAME",
+    "COMPOSE_ENV_FILES",
+    "KKT_VERSION",
+    "KKT_PORT",
+    "TS_HOSTNAME",
+    "TS_TAILNET",
+    "TS_AUTHKEY",
+];
+/// How long to wait for someone to log the Tailscale container in.
+pub const DOCKER_LOGIN_WAIT: Duration = Duration::from_secs(10 * 60);
+/// How long to wait for the kkt container to start and make its access key.
+pub const DOCKER_START_WAIT: Duration = Duration::from_secs(2 * 60);
+/// How many checks to wait for a login link from a Tailscale container that
+/// needs a login before restarting it. A node whose key expired, or that was
+/// logged out, is not asking for a login, so it shows no link until it is
+/// restarted; a new one shows its link within a few seconds.
+pub const DOCKER_LINK_WAIT_POLLS: u32 = 5;
+/// How often to ask while waiting for the Tailscale login or for kkt.
+pub const DOCKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// What `TS_TAILNET` is set to until the Tailscale container has logged in
+/// and the real name is known. The Compose file needs some value to start
+/// the Tailscale container alone; kkt does not run with it.
+pub const DOCKER_PENDING_TAILNET: &str = "pending.invalid";
 /// Smallest allowed `max_response_bytes`. A smaller cap could cut a
 /// registration answer, and with it the agent's token.
 pub const MIN_RESPONSE_BYTES: usize = 1024;
@@ -90,6 +151,16 @@ pub const XDG_CONFIG_HOME_DEFAULT: &str = ".config";
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 /// Where `kkt key create` writes a key, in the config directory.
 pub const ACCESS_KEY_FILE_NAME: &str = "access-key";
+/// The setup record `kkt setup` writes, in the config directory.
+pub const SETUP_FILE_NAME: &str = "setup.toml";
+/// Where `kkt setup` keeps a client-only machine's copy of its server's
+/// key, in the config directory.
+pub const CLIENT_KEY_FILE_NAME: &str = "client-access-key";
+/// The host Tailscale Serve listener used by service-mode setup.
+pub const TAILSCALE_HTTPS_PORT: u16 = 443;
+/// Full backups made before an explicit service-mode upgrade, in the
+/// user's kkt config directory.
+pub const SERVICE_BACKUP_FOLDER: &str = "backups";
 
 // Client setup and diagnostics.
 pub const CODEX_CONFIG: &str = ".codex/config.toml";
@@ -97,6 +168,11 @@ pub const CLAUDE_CONFIG: &str = ".claude.json";
 pub const AGY_CONFIG: &str = ".gemini/config/mcp_config.json";
 pub const AGY_LEGACY_CONFIG: &str = ".gemini/antigravity/mcp_config.json";
 pub const OPENCODE_CONFIG: &str = ".config/opencode/opencode.json";
+/// The programs `kkt setup` looks for on PATH to tell which clients are
+/// installed.
+pub const CLAUDE_PROGRAM: &str = "claude";
+pub const CODEX_PROGRAM: &str = "codex";
+pub const OPENCODE_PROGRAM: &str = "opencode";
 pub const DOCTOR_TIMEOUT: Duration = Duration::from_secs(5);
 pub const DOCTOR_MAX_RESPONSE_BYTES: usize = 64 * 1024;
 pub const DOCTOR_PROTOCOL_VERSION: &str = "2026-07-28";
@@ -364,6 +440,9 @@ pub struct Limits {
     /// the live view, which drops the oldest as new ones arrive. A channel
     /// page's "Show previous" button loads this many earlier ones at a time.
     pub web_page_messages: usize,
+    /// How many of the backups the server makes before upgrading the
+    /// database it keeps; older ones are removed.
+    pub upgrade_backups_kept: usize,
 }
 
 impl Limits {
@@ -388,7 +467,8 @@ impl Limits {
         member_preview: 3,
         purpose_preview_chars: 120,
         web_session_lifetime: Duration::from_secs(12 * 60 * 60),
-        web_page_messages: 100,
+        web_page_messages: 50,
+        upgrade_backups_kept: 5,
     };
 
     /// Checks that these limits make sense together. The server refuses to
@@ -413,6 +493,7 @@ impl Limits {
             ),
             ("max_agents", self.max_agents),
             ("web_page_messages", self.web_page_messages),
+            ("upgrade_backups_kept", self.upgrade_backups_kept),
         ];
         if let Some((name, _)) = at_least_one.iter().find(|(_, value)| *value == 0) {
             return Err(InvalidSetting::new(name, "must be at least 1"));

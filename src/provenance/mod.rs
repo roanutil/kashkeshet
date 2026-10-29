@@ -117,6 +117,7 @@ pub fn settings_text(
         purpose_preview_chars,
         web_session_lifetime,
         web_page_messages,
+        upgrade_backups_kept,
     } = limits;
     let mut lines = vec![
         format!("max_response_bytes={max_response_bytes}"),
@@ -142,6 +143,7 @@ pub fn settings_text(
             web_session_lifetime.as_millis()
         ),
         format!("web_page_messages={web_page_messages}"),
+        format!("upgrade_backups_kept={upgrade_backups_kept}"),
     ];
     lines.push(format!("log_level={}", log_level.name()));
     lines.push(format!(
@@ -268,7 +270,8 @@ mod tests {
              member_preview=3\n\
              purpose_preview_chars=120\n\
              web_session_lifetime_ms=43200000\n\
-             web_page_messages=100\n\
+             web_page_messages=50\n\
+             upgrade_backups_kept=5\n\
              log_level=info\n\
              dependency_log_level=warn\n\
              allowed_origin=http://localhost:6274\n\

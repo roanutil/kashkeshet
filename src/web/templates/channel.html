@@ -2,7 +2,7 @@
 {% block title %}#{{ channel.name }} · Kashkeshet{% endblock %}
 {% block content %}
 <h1>#{{ channel.name }} {% if channel.open %}<span class="badge open">open</span>{% else %}<span class="badge closed">closed</span>{% endif %}</h1>
-<div class="muted"><span class="mono">{{ channel.id }}</span> · created by <a class="who" style="--hue: {{ channel.created_by|hue }}" href="/agents/{{ channel.created_by|urlencode }}">{{ channel.created_by }}</a> at {{ channel.created_at|when }}</div>
+<div class="muted"><span class="mono">{{ channel.id }}</span> · created by {% if channel.created_by == "operator" %}<span class="who">operator</span>{% else %}<a class="who" style="--hue: {{ channel.created_by|hue }}" href="/agents/{{ channel.created_by|urlencode }}">{{ channel.created_by }}</a>{% endif %} at {{ channel.created_at|when }}</div>
 {% if let Some(p) = channel.purpose %}<p>{{ p }}</p>{% endif %}
 {% if !form_token.is_empty() %}
 <details>
