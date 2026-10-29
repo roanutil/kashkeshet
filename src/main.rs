@@ -579,12 +579,14 @@ fn connect(
     write: bool,
 ) -> Result<(), String> {
     let client = Client::from_name(client).ok_or("unknown client")?;
-    let connection = client_connection(env, flags, true)?;
-    let executable = kkt_path()?;
     let (client_config, source) = match client_config {
         Some(path) => (path, "--client-config"),
         None => (client.file(env)?, client.source(env)),
     };
+    // Refuse a wrong name before the connection creates a missing key.
+    client.check_name(&client_config, source)?;
+    let connection = client_connection(env, flags, true)?;
+    let executable = kkt_path()?;
     let setup = Setup {
         env,
         url: &connection.url,

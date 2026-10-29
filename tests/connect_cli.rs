@@ -287,6 +287,17 @@ fn file_errors_name_the_variable_that_chose_the_path() {
 }
 
 #[test]
+fn a_wrong_config_name_is_refused_before_a_key_is_created() {
+    let home = Home::new();
+    for client in ["codex", "claude-code"] {
+        let out = home.run(&["connect", client, "--client-config", "wrong.toml"]);
+        assert!(!out.status.success(), "{client}: {}", text(&out));
+        assert!(text(&out).contains("must be named"), "{}", text(&out));
+        assert!(!home.0.join(".config/kkt/access-key").exists(), "{client}");
+    }
+}
+
+#[test]
 fn connecting_creates_the_default_key_but_preview_does_not_write_client_config() {
     let home = Home::new();
     let out = home.run(&["connect", "codex"]);
@@ -972,7 +983,7 @@ fn claude_non_utf8_profile_can_be_written_but_not_previewed() {
     let preview = run(false);
     assert!(!preview.status.success());
     assert!(
-        text(&preview).contains("client config path is not UTF-8"),
+        text(&preview).contains("is not UTF-8 (from --client-config)"),
         "{}",
         text(&preview)
     );

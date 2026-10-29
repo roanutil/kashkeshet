@@ -198,7 +198,13 @@ pub(super) fn preview(
         let environment = match claude_config_dir {
             Some(dir) => format!(
                 "CLAUDE_CONFIG_DIR={}",
-                super::shell_word(dir.to_str().ok_or("the client config path is not UTF-8")?)
+                super::shell_word(dir.to_str().ok_or_else(|| {
+                    format!(
+                        "the Claude Code config directory {} is not UTF-8 (from {})",
+                        dir.display(),
+                        setup.source
+                    )
+                })?)
             ),
             None => "env -u CLAUDE_CONFIG_DIR".to_string(),
         };
@@ -276,9 +282,11 @@ mod tests {
             client_config: &file,
             source: "--client-config",
         };
-        assert_eq!(
-            preview(Client::ClaudeCode, &setup, Some(&dir)).expect_err("non-UTF-8 directory"),
-            "the client config path is not UTF-8"
+        let error =
+            preview(Client::ClaudeCode, &setup, Some(&dir)).expect_err("non-UTF-8 directory");
+        assert!(
+            error.contains("is not UTF-8 (from --client-config)"),
+            "{error}"
         );
     }
 }

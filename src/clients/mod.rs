@@ -100,6 +100,19 @@ impl Client {
         }
     }
 
+    /// Refuse a config file the client would never read because of its name.
+    /// `source` is the setting that chose `path`.
+    pub fn check_name(self, path: &Path, source: &str) -> Result<(), String> {
+        match self.required_name() {
+            Some(name) if path.file_name() != Some(std::ffi::OsStr::new(name)) => Err(format!(
+                "{} config must be named {name}: {} (from {source})",
+                self.display_name(),
+                path.display()
+            )),
+            _ => Ok(()),
+        }
+    }
+
     /// The config file the client reads by default, following the client's
     /// own variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`)
     /// when it is set.
@@ -212,16 +225,7 @@ pub fn header(key: &str, json: bool) -> Result<String, String> {
 /// Print a plan or apply one change. A plan never contains the key, even for
 /// Antigravity; --write reads it directly from the key file instead.
 pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<String, String> {
-    if let Some(name) = client.required_name()
-        && setup.client_config.file_name() != Some(std::ffi::OsStr::new(name))
-    {
-        return Err(format!(
-            "{} config must be named {name}: {} (from {})",
-            client.display_name(),
-            setup.client_config.display(),
-            setup.source
-        ));
-    }
+    client.check_name(setup.client_config, setup.source)?;
     let claude_config_dir = match client {
         Client::ClaudeCode => claude_config_dir(setup)?,
         _ => None,
