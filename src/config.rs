@@ -163,11 +163,15 @@ pub const TAILSCALE_HTTPS_PORT: u16 = 443;
 pub const SERVICE_BACKUP_FOLDER: &str = "backups";
 
 // Client setup and diagnostics.
-pub const CODEX_CONFIG: &str = ".codex/config.toml";
+/// `$CODEX_HOME` when it is not set, under the home directory.
+pub const CODEX_HOME_DEFAULT: &str = ".codex";
+/// Codex's config file, in `$CODEX_HOME`.
+pub const CODEX_CONFIG: &str = "config.toml";
 pub const CLAUDE_CONFIG: &str = ".claude.json";
 pub const AGY_CONFIG: &str = ".gemini/config/mcp_config.json";
 pub const AGY_LEGACY_CONFIG: &str = ".gemini/antigravity/mcp_config.json";
-pub const OPENCODE_CONFIG: &str = ".config/opencode/opencode.json";
+/// OpenCode's config file, under `$XDG_CONFIG_HOME`.
+pub const OPENCODE_CONFIG: &str = "opencode/opencode.json";
 /// The programs `kkt setup` looks for on PATH to tell which clients are
 /// installed.
 pub const CLAUDE_PROGRAM: &str = "claude";

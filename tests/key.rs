@@ -1,6 +1,10 @@
 //! `kkt key create`: a new key in a file only its owner can read, never
 //! printed unless asked, and never written over by accident.
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
@@ -19,10 +23,7 @@ fn temp_home(name: &str) -> PathBuf {
 async fn kkt(home: &Path, args: &[&str]) -> Output {
     let run = Command::new(KKT)
         .args(args)
-        .env("HOME", home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(home)
         .kill_on_drop(true)
         .output();
     tokio::time::timeout(TIMEOUT, run)
@@ -134,10 +135,7 @@ async fn the_server_accepts_a_created_key() {
     let mut child = Command::new(KKT)
         .args(["serve", "--bind", &bind, "--access-key-file"])
         .arg(&key_file)
-        .env("HOME", &home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(&home)
         .stdout(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()

@@ -1,4 +1,8 @@
 //! Mode dispatch with an isolated home and fake external commands.
+
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
 use kashkeshet::setup::{DockerSetup, Mode, Record};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -32,11 +36,7 @@ fn run(home: &Path, args: &[&str]) -> Output {
 fn run_in(home: &Path, dir: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_kkt"));
     command.current_dir(dir);
-    command
-        .args(args)
-        .env("HOME", home)
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME");
+    command.args(args).own_home(home);
     if home.join("bin").exists() {
         command.env(
             "PATH",

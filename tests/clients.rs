@@ -22,6 +22,7 @@ impl Home {
         Env {
             home: Some(self.0.clone()),
             claude_config_dir: None,
+            codex_home: None,
             xdg_config_home: None,
             xdg_data_home: None,
         }
@@ -391,6 +392,33 @@ fn claude_profile_path_does_not_require_home() {
     assert_eq!(
         Client::ClaudeCode.file(&env).expect("profile path"),
         PathBuf::from("/profiles/work/.claude.json")
+    );
+}
+
+#[test]
+fn codex_and_opencode_follow_their_own_variables() {
+    let mut env = Home::new().env();
+    env.home = None;
+    env.codex_home = Some(PathBuf::from("/profiles/codex"));
+    env.xdg_config_home = Some(PathBuf::from("/profiles/xdg"));
+    assert_eq!(
+        Client::Codex.file(&env).expect("Codex path"),
+        PathBuf::from("/profiles/codex/config.toml")
+    );
+    assert_eq!(
+        Client::OpenCode.file(&env).expect("OpenCode path"),
+        PathBuf::from("/profiles/xdg/opencode/opencode.json")
+    );
+}
+
+#[test]
+fn opencode_ignores_a_relative_xdg_config_home() {
+    let home = Home::new();
+    let mut env = home.env();
+    env.xdg_config_home = Some(PathBuf::from("relative"));
+    assert_eq!(
+        Client::OpenCode.file(&env).expect("OpenCode path"),
+        home.0.join(".config/opencode/opencode.json")
     );
 }
 

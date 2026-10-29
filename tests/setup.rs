@@ -1,6 +1,10 @@
 //! `kkt serve` on a machine `kkt setup` set up: run with the real binary in
 //! its own home directory, with a setup record written by hand.
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -39,9 +43,7 @@ fn serve(home: &Path, extra: &[&str]) -> Command {
         .arg("--db")
         .arg(home.join("kkt.db"))
         .args(["--bind", &free_bind(), "--no-access-key"])
-        .env("HOME", home)
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(home)
         .kill_on_drop(true);
     command
 }
@@ -138,10 +140,8 @@ async fn with_no_record_serve_runs_as_before() {
 async fn kkt(home: &Path, args: &[&str]) -> (bool, String) {
     let out = Command::new(KKT)
         .args(args)
-        .env("HOME", home)
+        .own_home(home)
         .env("PATH", "")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .output();
@@ -189,9 +189,7 @@ async fn serve_with_key(home: &Path, key: &Path, bind: &str) -> tokio::process::
         .arg(key)
         .arg("--db")
         .arg(home.join("kkt.db"))
-        .env("HOME", home)
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(home)
         .stdout(Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn().expect("start kkt");
@@ -499,10 +497,8 @@ async fn docker_setup_works_from_a_home_with_nothing_in_it() {
             "host.docker.internal",
         ])
         .args(["--docker-project", "kkt-test", "--docker-port", &port])
-        .env("HOME", &home)
+        .own_home(&home)
         .env("PATH", &bin)
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .output();
@@ -569,10 +565,8 @@ async fn doctor_for_docker(home: &Path, bin: &Path, folder: &Path, running: bool
     let mut command = Command::new(KKT);
     command
         .arg("doctor")
-        .env("HOME", home)
+        .own_home(home)
         .env("PATH", bin)
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
         .env_remove("FAKE_KKT_RUNNING")
         .kill_on_drop(true);
     if running {
@@ -670,10 +664,8 @@ async fn setup_waits_for_a_server_it_set_up_that_answers_late() {
             "none",
         ])
         .args(["--docker-project", "kkt-test", "--docker-port", &port])
-        .env("HOME", &home)
+        .own_home(&home)
         .env("PATH", &bin)
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -749,10 +741,8 @@ async fn tailscale_docker_output(
     let output = || async {
         let mut run = Command::new(KKT);
         run.arg(command)
-            .env("HOME", &home)
+            .own_home(&home)
             .env("PATH", &bin)
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_DATA_HOME")
             .env_remove("FAKE_TS_STATUS")
             .kill_on_drop(true);
         if let Some(status) = tailscale_status {
@@ -844,9 +834,7 @@ async fn doctor_does_not_tell_a_docker_or_client_machine_to_start_the_service() 
         TIMEOUT,
         Command::new(KKT)
             .arg("doctor")
-            .env("HOME", &home)
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_DATA_HOME")
+            .own_home(&home)
             .kill_on_drop(true)
             .output(),
     )

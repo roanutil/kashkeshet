@@ -70,31 +70,41 @@ impl Client {
         program.is_some_and(on_path) || self.file(env).is_ok_and(|path| path.exists())
     }
 
+    /// The config file the client reads by default, following the client's
+    /// own variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`)
+    /// when it is set.
     pub fn file(self, env: &Env) -> Result<PathBuf, String> {
-        if let Self::ClaudeCode = self
-            && let Some(dir) = &env.claude_config_dir
-        {
-            return Ok(dir.join(config::CLAUDE_CONFIG));
-        }
-        let home = env
-            .home
-            .as_ref()
-            .ok_or("set HOME to find the client's config")?;
-        let name = match self {
-            Self::ClaudeCode => config::CLAUDE_CONFIG,
-            Self::Codex => config::CODEX_CONFIG,
+        let home = || {
+            env.home
+                .as_ref()
+                .ok_or("set HOME to find the client's config")
+        };
+        Ok(match self {
+            Self::ClaudeCode => match &env.claude_config_dir {
+                Some(dir) => dir.join(config::CLAUDE_CONFIG),
+                None => home()?.join(config::CLAUDE_CONFIG),
+            },
+            Self::Codex => match &env.codex_home {
+                Some(dir) => dir.join(config::CODEX_CONFIG),
+                None => home()?
+                    .join(config::CODEX_HOME_DEFAULT)
+                    .join(config::CODEX_CONFIG),
+            },
             Self::Agy => {
+                let home = home()?;
                 if !home.join(config::AGY_CONFIG).exists()
                     && home.join(config::AGY_LEGACY_CONFIG).exists()
                 {
-                    config::AGY_LEGACY_CONFIG
+                    home.join(config::AGY_LEGACY_CONFIG)
                 } else {
-                    config::AGY_CONFIG
+                    home.join(config::AGY_CONFIG)
                 }
             }
-            Self::OpenCode => config::OPENCODE_CONFIG,
-        };
-        Ok(home.join(name))
+            Self::OpenCode => env
+                .config_home()
+                .ok_or("set HOME to find the client's config")?
+                .join(config::OPENCODE_CONFIG),
+        })
     }
 }
 
@@ -113,25 +123,27 @@ pub(super) fn claude_config_dir(setup: &Setup<'_>) -> Result<Option<PathBuf>, St
         } else {
             path
         };
-        let absolute = std::path::absolute(path)
-            .map_err(|e| format!("could not resolve client config path: {e}"))?;
+        let absolute = std::path::absolute(path)?;
         // HOME and the current directory can name the same directory through
         // different symlinks. Missing profile directories still use absolute paths.
         match absolute.canonicalize() {
             Ok(real) => Ok(real),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(absolute),
-            Err(e) => Err(format!(
-                "could not resolve client config path {}: {e}",
-                absolute.display()
-            )),
+            Err(e) => Err(e),
         }
     };
-    let selected = directory(
-        setup
-            .client_config
-            .parent()
-            .ok_or("client config path has no parent")?,
-    )?;
+    // The config path comes from --client-config, CLAUDE_CONFIG_DIR or HOME.
+    let unresolved = |problem: String| {
+        format!(
+            "could not resolve the directory of the Claude Code config {} (from --client-config, CLAUDE_CONFIG_DIR or HOME): {problem}",
+            setup.client_config.display()
+        )
+    };
+    let parent = setup
+        .client_config
+        .parent()
+        .ok_or_else(|| unresolved("it has no parent directory".into()))?;
+    let selected = directory(parent).map_err(|e| unresolved(e.to_string()))?;
     // Only the selected directory must resolve: an inherited profile or HOME
     // that cannot be resolved is not the selected one.
     let selects = |path: &PathBuf| directory(path).is_ok_and(|dir| dir == selected);
@@ -179,9 +191,13 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
             setup.client_config.display()
         ));
     }
+    let claude_config_dir = match client {
+        Client::ClaudeCode => claude_config_dir(setup)?,
+        _ => None,
+    };
     let original = files::read(setup.client_config)?;
     if !write {
-        let entry = formats::preview(client, setup)?;
+        let entry = formats::preview(client, setup, claude_config_dir.as_deref())?;
         let mut out = format!("Config: {}\n{entry}\n", setup.client_config.display());
         if client == Client::Agy && setup.key_file.is_some() {
             out.push_str("Antigravity stores the key in this file. --write reads the key file and sets permissions to 0600; the preview redacts it.\n");
@@ -206,7 +222,7 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
             setup.client_config,
             original.as_deref(),
             &updated,
-            claude_config_dir(setup)?.as_deref(),
+            claude_config_dir.as_deref(),
         )?;
     } else {
         files::replace(setup.client_config, original.as_deref(), &updated)?;
@@ -234,13 +250,15 @@ mod tests {
     fn a_client_is_found_by_its_program_or_its_config_file() {
         let home = std::env::temp_dir().join(format!("kashkeshet-detect-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        std::fs::create_dir_all(home.join(".codex")).expect("home");
-        std::fs::write(home.join(config::CODEX_CONFIG), "").expect("codex config");
+        let codex = home.join(config::CODEX_HOME_DEFAULT);
+        std::fs::create_dir_all(&codex).expect("home");
+        std::fs::write(codex.join(config::CODEX_CONFIG), "").expect("codex config");
         let env = Env {
             home: Some(home.clone()),
             xdg_config_home: None,
             xdg_data_home: None,
             claude_config_dir: None,
+            codex_home: None,
         };
         let on_path = |program: &str| program == config::CLAUDE_PROGRAM;
         let found: Vec<Client> = Client::ALL

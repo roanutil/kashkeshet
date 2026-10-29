@@ -25,15 +25,18 @@ impl Platform {
     };
 }
 
-/// The environment values that decide default paths. Unset or empty values
-/// are `None`. The XDG values are ignored unless absolute, as the XDG base
-/// directory specification says.
+/// The environment values that decide default paths, kkt's own and the
+/// clients' it configures, so `main.rs` reads the environment in one place.
+/// Unset or empty values are `None`. The XDG values are ignored unless
+/// absolute, as the XDG base directory specification says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Env {
     /// `$HOME`.
     pub home: Option<PathBuf>,
     /// `$CLAUDE_CONFIG_DIR`.
     pub claude_config_dir: Option<PathBuf>,
+    /// `$CODEX_HOME`.
+    pub codex_home: Option<PathBuf>,
     /// `$XDG_CONFIG_HOME`.
     pub xdg_config_home: Option<PathBuf>,
     /// `$XDG_DATA_HOME`.
@@ -100,6 +103,7 @@ mod tests {
         Env {
             home: home.map(PathBuf::from),
             claude_config_dir: None,
+            codex_home: None,
             xdg_config_home: config.map(PathBuf::from),
             xdg_data_home: data.map(PathBuf::from),
         }

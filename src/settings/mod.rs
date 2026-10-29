@@ -349,6 +349,7 @@ mod waiting_tests {
         let env = Env {
             home: Some(PathBuf::from("/tmp")),
             claude_config_dir: None,
+            codex_home: None,
             xdg_config_home: None,
             xdg_data_home: None,
         };

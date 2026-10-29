@@ -7,6 +7,10 @@
 //! as the MCP library's, are written after the reply has been sent.
 #![cfg(unix)]
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -57,10 +61,7 @@ async fn start(home: &Path, bind: &str, log: &Path) -> Child {
         .arg(home.join("kkt.db"))
         .args(["--bind", bind, "--log-file"])
         .arg(log)
-        .env("HOME", home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(home)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -193,10 +194,7 @@ async fn a_log_file_that_cannot_be_opened_stops_the_server() {
             .arg(home.join("kkt.db"))
             .args(["--bind", &free_bind(), "--no-access-key", "--log-file"])
             .arg(&log)
-            .env("HOME", &home)
-            .env_remove("CLAUDE_CONFIG_DIR")
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_DATA_HOME")
+            .own_home(&home)
             .kill_on_drop(true)
             .output(),
     )
@@ -227,10 +225,7 @@ async fn start_with(home: &Path, bind: &str, log: &Path, args: &[&str]) -> Child
         .args(["--bind", bind, "--no-access-key", "--log-file"])
         .arg(log)
         .args(args)
-        .env("HOME", home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(home)
         .kill_on_drop(true)
         .spawn()
         .expect("start kkt");
@@ -300,7 +295,7 @@ async fn an_unknown_level_is_refused_naming_the_setting() {
     let home = temp_home("bad-level");
     let out = Command::new(KKT)
         .args(["serve", "--log-level", "loud"])
-        .env("HOME", &home)
+        .own_home(&home)
         .kill_on_drop(true)
         .output()
         .await
@@ -384,7 +379,7 @@ async fn dependency_levels_that_would_log_secrets_are_refused() {
             .args(["serve", "--no-access-key", "--dependency-log-level", level])
             .arg("--db")
             .arg(home.join("kkt.db"))
-            .env("HOME", &home)
+            .own_home(&home)
             .kill_on_drop(true)
             .output()
             .await

@@ -3,6 +3,7 @@
 use super::{Client, Setup, helper};
 use crate::config;
 use serde_json::{Map, Value, json};
+use std::path::Path;
 use toml_edit::{DocumentMut, Item, Table, value};
 
 pub(super) fn header_json(key: &str) -> Result<String, String> {
@@ -180,7 +181,13 @@ fn toml_document(setup: &Setup<'_>, text: Option<&str>) -> Result<String, String
     Ok(document.to_string())
 }
 
-pub(super) fn preview(client: Client, setup: &Setup<'_>) -> Result<String, String> {
+/// The change `--write` would make. For Claude Code, `claude_config_dir` is
+/// the `CLAUDE_CONFIG_DIR` the printed command sets, or `None` to unset it.
+pub(super) fn preview(
+    client: Client,
+    setup: &Setup<'_>,
+    claude_config_dir: Option<&Path>,
+) -> Result<String, String> {
     if client == Client::Codex {
         return toml_document(setup, None);
     }
@@ -188,7 +195,7 @@ pub(super) fn preview(client: Client, setup: &Setup<'_>) -> Result<String, Strin
     if client == Client::ClaudeCode {
         let entry =
             claude_entry(&serde_json::to_string(&doc).map_err(|_| "could not encode config")?)?;
-        let environment = match super::claude_config_dir(setup)? {
+        let environment = match claude_config_dir {
             Some(dir) => format!(
                 "CLAUDE_CONFIG_DIR={}",
                 super::shell_word(dir.to_str().ok_or("the client config path is not UTF-8")?)
@@ -255,10 +262,12 @@ mod tests {
         let env = Env {
             home: None,
             claude_config_dir: None,
+            codex_home: None,
             xdg_config_home: None,
             xdg_data_home: None,
         };
-        let file = PathBuf::from(OsString::from_vec(b"/profiles/\xff/.claude.json".to_vec()));
+        let dir = PathBuf::from(OsString::from_vec(b"/profiles/\xff".to_vec()));
+        let file = dir.join(".claude.json");
         let setup = Setup {
             env: &env,
             url: "http://localhost:7420/mcp",
@@ -267,7 +276,7 @@ mod tests {
             client_config: &file,
         };
         assert_eq!(
-            preview(Client::ClaudeCode, &setup).expect_err("non-UTF-8 directory"),
+            preview(Client::ClaudeCode, &setup, Some(&dir)).expect_err("non-UTF-8 directory"),
             "the client config path is not UTF-8"
         );
     }

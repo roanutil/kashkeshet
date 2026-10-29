@@ -8,6 +8,8 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::home::OwnHome;
+
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy)]
@@ -36,10 +38,7 @@ pub async fn stops_cleanly(signal: &str, log_signal: &str, open: OpenRequest) {
         .arg("--db")
         .arg(dir.join("server.db"))
         .args(["--bind", &addr.to_string(), "--no-access-key"])
-        .env("HOME", &dir)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(&dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)

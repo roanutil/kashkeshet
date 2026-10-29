@@ -898,6 +898,7 @@ fn process_env() -> Env {
     Env {
         home: var("HOME"),
         claude_config_dir: var("CLAUDE_CONFIG_DIR"),
+        codex_home: var("CODEX_HOME"),
         xdg_config_home: var("XDG_CONFIG_HOME"),
         xdg_data_home: var("XDG_DATA_HOME"),
     }

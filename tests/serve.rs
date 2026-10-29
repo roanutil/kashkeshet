@@ -2,6 +2,10 @@
 //! on first start. Each test runs the real binary with its own home
 //! directory, so no test reads or writes the real one.
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -33,13 +37,7 @@ fn free_bind() -> String {
 /// `kkt` with `args`, with `home` as its only home directory.
 fn kkt(home: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(KKT);
-    command
-        .args(args)
-        .env("HOME", home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
-        .kill_on_drop(true);
+    command.args(args).own_home(home).kill_on_drop(true);
     command
 }
 

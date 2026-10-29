@@ -122,7 +122,12 @@ pub(super) fn apply_claude(
     config_dir: Option<&Path>,
 ) -> Result<(), String> {
     let client_config = std::path::absolute(path)
-        .map_err(|e| format!("could not resolve client config path: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "could not resolve the Claude Code config path {} (from --client-config, CLAUDE_CONFIG_DIR or HOME): {e}",
+                path.display()
+            )
+        })?;
     let entry = super::formats::claude_entry(updated)?;
     let replacing = match original {
         Some(text) => super::formats::has_claude_entry(text)?,

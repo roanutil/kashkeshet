@@ -1,6 +1,10 @@
 //! `kkt agent`: the operator lists agents and revokes a token in the
 //! database file while a separate server process runs on it.
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 mod common;
 
 use rmcp::model::CallToolRequestParams;
@@ -35,10 +39,7 @@ async fn start_server(db: &Path) -> (Child, String) {
         .arg("--db")
         .arg(db)
         .args(["--bind", &format!("127.0.0.1:{port}"), "--no-access-key"])
-        .env("HOME", home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(home)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
@@ -65,10 +66,7 @@ async fn kkt_agent(args: &[&str]) -> Output {
     let run = Command::new(KKT)
         .arg("agent")
         .args(args)
-        .env("HOME", std::env::temp_dir())
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(std::env::temp_dir())
         .kill_on_drop(true)
         .output();
     tokio::time::timeout(TIMEOUT, run)

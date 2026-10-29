@@ -4,6 +4,10 @@
 //! `src/service/tests.rs`, so no test here starts a real service.
 #![cfg(any(target_os = "macos", target_os = "linux"))]
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
@@ -24,10 +28,7 @@ fn temp_home(name: &str) -> PathBuf {
 async fn kkt(home: &Path, args: &[&str]) -> Output {
     let run = Command::new(KKT)
         .args(args)
-        .env("HOME", home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(home)
         .kill_on_drop(true)
         .output();
     tokio::time::timeout(TIMEOUT, run)
@@ -145,10 +146,7 @@ async fn relative_flags_become_absolute() {
     let out = Command::new(KKT)
         .args(["service", "install", "--dry-run", "--db", "data/chat.db"])
         .current_dir(&home)
-        .env("HOME", &home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(&home)
         .output()
         .await
         .expect("run kkt");

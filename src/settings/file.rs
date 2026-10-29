@@ -177,6 +177,7 @@ mod tests {
         Env {
             home: Some(PathBuf::from("/home/sam")),
             claude_config_dir: None,
+            codex_home: None,
             xdg_config_home: None,
             xdg_data_home: None,
         }
@@ -281,6 +282,7 @@ mod tests {
         let no_home = Env {
             home: None,
             claude_config_dir: None,
+            codex_home: None,
             xdg_config_home: None,
             xdg_data_home: None,
         };

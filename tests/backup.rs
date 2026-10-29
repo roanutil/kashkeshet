@@ -2,6 +2,10 @@
 //! database: run with the real binary on databases in their own home
 //! directories.
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 mod common;
 
 use rmcp::model::CallToolRequestParams;
@@ -36,12 +40,7 @@ fn free_bind() -> String {
 /// `kkt` with `args`, with `home` as its only home directory.
 fn kkt(home: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(KKT);
-    command
-        .args(args)
-        .env("HOME", home)
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
-        .kill_on_drop(true);
+    command.args(args).own_home(home).kill_on_drop(true);
     command
 }
 

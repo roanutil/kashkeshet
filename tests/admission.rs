@@ -1,6 +1,10 @@
 //! The access key for `/mcp`: with `--access-key-file`, every MCP request
 //! must send `Authorization: Bearer <key>`.
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 mod common;
 
 use kashkeshet::admission::{Admission, SharedKey};
@@ -92,10 +96,7 @@ async fn refused_start(file: &std::path::Path, db: &std::path::Path) -> String {
         .arg("127.0.0.1:0")
         .arg("--access-key-file")
         .arg(file)
-        .env("HOME", home)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(home)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)

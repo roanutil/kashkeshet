@@ -112,6 +112,7 @@ fn the_record_lives_in_the_config_directory() {
         xdg_config_home: None,
         xdg_data_home: None,
         claude_config_dir: None,
+        codex_home: None,
     };
     assert_eq!(record_path(&env), Some(FILE.into()));
     let none = Env {
@@ -119,6 +120,7 @@ fn the_record_lives_in_the_config_directory() {
         xdg_config_home: None,
         xdg_data_home: None,
         claude_config_dir: None,
+        codex_home: None,
     };
     assert_eq!(record_path(&none), None);
 }

@@ -1,5 +1,9 @@
 //! Starting the binary with settings it must refuse.
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -29,10 +33,7 @@ async fn a_bad_allowed_host_stops_the_server_naming_the_setting() {
             "http://host.docker.internal",
             "--no-access-key",
         ])
-        .env("HOME", &dir)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
+        .own_home(&dir)
         .kill_on_drop(true)
         .output();
     let out = tokio::time::timeout(REFUSAL_TIMEOUT, run)

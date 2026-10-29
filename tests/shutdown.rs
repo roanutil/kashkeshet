@@ -1,6 +1,8 @@
 //! Exercise actual OS signals against `kkt serve`.
 #![cfg(unix)]
 
+#[path = "common/home.rs"]
+mod home;
 #[path = "common/process.rs"]
 mod process;
 use process::{OpenRequest, stops_cleanly};

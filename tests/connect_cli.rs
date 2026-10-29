@@ -1,5 +1,9 @@
 //! CLI integration uses an isolated HOME and a fake Claude executable.
 
+#[path = "common/home.rs"]
+mod home;
+use home::OwnHome;
+
 mod common;
 
 use std::path::PathBuf;
@@ -28,12 +32,7 @@ impl Home {
     }
     fn command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_kkt"));
-        command
-            .env("HOME", &self.0)
-            .env_remove("CLAUDE_CONFIG_DIR")
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_DATA_HOME")
-            .current_dir(&self.0);
+        command.own_home(&self.0).current_dir(&self.0);
         command
     }
     fn run(&self, args: &[&str]) -> Output {
@@ -216,6 +215,39 @@ fn client_config_overrides_select_file_client_previews_writes_and_backups() {
 }
 
 #[test]
+fn connect_writes_where_codex_home_and_xdg_config_home_point() {
+    let home = Home::new();
+    let codex_home = home.0.join("codex-profile");
+    let xdg = home.0.join("xdg");
+    for (client, file) in [
+        ("codex", codex_home.join("config.toml")),
+        ("opencode", xdg.join("opencode/opencode.json")),
+    ] {
+        let out = home
+            .command()
+            .args(["connect", client, "--write"])
+            .env("CODEX_HOME", &codex_home)
+            .env("XDG_CONFIG_HOME", &xdg)
+            .output()
+            .expect("run kkt");
+        assert!(out.status.success(), "{client}: {}", text(&out));
+        assert!(
+            text(&out).contains(&file.display().to_string()),
+            "{client}: {}",
+            text(&out)
+        );
+        assert!(
+            std::fs::read_to_string(&file)
+                .expect("written config")
+                .contains("kkt"),
+            "{client}"
+        );
+    }
+    assert!(!home.0.join(".codex").exists());
+    assert!(!home.0.join(".config/opencode").exists());
+}
+
+#[test]
 fn connecting_creates_the_default_key_but_preview_does_not_write_client_config() {
     let home = Home::new();
     let out = home.run(&["connect", "codex"]);
@@ -247,7 +279,7 @@ fn connecting_creates_the_default_key_but_preview_does_not_write_client_config()
     assert!(helper.starts_with('\''));
     let result = Command::new("sh")
         .args(["-c", helper])
-        .env("HOME", &home.0)
+        .own_home(&home.0)
         .output()
         .expect("helper");
     assert!(result.status.success(), "{}", text(&result));
@@ -284,7 +316,7 @@ fn key_header_reads_paths_with_quotes_and_outputs_only_requested_format() {
         .expect("helper");
     let out = Command::new("sh")
         .args(["-c", helper])
-        .env("HOME", &home.0)
+        .own_home(&home.0)
         .output()
         .expect("helper");
     assert!(out.status.success(), "{}", text(&out));
@@ -617,8 +649,7 @@ fn claude_preview_command_writes_the_selected_profile() {
         let mut shell = Command::new("sh");
         shell
             .args(["-c", shell_command])
-            .env("HOME", &home.0)
-            .env_remove("CLAUDE_CONFIG_DIR")
+            .own_home(&home.0)
             .env("PATH", &path)
             .current_dir(&home.0);
         if let Some(dir) = inherited {
@@ -738,8 +769,7 @@ fn claude_preview_and_write_preserve_the_selected_settings_root() {
             .args(["-c", command])
             .current_dir(&home.0)
             .env("PATH", &path)
-            .env("HOME", &home.0)
-            .env_remove("CLAUDE_CONFIG_DIR");
+            .own_home(&home.0);
         if let Some(dir) = inherited {
             shell.env("CLAUDE_CONFIG_DIR", dir);
         }
@@ -908,7 +938,7 @@ fn claude_default_config_preserves_settings_roots_through_a_symlinked_home() {
                 ".claude.json",
                 "--write",
             ])
-            .env("HOME", &alias)
+            .own_home(&alias)
             .env("PATH", &path);
         if inherited {
             command.env("CLAUDE_CONFIG_DIR", &alias);

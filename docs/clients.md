@@ -32,9 +32,9 @@ config through its CLI; kkt backs it up before invoking that CLI.
 | Client | Default destination (without `--client-config`) | Credentials |
 |---|---|---|
 | Claude Code | `$CLAUDE_CONFIG_DIR/.claude.json` when set, otherwise `~/.claude.json`; user scope | `headersHelper` calls this `kkt` executable with the absolute key path. `claude` must be on PATH for `--write`. |
-| Codex | `~/.codex/config.toml` | `http_headers_helper` calls `kkt`; existing TOML comments are retained. |
+| Codex | `$CODEX_HOME/config.toml` when set, otherwise `~/.codex/config.toml` | `http_headers_helper` calls `kkt`; existing TOML comments are retained. |
 | Antigravity (`agy`) | `~/.gemini/config/mcp_config.json` | Copies the key into `headers`. An existing legacy `~/.gemini/antigravity/mcp_config.json` is used instead if the newer path is absent. |
-| OpenCode | `~/.config/opencode/opencode.json` | `Authorization` uses `{file:<absolute key path>}`; OpenCode trims surrounding whitespace. OAuth is disabled for this static key. |
+| OpenCode | `$XDG_CONFIG_HOME/opencode/opencode.json` when set, otherwise `~/.config/opencode/opencode.json` | `Authorization` uses `{file:<absolute key path>}`; OpenCode trims surrounding whitespace. OAuth is disabled for this static key. |
 
 To connect several Claude Code profiles, run connect once per profile with
 `--client-config /path/to/profile/.claude.json`. Claude Code requires the
