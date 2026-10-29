@@ -175,3 +175,32 @@ fn backups_never_go_into_git_or_an_image() {
     assert!(dockerignore.lines().any(|l| l == "backups"));
     assert!(dockerignore.lines().any(|l| l == "**/upgrade-backups"));
 }
+
+#[test]
+fn both_compose_setups_keep_both_default_keys_in_the_data_volume() {
+    let dockerfile = read("Dockerfile");
+    assert!(dockerfile.contains("ENV HOME=/data"));
+    let env = kashkeshet::settings::Env {
+        home: Some("/data".into()),
+        xdg_config_home: None,
+        xdg_data_home: None,
+    };
+    let access = env.access_key_file().expect("default access key");
+    let web = kashkeshet::settings::web_key_path(&access);
+    assert_eq!(web, std::path::Path::new("/data/.config/kkt/web-key"));
+    assert_ne!(access, web);
+    for file in ["compose.yaml", "compose.tailscale.yaml"] {
+        let compose = read(file);
+        assert!(
+            compose
+                .lines()
+                .any(|line| line.trim() == "- kkt-data:/data")
+        );
+        assert!(!compose.contains("--no-access-key"));
+        assert!(
+            !compose.contains("--access-key-file"),
+            "keep both keys under HOME"
+        );
+        assert!(compose.contains("kkt key show --web"));
+    }
+}

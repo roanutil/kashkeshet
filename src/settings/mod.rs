@@ -150,6 +150,19 @@ impl ServeOptions {
                 }
             },
         };
+        let web_key = match &access_key {
+            AccessKey::None => AccessKey::None,
+            AccessKey::File(path) | AccessKey::Default(path) => {
+                let web = web_key_path(path);
+                if &web == path {
+                    return Err(InvalidSetting::new(
+                        "access_key_file",
+                        "must not name the web key file",
+                    ));
+                }
+                AccessKey::Default(web)
+            }
+        };
         let defaults = Limits::DEFAULT;
         Ok(ServeSettings {
             db: self.db.unwrap_or(default_db),
@@ -175,6 +188,7 @@ impl ServeOptions {
             allow_hosts: self.allow_hosts.unwrap_or_default(),
             instructions: self.instructions,
             access_key,
+            web_key,
             log_file: self.log_file,
             log_level: self.log_level.unwrap_or(DEFAULT_LOG_LEVEL),
             dependency_log_level: self
@@ -182,6 +196,11 @@ impl ServeOptions {
                 .unwrap_or(DEFAULT_DEPENDENCY_LOG_LEVEL),
         })
     }
+}
+
+/// The operator web key always lives beside the server's access key.
+pub fn web_key_path(access_key: &std::path::Path) -> PathBuf {
+    access_key.with_file_name(crate::config::WEB_KEY_FILE_NAME)
 }
 
 /// Which access key a server uses.
@@ -209,6 +228,7 @@ pub struct ServeSettings {
     /// A file of instructions for agents, in place of the built-in ones.
     pub instructions: Option<PathBuf>,
     pub access_key: AccessKey,
+    pub web_key: AccessKey,
     /// The log file, if the log goes to one instead of stdout.
     pub log_file: Option<PathBuf>,
     pub log_level: LogLevel,
@@ -238,6 +258,7 @@ mod tests {
                 allow_hosts: vec![],
                 instructions: None,
                 access_key: AccessKey::Default(PathBuf::from("default-key")),
+                web_key: AccessKey::Default(PathBuf::from("web-key")),
                 log_file: None,
                 log_level: LogLevel::Info,
                 dependency_log_level: LogLevel::Warn,

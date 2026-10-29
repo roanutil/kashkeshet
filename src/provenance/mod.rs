@@ -56,6 +56,9 @@ impl ServerRun {
                     config.config_file.as_deref(),
                     config.admission.key_source(),
                 ));
+                if let Some(file) = config.web_admission.key_source() {
+                    settings.push_str(&format!("\nweb_key_file={file}"));
+                }
                 if let Some(file) = &config.log_file {
                     settings.push('\n');
                     settings.push_str(&log_text(file, &LogPolicy::DEFAULT));
@@ -195,6 +198,7 @@ mod tests {
     fn config(limits: Limits, origins: &[&str], instructions: &str) -> AppConfig {
         AppConfig {
             admission: Admission::Open,
+            web_admission: Admission::Open,
             limits,
             allowed_origins: origins.iter().map(|o| o.to_string()).collect(),
             allowed_hosts: AllowedHosts::new(&[]).expect("loopback hosts"),
@@ -369,9 +373,14 @@ mod tests {
         let key = "0123456789abcdef0123456789abcdef";
         let mut keyed = config(Limits::DEFAULT, &[], "");
         keyed.admission = Admission::SharedKey(SharedKey::new(key, "/keys/kkt").expect("key"));
+        let web_key = "web-0123456789abcdef0123456789abcdef";
+        keyed.web_admission =
+            Admission::SharedKey(SharedKey::new(web_key, "/keys/web-key").expect("web key"));
         let run = ServerRun::new(TEST_BUILD, &keyed);
-        assert!(run.settings.ends_with("\naccess_key_file=/keys/kkt"));
+        assert!(run.settings.contains("\naccess_key_file=/keys/kkt\n"));
+        assert!(run.settings.ends_with("\nweb_key_file=/keys/web-key"));
         assert!(!run.settings.contains(key));
+        assert!(!run.settings.contains(web_key));
         let open = ServerRun::new(TEST_BUILD, &config(Limits::DEFAULT, &[], ""));
         assert!(!open.settings.contains("access_key"));
     }

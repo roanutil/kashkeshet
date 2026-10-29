@@ -151,6 +151,10 @@ pub const XDG_CONFIG_HOME_DEFAULT: &str = ".config";
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 /// Where `kkt key create` writes a key, in the config directory.
 pub const ACCESS_KEY_FILE_NAME: &str = "access-key";
+/// The operator login key, beside the access key.
+pub const WEB_KEY_FILE_NAME: &str = "web-key";
+/// Docker setup's host copy of the operator key.
+pub const DOCKER_WEB_KEY_FILE_NAME: &str = "docker-web-key";
 /// The setup record `kkt setup` writes, in the config directory.
 pub const SETUP_FILE_NAME: &str = "setup.toml";
 /// The zero-based mode option Enter accepts during interactive setup (Docker).

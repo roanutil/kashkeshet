@@ -207,7 +207,7 @@ impl WebAdmission {
         }
     }
 
-    /// Starts a session if `credentials` would be admitted to `/mcp`.
+    /// Starts a session if `credentials` match the web page's own key.
     pub fn sign_in(&self, credentials: &Credentials) -> SignIn {
         match self.admission.decide(credentials) {
             Decision::Admitted(principal) => SignIn::Started {

@@ -260,6 +260,78 @@ fn service_upgrade_backs_up_configured_database_then_uninstall_keeps_it() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn service_backup_and_upgrade_preserve_existing_keys_and_create_a_missing_web_key() {
+    for has_web_key in [false, true] {
+        let home = home(if has_web_key {
+            "existing-web-key"
+        } else {
+            "missing-web-key"
+        });
+        record(&home, Mode::Service { tailscale: false });
+        let config = home.join(".config/kkt");
+        let database = config.join("chosen.db");
+        drop(kashkeshet::store::Db::open(&database).unwrap());
+        std::fs::write(config.join("config.toml"), "db = 'chosen.db'\n").unwrap();
+        let access_key = "0123456789abcdef0123456789abcdef";
+        let web_key = "abcdef0123456789abcdef0123456789";
+        std::fs::write(config.join("access-key"), access_key).unwrap();
+        if has_web_key {
+            std::fs::write(config.join("web-key"), web_key).unwrap();
+        }
+        // No server has started with the separate web key feature yet.
+        fake(&home, "systemctl", "exit 0");
+        let manual = home.join("manual-backups");
+        let out = run(&home, &["backup", manual.to_str().unwrap()]);
+        assert!(out.status.success(), "{}", text(&out));
+        assert_eq!(config.join("web-key").exists(), has_web_key);
+        let out = run(&home, &["upgrade"]);
+        assert!(out.status.success(), "{}", text(&out));
+        for folder in [manual, config.join("backups")] {
+            let backups: Vec<_> = std::fs::read_dir(folder).unwrap().collect();
+            assert_eq!(backups.len(), 1);
+            let saved = backups[0].as_ref().unwrap().path();
+            assert!(saved.join("kashkeshet.db").exists());
+            assert!(saved.join("config.toml").exists());
+            assert_eq!(
+                std::fs::read_to_string(saved.join("access-key")).unwrap(),
+                access_key
+            );
+            assert_eq!(saved.join("web-key").exists(), has_web_key);
+            let about = std::fs::read_to_string(saved.join("about.txt")).unwrap();
+            if has_web_key {
+                assert_eq!(
+                    std::fs::read_to_string(saved.join("web-key")).unwrap(),
+                    web_key
+                );
+                assert!(about.contains(&format!(
+                    "web-key: copy of {}",
+                    config.join("web-key").display()
+                )));
+            } else {
+                assert!(about.contains("web-key: none"));
+            }
+        }
+        let created_web_key = std::fs::read_to_string(config.join("web-key")).unwrap();
+        if has_web_key {
+            assert_eq!(created_web_key, web_key);
+        } else {
+            assert!(!created_web_key.trim().is_empty());
+            assert_ne!(created_web_key.trim(), access_key);
+        }
+        assert_eq!(
+            std::fs::read_to_string(config.join("access-key")).unwrap(),
+            access_key
+        );
+        let log = std::fs::read_to_string(home.join("commands")).unwrap();
+        assert!(log.contains("restart kashkeshet.service"));
+        let updated = std::fs::read_to_string(config.join("setup.toml")).unwrap();
+        assert!(updated.contains(env!("CARGO_PKG_VERSION")));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn docker_backup_without_a_folder_does_not_copy_out() {

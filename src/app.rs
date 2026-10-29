@@ -27,6 +27,8 @@ use std::sync::Arc;
 pub struct AppConfig {
     /// Who may call `/mcp` at all. The web page is not covered.
     pub admission: Admission,
+    /// Who may sign in to the operator web page.
+    pub web_admission: Admission,
     pub limits: Limits,
     /// Browser origins allowed to call `/mcp`. Requests with any other
     /// `Origin` header are refused; requests without one (agents) pass.
@@ -100,7 +102,7 @@ pub fn build(parts: Parts, config: AppConfig, shutdown: Shutdown) -> Router {
         parts.entropy.clone(),
         config.limits.web_session_lifetime,
     );
-    let web_admission = Arc::new(WebAdmission::new(admission.clone(), sessions));
+    let web_admission = Arc::new(WebAdmission::new(Arc::new(config.web_admission), sessions));
     let rules = Rules::new(Deps {
         waiting: parts.waiting,
         db: parts.db,

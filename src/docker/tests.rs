@@ -199,7 +199,9 @@ fn with_tailscale(auth_key: Option<&str>) -> Inputs {
 /// Docker works, kkt makes its key, and `tailscale status` says `status`.
 fn working(tailscale_status: &'static str) -> impl Fn(&str) -> io::Result<Finished> {
     move |command| {
-        if command.contains("key show") {
+        if command.contains("key show --web") {
+            ok("web-key-0123456789abcdef0123456789abcdef\n")
+        } else if command.contains("key show") {
             ok(&format!("{KEY}\n"))
         } else if command.contains("tailscale status") {
             ok(tailscale_status)
@@ -834,7 +836,7 @@ fn status_does_not_call_a_container_stopped_when_compose_failed() {
 }
 
 #[tokio::test]
-async fn the_key_goes_in_a_folder_that_did_not_exist_yet() {
+async fn both_keys_go_in_a_folder_that_did_not_exist_yet() {
     let host = FakeHost::new(working(""));
     provision(
         &host,
@@ -854,6 +856,10 @@ async fn the_key_goes_in_a_folder_that_did_not_exist_yet() {
     assert_eq!(
         host.file("/home/me/.config/kkt/docker-access-key").unwrap(),
         (format!("{KEY}\n"), true)
+    );
+    assert_eq!(
+        host.file("/home/me/.config/kkt/docker-web-key").unwrap(),
+        ("web-key-0123456789abcdef0123456789abcdef\n".into(), true)
     );
 }
 

@@ -1,7 +1,8 @@
 # kkt in Docker, reachable from this machine only.
 #   cp .env.example .env     # then set KKT_VERSION
 #   docker compose up -d
-#   docker compose exec kkt kkt key show
+#   docker compose exec kkt kkt key show --web  # operator login
+#   docker compose exec kkt kkt key show        # agents only
 #   docker compose exec kkt kkt backup /backups
 # The web page is at http://127.0.0.1:7420/ and MCP at http://127.0.0.1:7420/mcp.
 # For access over a tailnet, use compose.tailscale.yaml instead.
@@ -25,6 +26,7 @@ services:
       - --bind
       - 0.0.0.0:7420
       - --allow-any-bind
+      # Both keys live in the persistent data volume. web-key is beside access-key.
       - --allow-host
       - ${KKT_ALLOW_HOSTS:-localhost}
 

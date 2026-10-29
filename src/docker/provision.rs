@@ -1,5 +1,5 @@
 //! Setting kkt up in Docker: files, folder ownership, the Tailscale login,
-//! starting the containers and saving the access key.
+//! starting the containers and saving both keys.
 
 use super::compose::{compose, tailscale_status, version};
 use super::files::{create_dir, env_text, write_embedded, write_env};
@@ -22,7 +22,8 @@ pub struct Provisioned {
 }
 
 /// Writes the files for `inputs` into `folder`, starts kkt (and Tailscale)
-/// and saves the access key, readable only by its owner, at `key_file`.
+/// and saves the access key at `key_file` and the web key beside it, both
+/// readable only by their owner.
 /// Safe to run again on the same folder: it carries on from where it was.
 pub async fn provision(
     host: &dyn Host,
@@ -53,12 +54,20 @@ pub async fn provision(
 
     host.say("Starting kkt (this takes a minute if the image has to be downloaded)...");
     run_attached(host, &compose(folder, &["up", "-d"]))?;
-    let key = wait_for_key(host, clock, folder).await?;
+    let key = wait_for_key(host, clock, folder, false).await?;
+    let web_key = wait_for_key(host, clock, folder, true).await?;
     if let Some(parent) = key_file.parent() {
         create_dir(host, parent)?;
     }
     host.write_file(key_file, &key, true)
         .map_err(|e| DockerError::io(format!("could not write {}", key_file.display()), e))?;
+    let web_key_file = key_file.with_file_name(crate::config::DOCKER_WEB_KEY_FILE_NAME);
+    host.write_file(&web_key_file, &web_key, true)
+        .map_err(|e| DockerError::io(format!("could not write {}", web_key_file.display()), e))?;
+    host.say(&format!(
+        "The web key is saved in {}. Read it with `kkt key show --web`.",
+        web_key_file.display()
+    ));
     host.say(&format!(
         "kkt is running. The access key is saved in {}.",
         key_file.display()
@@ -180,13 +189,18 @@ async fn log_in(
     })
 }
 
-/// Waits for kkt to be up and returns its access key.
+/// Waits for kkt to be up and returns the selected key.
 async fn wait_for_key(
     host: &dyn Host,
     clock: &dyn Clock,
     folder: &Folder,
+    web: bool,
 ) -> Result<String, DockerError> {
-    let show = compose(folder, &["exec", "-T", "kkt", "kkt", "key", "show"]);
+    let mut args = vec!["exec", "-T", "kkt", "kkt", "key", "show"];
+    if web {
+        args.push("--web");
+    }
+    let show = compose(folder, &args);
     poll(clock, DOCKER_START_WAIT, DOCKER_POLL_INTERVAL, || {
         let done = run(host, &show)?;
         let key = done.stdout.trim();

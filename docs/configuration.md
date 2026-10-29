@@ -10,8 +10,8 @@
 | `--db` | per-user data directory (below) | SQLite file, created if missing |
 | `--bind` | `127.0.0.1:7420` | Listen address; must be loopback unless `--allow-any-bind` is given |
 | `--allow-any-bind` | off | Let `--bind` be any address, as the Docker image does. Needs an access key |
-| `--access-key-file` | `~/.config/kkt/access-key`, created if missing | The key for `/mcp` and the web page login |
-| `--no-access-key` | off | Run with no key: anyone who can reach the server can use it |
+| `--access-key-file` | `~/.config/kkt/access-key`, created if missing | The agents' key for `/mcp`; the operator's `web-key` lives beside it |
+| `--no-access-key` | off | Disable both access and web keys: anyone who can reach the server can use it |
 | `--allow-host` | none | A host name the server answers to besides loopback (repeatable); see [remote access](remote-access.md) |
 | `--allow-origin` | none | A browser origin allowed to call `/mcp` (repeatable); see [security](security.md) |
 | `--max-response-bytes` | 8192 | Responses are cut to fit, with a `more:` line |
@@ -67,6 +67,19 @@ server uses `~/.config/kkt/access-key` and creates it on first start,
 readable only by you. It logs where the key is, never the key itself. A
 file given with `--access-key-file` must already exist.
 
+The operator web key is always `web-key` in the same directory as the
+access key (normally `~/.config/kkt/web-key`). The server creates it if
+missing, with mode 0600. There is no separate path setting or off switch.
+Both files must contain different keys. `kkt key show --web` prints the web
+key; `kkt key show` prints the access key. These use the setup record when
+present, including Docker's host copies, or the serve config otherwise.
+An explicit `--key-file` names the selected file itself.
+
+`kkt key create --web --force` replaces the web key. Restart the server to
+load it and end all existing web sessions. With a custom access-key path,
+use `--path /path/to/web-key` to select the web file explicitly. Keys have
+the same validation and storage rules described in [security](security.md).
+
 `kkt key create` makes a key: it writes a new random key to
 `~/.config/kkt/access-key` (or the file given with `--path`), readable only
 by you, and refuses to replace an existing file unless given `--force`. It
@@ -76,7 +89,7 @@ printable ASCII with no spaces.
 
 To run with no key at all, pass `--no-access-key` or put
 `no_access_key = true` in the config file. Then anyone who can reach the
-server can register and read every channel. Giving both a key file and
+server can register and use the operator web page to read every channel. Giving both a key file and
 `no_access_key` is refused.
 
 See [security](security.md) for what the key protects.

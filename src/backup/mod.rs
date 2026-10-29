@@ -1,5 +1,5 @@
 //! Backups: a folder holding a consistent copy of the database, the config
-//! file and the access key, named so that backups sort by time and say which
+//! file and both keys, named so that backups sort by time and say which
 //! kkt version wrote them; and pruning the backups the server keeps before it
 //! upgrades a database, to the newest few.
 //!
@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 pub const DATABASE_FILE: &str = "kashkeshet.db";
 pub const CONFIG_FILE: &str = "config.toml";
 pub const ACCESS_KEY_FILE: &str = "access-key";
+pub const WEB_KEY_FILE: &str = "web-key";
 /// Says when the backup was made, by which version, and where each file came
 /// from, for restoring it.
 pub const ABOUT_FILE: &str = "about.txt";
@@ -29,12 +30,13 @@ const PARTIAL: &str = ".partial";
 /// as text in time order.
 const TIME_FORMAT: &str = "%Y%m%dT%H%M%S%.3fZ";
 
-/// What to back up: the database file, and the config and access key files
+/// What to back up: the database file, and the config and key files
 /// if the server has them.
 pub struct Contents<'a> {
     pub database: &'a Path,
     pub config: Option<&'a Path>,
     pub access_key: Option<&'a Path>,
+    pub web_key: Option<&'a Path>,
 }
 
 /// The name of a backup made at `at` by kkt `version`, such as
@@ -124,6 +126,9 @@ fn fill(
     if let Some(key) = contents.access_key {
         copy_private(key, &into.join(ACCESS_KEY_FILE))?;
     }
+    if let Some(key) = contents.web_key {
+        copy_private(key, &into.join(WEB_KEY_FILE))?;
+    }
     let source = |path: Option<&Path>| match path {
         Some(path) => format!("copy of {}", path.display()),
         None => "none".to_string(),
@@ -132,11 +137,13 @@ fn fill(
         "kkt {version} backup made {}\n\
          {DATABASE_FILE}: {}\n\
          {CONFIG_FILE}: {}\n\
-         {ACCESS_KEY_FILE}: {}\n",
+         {ACCESS_KEY_FILE}: {}\n\
+         {WEB_KEY_FILE}: {}\n",
         crate::clock::to_text(at),
         source(Some(contents.database)),
         source(contents.config),
         source(contents.access_key),
+        source(contents.web_key),
     );
     std::fs::write(into.join(ABOUT_FILE), about)
         .map_err(|e| format!("could not write {}: {e}", into.join(ABOUT_FILE).display()))

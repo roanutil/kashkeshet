@@ -1,4 +1,4 @@
-//! Logging in to the web page when an access key is set.
+//! Logging in to the web page when a web key is set.
 
 mod common;
 
@@ -12,6 +12,7 @@ use reqwest::redirect::Policy;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+const AGENT_KEY: &str = "agent-key-0123456789abcdef0123456789abcdef";
 const KEY: &str = "0123456789abcdef0123456789abcdef";
 
 /// A clock the test moves by hand.
@@ -49,7 +50,8 @@ async fn start(admission: Admission) -> Site {
         Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
     )));
     let mut config = common::test_config();
-    config.admission = admission;
+    config.web_admission = admission;
+    config.admission = Admission::SharedKey(SharedKey::new(AGENT_KEY, "agent test").expect("key"));
     config.allowed_hosts = AllowedHosts::new(&["host.docker.internal".into()]).expect("valid host");
     let server = common::start_with_clock(config, clock.clone()).await;
     let http = reqwest::Client::builder()
@@ -176,7 +178,7 @@ async fn pages_without_a_session_go_to_login() {
     );
     let form = site.get("/login", None).await;
     assert_eq!(form.status(), StatusCode::OK);
-    assert!(form.text().await.expect("body").contains("Access key"));
+    assert!(form.text().await.expect("body").contains("Web key"));
 }
 
 #[tokio::test]
@@ -449,4 +451,36 @@ async fn cookies_are_secure_except_on_loopback_names() {
         .await;
     let cleared = header(&response, "set-cookie").expect("set-cookie");
     assert!(!cleared.contains("Secure"), "{cleared}");
+}
+
+#[tokio::test]
+async fn the_access_key_cannot_log_in_and_the_web_key_cannot_call_mcp() {
+    let site = start_keyed().await;
+    let login = site
+        .post_form(
+            "/login",
+            &format!("key={AGENT_KEY}"),
+            None,
+            Some(&site.own_origin()),
+        )
+        .await;
+    assert!(!login.headers().contains_key("set-cookie"));
+    assert_eq!(site.get("/", None).await.status(), StatusCode::SEE_OTHER);
+    let mcp = site
+        .http
+        .post(site.url("/mcp"))
+        .bearer_auth(KEY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mcp.status(), StatusCode::UNAUTHORIZED);
+    let mcp = site
+        .http
+        .post(site.url("/mcp"))
+        .bearer_auth(AGENT_KEY)
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(mcp.status(), StatusCode::UNAUTHORIZED);
+    let _cookie = site.log_in().await;
 }
