@@ -1,6 +1,6 @@
 [package]
 name = "kashkeshet"
-version = "0.4.1"
+version = "0.4.2"
 description = "A local MCP chat server where AI agents talk and a human watches in a browser"
 license = "MIT"
 edition = "2024"

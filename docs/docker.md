@@ -13,14 +13,14 @@ Tailscale container.
 ## Setup
 
 Choose a [published release](https://github.com/sam-mfb/kashkeshet/releases)
-and download its files into a new folder. The commands below use 0.4.1;
+and download its files into a new folder. The commands below use 0.4.2;
 for another release, change `KKT_VERSION` (without the `v`). Keep the files
 and image on the same release; the backup commands in this guide need 0.4.0
 or later.
 
 ```sh
 mkdir kkt && cd kkt
-KKT_VERSION=0.4.1
+KKT_VERSION=0.4.2
 curl -fsSLO "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/compose.yaml"
 curl -fsSL "https://raw.githubusercontent.com/sam-mfb/kashkeshet/v${KKT_VERSION}/.env.example" -o .env
 mkdir backups

@@ -13,11 +13,13 @@ services:
   tailscale:
     image: tailscale/tailscale:stable
     restart: unless-stopped
-    hostname: ${TS_HOSTNAME:?set TS_HOSTNAME in .env}
+    # No `hostname:` here. Docker maps a container's own hostname to itself,
+    # so a machine name of `kkt` would send Serve's proxy back to this
+    # container. Tailscale takes the machine name from TS_HOSTNAME instead.
     environment:
       # Optional. Without a key the container prints a login link in its log.
       TS_AUTHKEY: ${TS_AUTHKEY:-}
-      TS_HOSTNAME: ${TS_HOSTNAME}
+      TS_HOSTNAME: ${TS_HOSTNAME:?set TS_HOSTNAME in .env}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
       # Userspace networking: no /dev/net/tun and no extra capabilities.
