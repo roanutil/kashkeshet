@@ -101,6 +101,62 @@ fn connecting_creates_the_default_key_but_preview_does_not_write_client_config()
 }
 
 #[test]
+fn connect_muse_code_writes_settings_with_schema_version_and_is_idempotent() {
+    let home = Home::new();
+    let key = home.put("key", KEY);
+    let key_arg = key.to_str().expect("key path");
+    let preview = home.run(&["connect", "muse-code", "--key-file", key_arg]);
+    assert!(preview.status.success(), "{}", text(&preview));
+    assert!(
+        text(&preview).contains(".config/muse/settings.json"),
+        "{}",
+        text(&preview)
+    );
+    assert!(
+        text(&preview).contains("Muse Code stores the key"),
+        "{}",
+        text(&preview)
+    );
+    assert!(!text(&preview).contains(KEY));
+    assert!(!home.0.join(".config/muse/settings.json").exists());
+
+    let written = home.run(&["connect", "muse-code", "--key-file", key_arg, "--write"]);
+    assert!(written.status.success(), "{}", text(&written));
+    assert!(
+        text(&written).contains("Muse Code stores the key"),
+        "{}",
+        text(&written)
+    );
+    assert!(!text(&written).contains(KEY));
+    let file = home.0.join(".config/muse/settings.json");
+    let config = std::fs::read_to_string(&file).expect("config");
+    let parsed: serde_json::Value = serde_json::from_str(&config).expect("JSON");
+    assert_eq!(parsed["schema_version"], 1);
+    let entry = &parsed["mcpServers"]["kkt"];
+    assert_eq!(entry["transport"], "streamable_http");
+    assert!(entry["url"].as_str().expect("url").ends_with("/mcp"));
+    assert_eq!(entry["mode"], "optional");
+    assert_eq!(entry["headers"]["Authorization"], format!("Bearer {KEY}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&file).expect("mode").permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let again = home.run(&["connect", "muse-code", "--key-file", key_arg, "--write"]);
+    assert!(again.status.success(), "{}", text(&again));
+    assert!(
+        text(&again).contains("Already configured"),
+        "{}",
+        text(&again)
+    );
+    assert_eq!(std::fs::read_to_string(&file).expect("config"), config);
+    assert!(!home.0.join(".config/muse/settings.json.bak").exists());
+}
+
+#[test]
 fn key_header_reads_paths_with_quotes_and_outputs_only_requested_format() {
     let home = Home::new();
     let key = home.put("key with ' quote", &format!("  {KEY}\n"));

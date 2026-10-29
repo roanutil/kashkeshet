@@ -1,5 +1,6 @@
 //! Client configuration and its on-disk formats. Helpers refer to the key
-//! file; only Antigravity requires a copy of the key in its configuration.
+//! file; only Antigravity and Muse Code require a copy of the key in their
+//! configuration.
 
 mod files;
 mod formats;
@@ -14,6 +15,7 @@ pub enum Client {
     Codex,
     Agy,
     OpenCode,
+    MuseCode,
 }
 
 /// Inputs chosen by the caller, including the absolute executable/key paths.
@@ -25,11 +27,12 @@ pub struct Setup<'a> {
 }
 
 impl Client {
-    pub const ALL: [Client; 4] = [
+    pub const ALL: [Client; 5] = [
         Client::ClaudeCode,
         Client::Codex,
         Client::OpenCode,
         Client::Agy,
+        Client::MuseCode,
     ];
 
     /// The name `kkt connect` and `kkt setup --clients` take.
@@ -39,6 +42,7 @@ impl Client {
             Client::Codex => "codex",
             Client::Agy => "agy",
             Client::OpenCode => "opencode",
+            Client::MuseCode => "muse-code",
         }
     }
 
@@ -53,7 +57,14 @@ impl Client {
             Client::Codex => "Codex",
             Client::Agy => "Antigravity",
             Client::OpenCode => "OpenCode",
+            Client::MuseCode => "Muse Code",
         }
+    }
+
+    /// Whether this client has no way to read the key from its file, so
+    /// `configure` copies the key into the config and warns about it.
+    pub fn copies_key(self) -> bool {
+        matches!(self, Client::Agy | Client::MuseCode)
     }
 
     /// Whether the client looks installed: its config file exists, or its
@@ -63,6 +74,7 @@ impl Client {
             Client::ClaudeCode => Some(config::CLAUDE_PROGRAM),
             Client::Codex => Some(config::CODEX_PROGRAM),
             Client::OpenCode => Some(config::OPENCODE_PROGRAM),
+            Client::MuseCode => Some(config::MUSE_PROGRAM),
             // Antigravity is an editor; its config file is the sign.
             Client::Agy => None,
         };
@@ -70,6 +82,13 @@ impl Client {
     }
 
     fn file(self, env: &Env) -> Result<PathBuf, String> {
+        if self == Self::MuseCode {
+            // Muse Code follows the XDG config home, not just `$HOME`.
+            let base = env
+                .config_home()
+                .ok_or("set HOME to find the client's config")?;
+            return Ok(base.join(config::MUSE_CONFIG));
+        }
         let home = env
             .home
             .as_ref()
@@ -87,6 +106,7 @@ impl Client {
                 }
             }
             Self::OpenCode => config::OPENCODE_CONFIG,
+            Self::MuseCode => unreachable!("Muse Code returned above"),
         };
         Ok(home.join(name))
     }
@@ -121,15 +141,18 @@ pub fn header(key: &str, json: bool) -> Result<String, String> {
 }
 
 /// Print a plan or apply one change. A plan never contains the key, even for
-/// Antigravity; --write reads it directly from the key file instead.
+/// clients that copy it; --write reads it directly from the key file instead.
 pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<String, String> {
     let path = client.file(setup.env)?;
     let original = files::read(&path)?;
     if !write {
         let entry = formats::preview(client, setup)?;
         let mut out = format!("Config: {}\n{entry}\n", path.display());
-        if client == Client::Agy && setup.key_file.is_some() {
-            out.push_str("Antigravity stores the key in this file. --write reads the key file and sets permissions to 0600; the preview redacts it.\n");
+        if client.copies_key() && setup.key_file.is_some() {
+            out.push_str(&format!(
+                "{} stores the key in this file. --write reads the key file and sets permissions to 0600; the preview redacts it.\n",
+                client.display_name()
+            ));
         }
         out.push_str("Run again with --write to apply this configuration.\n");
         return Ok(out);
@@ -137,7 +160,7 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
     let updated = formats::merge(client, setup, original.as_deref())
         .map_err(|error| format!("{}: {error}", path.display()))?;
     if updated.is_none() {
-        if client == Client::Agy {
+        if client.copies_key() {
             files::restrict(&path)?;
         }
         return Ok(format!("Already configured: {}", path.display()));
@@ -149,8 +172,11 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
         files::replace(&path, original.as_deref(), &updated)?;
     }
     let mut out = format!("Configured: {}", path.display());
-    if client == Client::Agy && setup.key_file.is_some() {
-        out.push_str("\nAntigravity stores the key in this file; permissions are 0600.");
+    if client.copies_key() && setup.key_file.is_some() {
+        out.push_str(&format!(
+            "\n{} stores the key in this file; permissions are 0600.",
+            client.display_name()
+        ));
     }
     Ok(out)
 }

@@ -61,6 +61,7 @@ fn json_entry(
         "serverUrl",
         "headersHelper",
         "type",
+        "transport",
     ] {
         fields.remove(name);
     }
@@ -76,6 +77,17 @@ fn json_entry(
         }
         Client::Agy => {
             fields.insert("serverUrl".into(), setup.url.into());
+            if let Some(key) = key(setup, preview)? {
+                object(&mut headers)?
+                    .insert("Authorization".into(), format!("Bearer {key}").into());
+            }
+        }
+        Client::MuseCode => {
+            fields.insert("transport".into(), "streamable_http".into());
+            fields.insert("url".into(), setup.url.into());
+            // A required server that is down aborts every Muse run, so
+            // kkt's entry must never hold the run hostage.
+            fields.insert("mode".into(), "optional".into());
             if let Some(key) = key(setup, preview)? {
                 object(&mut headers)?
                     .insert("Authorization".into(), format!("Bearer {key}").into());
@@ -120,6 +132,14 @@ fn json_document(
         None => json!({}),
     };
     let original = document.clone();
+    if client == Client::MuseCode {
+        // Muse Code refuses the whole file without this, so a file we
+        // create or extend has to carry it. A version already there is
+        // left alone: Muse reports it if it cannot use it.
+        object(&mut document)?
+            .entry("schema_version")
+            .or_insert_with(|| json!(1));
+    }
     let group = if client == Client::OpenCode {
         "mcp"
     } else {

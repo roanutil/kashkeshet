@@ -55,6 +55,7 @@ fn previews_use_vendor_shapes_and_never_show_the_key() {
         (Client::Codex, "http_headers_helper"),
         (Client::Agy, "serverUrl"),
         (Client::OpenCode, "{file:"),
+        (Client::MuseCode, "streamable_http"),
     ] {
         let out = clients::configure(client, &setup, false).expect("preview");
         assert!(out.contains(required), "{out}");
@@ -189,6 +190,115 @@ fn json_clients_merge_without_losing_other_settings_and_back_up_once() {
 }
 
 #[test]
+fn muse_code_merge_keeps_other_settings_adds_schema_version_and_is_idempotent() {
+    let home = Home::new();
+    // No schema_version yet: Muse Code refuses the file without it.
+    let original = r#"{"model":"keep","mcpServers":{"other":{"url":"https://other"},"kkt":{"transport":"stdio","command":"old-kkt","headers":{"X-Custom":"keep","authorization":"stale"}}}}"#;
+    let file = home.put(".config/muse/settings.json", original);
+    let key = home.put("key", &format!("{KEY}\n"));
+    let env = home.env();
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: Some(&key),
+    };
+    let preview = clients::configure(Client::MuseCode, &setup, false).expect("preview");
+    assert!(preview.contains("Muse Code stores the key"), "{preview}");
+    assert!(!preview.contains(KEY), "preview exposed key");
+    let out = clients::configure(Client::MuseCode, &setup, true).expect("write");
+    assert!(out.contains("Muse Code stores the key"), "{out}");
+    assert!(!out.contains(KEY), "output exposed key");
+    let first = std::fs::read_to_string(&file).expect("config");
+    let parsed: serde_json::Value = serde_json::from_str(&first).expect("JSON");
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["model"], "keep");
+    assert_eq!(parsed["mcpServers"]["other"]["url"], "https://other");
+    let entry = &parsed["mcpServers"]["kkt"];
+    assert_eq!(entry["transport"], "streamable_http");
+    assert_eq!(entry["url"], "http://localhost:7420/mcp");
+    assert_eq!(entry["mode"], "optional");
+    assert_eq!(entry["headers"]["X-Custom"], "keep");
+    assert_eq!(entry["headers"]["Authorization"], format!("Bearer {KEY}"));
+    assert!(entry.get("command").is_none());
+    assert!(entry["headers"].get("authorization").is_none());
+    assert_eq!(
+        std::fs::read_to_string(home.0.join(".config/muse/settings.json.bak")).expect("backup"),
+        original
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&file).expect("mode").permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let again = clients::configure(Client::MuseCode, &setup, true).expect("again");
+    assert!(again.contains("Already configured"), "{again}");
+    assert_eq!(std::fs::read_to_string(&file).expect("config"), first);
+    assert!(!home.0.join(".config/muse/settings.json.bak.1").exists());
+}
+
+#[test]
+fn muse_code_config_follows_xdg_config_home() {
+    let home = Home::new();
+    let xdg = home.0.join("xdg-config");
+    let key = home.put("key", KEY);
+    let env = Env {
+        home: Some(home.0.clone()),
+        xdg_config_home: Some(xdg.clone()),
+        xdg_data_home: None,
+    };
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: Some(&key),
+    };
+    clients::configure(Client::MuseCode, &setup, true).expect("write");
+    assert!(xdg.join("muse/settings.json").exists());
+    assert!(!home.0.join(".config/muse/settings.json").exists());
+}
+
+#[test]
+fn muse_code_is_detected_by_program_or_settings_file() {
+    let home = Home::new();
+    let env = home.env();
+    let no_muse = |_: &str| false;
+    assert!(!Client::MuseCode.installed(&env, &no_muse));
+    let muse_on_path = |program: &str| program == "muse";
+    assert!(Client::MuseCode.installed(&env, &muse_on_path));
+    home.put(".config/muse/settings.json", "{}");
+    assert!(Client::MuseCode.installed(&env, &no_muse));
+}
+
+#[test]
+fn muse_code_without_a_key_writes_no_credentials() {
+    let home = Home::new();
+    let env = home.env();
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: None,
+    };
+    let preview = clients::configure(Client::MuseCode, &setup, false).expect("preview");
+    assert!(!preview.contains("stores the key"), "{preview}");
+    clients::configure(Client::MuseCode, &setup, true).expect("write");
+    let parsed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.0.join(".config/muse/settings.json")).expect("config"),
+    )
+    .expect("JSON");
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(
+        parsed["mcpServers"]["kkt"]["url"],
+        "http://localhost:7420/mcp"
+    );
+    assert!(parsed["mcpServers"]["kkt"].get("headers").is_none());
+}
+
+#[test]
 fn malformed_client_files_are_left_intact_and_errors_do_not_echo_secrets() {
     for (client, file, original) in [
         (
@@ -199,6 +309,11 @@ fn malformed_client_files_are_left_intact_and_errors_do_not_echo_secrets() {
         (
             Client::OpenCode,
             ".config/opencode/opencode.json",
+            "{\"secret\":\"0123456789abcdef0123456789abcdef",
+        ),
+        (
+            Client::MuseCode,
+            ".config/muse/settings.json",
             "{\"secret\":\"0123456789abcdef0123456789abcdef",
         ),
     ] {

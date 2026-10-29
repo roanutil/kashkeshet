@@ -172,11 +172,15 @@ pub const CLAUDE_CONFIG: &str = ".claude.json";
 pub const AGY_CONFIG: &str = ".gemini/config/mcp_config.json";
 pub const AGY_LEGACY_CONFIG: &str = ".gemini/antigravity/mcp_config.json";
 pub const OPENCODE_CONFIG: &str = ".config/opencode/opencode.json";
+/// Muse Code's user settings, under the config home (`$XDG_CONFIG_HOME`,
+/// or `~/.config`), so `~/.config/muse/settings.json` by default.
+pub const MUSE_CONFIG: &str = "muse/settings.json";
 /// The programs `kkt setup` looks for on PATH to tell which clients are
 /// installed.
 pub const CLAUDE_PROGRAM: &str = "claude";
 pub const CODEX_PROGRAM: &str = "codex";
 pub const OPENCODE_PROGRAM: &str = "opencode";
+pub const MUSE_PROGRAM: &str = "muse";
 pub const DOCTOR_TIMEOUT: Duration = Duration::from_secs(5);
 pub const DOCTOR_MAX_RESPONSE_BYTES: usize = 64 * 1024;
 pub const DOCTOR_PROTOCOL_VERSION: &str = "2026-07-28";

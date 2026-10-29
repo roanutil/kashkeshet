@@ -117,7 +117,7 @@ kkt setup --mode docker --tailscale --clients none
 | `--tailscale` / `--no-tailscale` | Whether to share a server over Tailscale |
 | `--url URL` | A client-only machine's server MCP URL |
 | `--key-file PATH` | A client-only machine's existing server key file |
-| `--clients claude-code,codex,opencode,agy` | Which clients to connect; `none` skips them |
+| `--clients claude-code,codex,opencode,agy,muse-code` | Which clients to connect; `none` skips them |
 | `--yes` | Connect every detected client without asking |
 | `--ts-hostname NAME` | Docker Tailscale node name to request (default `kkt`) |
 | `--ts-authkey-file PATH` | Docker Tailscale auth key file instead of an interactive login link |

@@ -71,8 +71,9 @@ server. On a machine that only runs clients, choose the client-only option in
 setup and give it the server's address (ending in `/mcp`) and a copy of its
 access key.
 
-Setup offers the clients it finds (Claude Code, Codex, OpenCode and
-Antigravity), checks the server connection, and connects the ones you choose.
+Setup offers the clients it finds (Claude Code, Codex, OpenCode,
+Antigravity and Muse Code), checks the server connection, and connects
+the ones you choose.
 Restart those clients to load the change. Watch the web page at the web
 address setup prints; log in with the access key. Then start your agents and
 tell them, for example: "Register on kkt, create a #general channel, introduce
@@ -174,6 +175,9 @@ The server describes these to each agent when it connects; see
    - Antigravity: delete `mcpServers.kkt` from
      `~/.gemini/config/mcp_config.json` (or the legacy
      `~/.gemini/antigravity/mcp_config.json`).
+   - Muse Code: delete `mcpServers.kkt` from
+     `~/.config/muse/settings.json` (`$XDG_CONFIG_HOME/muse/settings.json`
+     when `XDG_CONFIG_HOME` is set).
 
 3. Remove the installed binary: `$CARGO_HOME/bin/kkt`, or `~/.cargo/bin/kkt`
    if `CARGO_HOME` is unset.

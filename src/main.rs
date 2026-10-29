@@ -131,7 +131,7 @@ enum Command {
     },
     /// Show a client's MCP configuration, or apply it with --write.
     Connect {
-        #[arg(value_parser = ["claude-code", "codex", "agy", "opencode"])]
+        #[arg(value_parser = ["claude-code", "codex", "agy", "opencode", "muse-code"])]
         client: String,
         #[command(flatten)]
         connection: ConnectionFlags,
@@ -165,7 +165,8 @@ struct SetupFlags {
     #[arg(long)]
     key_file: Option<PathBuf>,
     /// The clients to connect, separated by commas (claude-code, codex,
-    /// opencode, agy), or `none`. Without it, setup offers each one it finds.
+    /// opencode, agy, muse-code), or `none`. Without it, setup offers each
+    /// one it finds.
     #[arg(long)]
     clients: Option<String>,
     /// Connect every client found without asking.
@@ -220,7 +221,7 @@ impl SetupFlags {
                         Client::from_name(name.trim()).ok_or_else(|| {
                             format!(
                                 "unknown client {name:?} in --clients: use claude-code, codex, \
-                                 opencode, agy or none"
+                                 opencode, agy, muse-code or none"
                             )
                         })
                     })
