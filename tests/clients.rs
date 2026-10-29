@@ -396,13 +396,13 @@ fn claude_profile_path_does_not_require_home() {
 
 #[cfg(unix)]
 #[test]
-fn claude_reports_a_profile_directory_it_cannot_resolve() {
+fn claude_reports_a_selected_profile_directory_it_cannot_resolve() {
     let home = Home::new();
-    let file = home.put(".claude.json", "{}");
     let looped = home.0.join("loop");
     std::os::unix::fs::symlink(&looped, &looped).expect("symlink loop");
     let mut env = home.env();
     env.claude_config_dir = Some(looped.join("profile"));
+    let file = Client::ClaudeCode.file(&env).expect("profile path");
     let setup = Setup {
         env: &env,
         url: "http://localhost:7420/mcp",
@@ -412,8 +412,34 @@ fn claude_reports_a_profile_directory_it_cannot_resolve() {
     };
     let error = clients::configure(Client::ClaudeCode, &setup, false)
         .expect_err("unresolvable profile directory");
+    assert!(error.contains(&file.display().to_string()), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_explicit_config_ignores_an_inherited_profile_it_cannot_resolve() {
+    let home = Home::new();
+    let file = home.put("work/.claude.json", "{}");
+    let not_a_directory = home.put("plain-file", "");
+    let mut env = home.env();
+    env.claude_config_dir = Some(not_a_directory.join("profile"));
+    env.home = Some(not_a_directory.join("home"));
+    let setup = Setup {
+        env: &env,
+        url: "http://localhost:7420/mcp",
+        executable: Path::new("/opt/kkt"),
+        key_file: None,
+        client_config: &file,
+    };
+    let preview =
+        clients::configure(Client::ClaudeCode, &setup, false).expect("explicit config preview");
+    let dir = file
+        .parent()
+        .expect("parent")
+        .canonicalize()
+        .expect("profile directory");
     assert!(
-        error.contains("could not resolve client config path"),
-        "{error}"
+        preview.contains(&format!("CLAUDE_CONFIG_DIR='{}'", dir.display())),
+        "{preview}"
     );
 }

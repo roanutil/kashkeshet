@@ -512,7 +512,6 @@ async fn doctor_cli_reports_typed_service_state_without_real_manager_commands() 
 #[cfg(unix)]
 #[test]
 fn claude_profile_selection_controls_preview_write_backup_and_rollback() {
-    use std::os::unix::fs::PermissionsExt;
     for (explicit, fail) in [(false, false), (true, false), (false, true), (true, true)] {
         let home = Home::new();
         let untouched = r#"{"mcpServers":{"kkt":{"url":"home"}}}"#;
@@ -521,35 +520,14 @@ fn claude_profile_selection_controls_preview_write_backup_and_rollback() {
         let profile = home.put("profile/.claude.json", original);
         let other = home.put("other/.claude.json", original);
         let selected = if explicit { &other } else { &profile };
-        let script = home.put(
-            "bin/claude",
-            r#"#!/usr/bin/env python3
-import json, os, pathlib, sys
-file = pathlib.Path(os.environ.get('CLAUDE_CONFIG_DIR') or os.environ['HOME']) / '.claude.json'
-doc = json.loads(file.read_text()) if file.exists() else {}
-servers = doc.setdefault('mcpServers', {})
-if sys.argv[2] == 'remove': servers.pop('kkt', None)
-else: servers['kkt'] = json.loads(sys.argv[-1])
-file.write_text(json.dumps(doc))
-if sys.argv[2] == 'add-json' and os.environ.get('KKT_TEST_FAIL_ADD') == '1': sys.exit(9)
-"#,
-        );
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
-            .expect("executable");
+        let path = profile_claude(&home);
         let run = |write| {
             let mut command = home.command();
             command
                 .args(["connect", "claude-code"])
                 .env("CLAUDE_CONFIG_DIR", "profile")
-                .env(
-                    "PATH",
-                    format!(
-                        "{}:{}",
-                        home.0.join("bin").display(),
-                        std::env::var("PATH").expect("PATH")
-                    ),
-                )
-                .env("KKT_TEST_FAIL_ADD", if fail { "1" } else { "0" });
+                .env("PATH", &path)
+                .env("KKT_TEST_FAIL_ADD", if fail { "after" } else { "" });
             if explicit {
                 command.arg("--client-config").arg(&other);
             }
@@ -612,7 +590,6 @@ if sys.argv[2] == 'add-json' and os.environ.get('KKT_TEST_FAIL_ADD') == '1': sys
 #[cfg(unix)]
 #[test]
 fn claude_preview_command_writes_the_selected_profile() {
-    use std::os::unix::fs::PermissionsExt;
     for (name, inherited) in [
         ("profile with ' quote/.claude.json", None),
         ("profile with ' quote/.claude.json", Some("other")),
@@ -621,17 +598,7 @@ fn claude_preview_command_writes_the_selected_profile() {
     ] {
         let home = Home::new();
         let profile = home.0.join(name);
-        let script = home.put(
-            "bin/claude",
-            r#"#!/usr/bin/env python3
-import json, os, pathlib, sys
-file = pathlib.Path(os.environ.get('CLAUDE_CONFIG_DIR') or os.environ['HOME']) / '.claude.json'
-file.parent.mkdir(parents=True, exist_ok=True)
-file.write_text(json.dumps({'mcpServers': {'kkt': json.loads(sys.argv[-1])}}))
-"#,
-        );
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
-            .expect("executable");
+        let path = profile_claude(&home);
         let mut command = home.command();
         command
             .args(["connect", "claude-code", "--client-config"])
@@ -652,14 +619,7 @@ file.write_text(json.dumps({'mcpServers': {'kkt': json.loads(sys.argv[-1])}}))
             .args(["-c", shell_command])
             .env("HOME", &home.0)
             .env_remove("CLAUDE_CONFIG_DIR")
-            .env(
-                "PATH",
-                format!(
-                    "{}:{}",
-                    home.0.join("bin").display(),
-                    std::env::var("PATH").expect("PATH")
-                ),
-            )
+            .env("PATH", &path)
             .current_dir(&home.0);
         if let Some(dir) = inherited {
             shell.env("CLAUDE_CONFIG_DIR", dir);
@@ -977,4 +937,32 @@ fn claude_default_config_preserves_settings_roots_through_a_symlinked_home() {
         };
         assert!(!unexpected_backup.exists());
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_explicit_config_wins_over_an_inherited_profile_it_cannot_resolve() {
+    let home = Home::new();
+    let path = profile_claude(&home);
+    let not_a_directory = home.put("plain-file", "");
+    let file = home.put("work/.claude.json", r#"{"theme":"keep"}"#);
+    for write in [false, true] {
+        let mut command = home.command();
+        command
+            .args(["connect", "claude-code", "--client-config"])
+            .arg(&file)
+            .env("CLAUDE_CONFIG_DIR", not_a_directory.join("profile"))
+            .env("PATH", &path);
+        if write {
+            command.arg("--write");
+        }
+        let output = command.output().expect("kkt");
+        assert!(output.status.success(), "{}", text(&output));
+    }
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).expect("written config"))
+            .expect("JSON");
+    assert_eq!(doc["theme"], "keep");
+    assert_eq!(doc["mcpServers"]["kkt"]["url"], "http://127.0.0.1:7420/mcp");
+    assert!(!home.0.join(".claude.json").exists());
 }

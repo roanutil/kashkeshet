@@ -19,8 +19,8 @@ override, connect uses the same key as serve and creates a missing default
 key with mode 0600. A config with `no_access_key = true` adds no credentials.
 For every client, `--client-config PATH` takes precedence over the default
 destination in the table below. kkt does not point the client at that
-file: Codex reads only `$CODEX_HOME/config.toml`, and OpenCode reads another
-file only when `OPENCODE_CONFIG` names it.
+file; the client must be set up to read it, for example with `CODEX_HOME`
+for Codex or `OPENCODE_CONFIG` for OpenCode.
 
 Writes preserve other servers and settings. Changed files are backed up as
 `.bak`, then `.bak.1`, and so on; an existing backup is never overwritten.

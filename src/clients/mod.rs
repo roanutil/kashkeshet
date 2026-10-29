@@ -132,14 +132,13 @@ pub(super) fn claude_config_dir(setup: &Setup<'_>) -> Result<Option<PathBuf>, St
             .parent()
             .ok_or("client config path has no parent")?,
     )?;
-    if let Some(dir) = &setup.env.claude_config_dir
-        && directory(dir)? == selected
-    {
+    // Only the selected directory must resolve: an inherited profile or HOME
+    // that cannot be resolved is not the selected one.
+    let selects = |path: &PathBuf| directory(path).is_ok_and(|dir| dir == selected);
+    if setup.env.claude_config_dir.as_ref().is_some_and(selects) {
         return Ok(Some(selected));
     }
-    if let Some(home) = &setup.env.home
-        && directory(home)? == selected
-    {
+    if setup.env.home.as_ref().is_some_and(selects) {
         return Ok(None);
     }
     Ok(Some(selected))
@@ -172,10 +171,11 @@ pub fn header(key: &str, json: bool) -> Result<String, String> {
 /// Antigravity; --write reads it directly from the key file instead.
 pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<String, String> {
     if client == Client::ClaudeCode
-        && setup.client_config.file_name() != Some(std::ffi::OsStr::new(".claude.json"))
+        && setup.client_config.file_name() != Some(std::ffi::OsStr::new(config::CLAUDE_CONFIG))
     {
         return Err(format!(
-            "Claude Code config must be named .claude.json: {}",
+            "Claude Code config must be named {}: {}",
+            config::CLAUDE_CONFIG,
             setup.client_config.display()
         ));
     }
