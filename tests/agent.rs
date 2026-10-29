@@ -11,12 +11,15 @@ use rmcp::model::CallToolRequestParams;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 const KKT: &str = env!("CARGO_BIN_EXE_kkt");
 const TIMEOUT: Duration = Duration::from_secs(20);
+
+static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("kashkeshet-agent-{name}-{}", std::process::id()));
@@ -66,7 +69,10 @@ async fn kkt_agent(args: &[&str]) -> Output {
     let run = Command::new(KKT)
         .arg("agent")
         .args(args)
-        .own_home(std::env::temp_dir())
+        .own_home(temp_dir(&format!(
+            "home-{}",
+            NEXT_HOME.fetch_add(1, Ordering::Relaxed)
+        )))
         .kill_on_drop(true)
         .output();
     tokio::time::timeout(TIMEOUT, run)

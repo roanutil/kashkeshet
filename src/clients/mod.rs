@@ -23,6 +23,9 @@ pub struct Setup<'a> {
     pub executable: &'a Path,
     pub key_file: Option<&'a Path>,
     pub client_config: &'a Path,
+    /// Where `client_config` came from, for errors: `--client-config`, or
+    /// what [`Client::source`] names.
+    pub source: &'a str,
 }
 
 impl Client {
@@ -68,6 +71,33 @@ impl Client {
             Client::Agy => None,
         };
         program.is_some_and(on_path) || self.file(env).is_ok_and(|path| path.exists())
+    }
+
+    /// The setting that chose [`Client::file`]: the client's own variable
+    /// when it is set, otherwise HOME.
+    pub fn source(self, env: &Env) -> &'static str {
+        match self {
+            Self::ClaudeCode if env.claude_config_dir.is_some() => "CLAUDE_CONFIG_DIR",
+            Self::Codex if env.codex_home.is_some() => "CODEX_HOME",
+            Self::OpenCode
+                if env
+                    .xdg_config_home
+                    .as_ref()
+                    .is_some_and(|p| p.is_absolute()) =>
+            {
+                "XDG_CONFIG_HOME"
+            }
+            _ => "HOME",
+        }
+    }
+
+    /// The file name the client requires, when it reads only that name.
+    fn required_name(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => Some(config::CLAUDE_CONFIG),
+            Self::Codex => Some(config::CODEX_CONFIG),
+            Self::Agy | Self::OpenCode => None,
+        }
     }
 
     /// The config file the client reads by default, following the client's
@@ -132,11 +162,11 @@ pub(super) fn claude_config_dir(setup: &Setup<'_>) -> Result<Option<PathBuf>, St
             Err(e) => Err(e),
         }
     };
-    // The config path comes from --client-config, CLAUDE_CONFIG_DIR or HOME.
     let unresolved = |problem: String| {
         format!(
-            "could not resolve the directory of the Claude Code config {} (from --client-config, CLAUDE_CONFIG_DIR or HOME): {problem}",
-            setup.client_config.display()
+            "could not resolve the directory of the Claude Code config {} (from {}): {problem}",
+            setup.client_config.display(),
+            setup.source
         )
     };
     let parent = setup
@@ -182,13 +212,14 @@ pub fn header(key: &str, json: bool) -> Result<String, String> {
 /// Print a plan or apply one change. A plan never contains the key, even for
 /// Antigravity; --write reads it directly from the key file instead.
 pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<String, String> {
-    if client == Client::ClaudeCode
-        && setup.client_config.file_name() != Some(std::ffi::OsStr::new(config::CLAUDE_CONFIG))
+    if let Some(name) = client.required_name()
+        && setup.client_config.file_name() != Some(std::ffi::OsStr::new(name))
     {
         return Err(format!(
-            "Claude Code config must be named {}: {}",
-            config::CLAUDE_CONFIG,
-            setup.client_config.display()
+            "{} config must be named {name}: {} (from {})",
+            client.display_name(),
+            setup.client_config.display(),
+            setup.source
         ));
     }
     let claude_config_dir = match client {
@@ -205,8 +236,13 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
         out.push_str("Run again with --write to apply this configuration.\n");
         return Ok(out);
     }
-    let updated = formats::merge(client, setup, original.as_deref())
-        .map_err(|error| format!("{}: {error}", setup.client_config.display()))?;
+    let updated = formats::merge(client, setup, original.as_deref()).map_err(|error| {
+        format!(
+            "{} (from {}): {error}",
+            setup.client_config.display(),
+            setup.source
+        )
+    })?;
     if updated.is_none() {
         if client == Client::Agy {
             files::restrict(setup.client_config)?;
@@ -218,8 +254,15 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
     }
     let updated = updated.ok_or("missing merged client configuration")?;
     if client == Client::ClaudeCode {
+        let absolute = std::path::absolute(setup.client_config).map_err(|e| {
+            format!(
+                "could not resolve the Claude Code config {} (from {}): {e}",
+                setup.client_config.display(),
+                setup.source
+            )
+        })?;
         files::apply_claude(
-            setup.client_config,
+            &absolute,
             original.as_deref(),
             &updated,
             claude_config_dir.as_deref(),

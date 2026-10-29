@@ -20,7 +20,9 @@ key with mode 0600. A config with `no_access_key = true` adds no credentials.
 For every client, `--client-config PATH` takes precedence over the default
 destination in the table below. kkt does not point the client at that
 file; the client must be set up to read it, for example with `CODEX_HOME`
-for Codex or `OPENCODE_CONFIG` for OpenCode.
+for Codex or `OPENCODE_CONFIG` for OpenCode. Codex reads only a file named
+`config.toml` in `$CODEX_HOME`, so connect refuses any other name for Codex,
+as it does any name but `.claude.json` for Claude Code.
 
 Writes preserve other servers and settings. Changed files are backed up as
 `.bak`, then `.bak.1`, and so on; an existing backup is never overwritten.
@@ -34,7 +36,7 @@ config through its CLI; kkt backs it up before invoking that CLI.
 | Claude Code | `$CLAUDE_CONFIG_DIR/.claude.json` when set, otherwise `~/.claude.json`; user scope | `headersHelper` calls this `kkt` executable with the absolute key path. `claude` must be on PATH for `--write`. |
 | Codex | `$CODEX_HOME/config.toml` when set, otherwise `~/.codex/config.toml` | `http_headers_helper` calls `kkt`; existing TOML comments are retained. |
 | Antigravity (`agy`) | `~/.gemini/config/mcp_config.json` | Copies the key into `headers`. An existing legacy `~/.gemini/antigravity/mcp_config.json` is used instead if the newer path is absent. |
-| OpenCode | `$XDG_CONFIG_HOME/opencode/opencode.json` when set, otherwise `~/.config/opencode/opencode.json` | `Authorization` uses `{file:<absolute key path>}`; OpenCode trims surrounding whitespace. OAuth is disabled for this static key. |
+| OpenCode | `$XDG_CONFIG_HOME/opencode/opencode.json` when set to an absolute path, otherwise `~/.config/opencode/opencode.json` | `Authorization` uses `{file:<absolute key path>}`; OpenCode trims surrounding whitespace. OAuth is disabled for this static key. |
 
 To connect several Claude Code profiles, run connect once per profile with
 `--client-config /path/to/profile/.claude.json`. Claude Code requires the

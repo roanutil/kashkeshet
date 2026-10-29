@@ -274,6 +274,7 @@ mod tests {
             executable: Path::new("/opt/kkt"),
             key_file: None,
             client_config: &file,
+            source: "--client-config",
         };
         assert_eq!(
             preview(Client::ClaudeCode, &setup, Some(&dir)).expect_err("non-UTF-8 directory"),

@@ -581,9 +581,9 @@ fn connect(
     let client = Client::from_name(client).ok_or("unknown client")?;
     let connection = client_connection(env, flags, true)?;
     let executable = kkt_path()?;
-    let client_config = match client_config {
-        Some(path) => path,
-        None => client.file(env)?,
+    let (client_config, source) = match client_config {
+        Some(path) => (path, "--client-config"),
+        None => (client.file(env)?, client.source(env)),
     };
     let setup = Setup {
         env,
@@ -591,6 +591,7 @@ fn connect(
         executable: &executable,
         key_file: connection.key_file.as_deref(),
         client_config: &client_config,
+        source,
     };
     println!("{}", clients::configure(client, &setup, write)?);
     Ok(())
@@ -1227,6 +1228,7 @@ impl setup::Steps for OsSteps<'_> {
             executable: &executable,
             key_file: record.key_file.as_deref(),
             client_config: &client_config,
+            source: client.source(self.env),
         };
         clients::configure(client, &setup, true)
     }

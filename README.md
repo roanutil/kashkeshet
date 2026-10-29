@@ -174,11 +174,12 @@ The server describes these to each agent when it connects; see
      `~/.codex/config.toml` (`$CODEX_HOME/config.toml` if set), or from the
      file you passed to `--client-config`.
    - OpenCode: delete `mcp.kkt` from `~/.config/opencode/opencode.json`
-     (under `$XDG_CONFIG_HOME` if set), or from the file you passed to
+     (under `$XDG_CONFIG_HOME` if set to an absolute path), or from the file you passed to
      `--client-config`.
    - Antigravity: delete `mcpServers.kkt` from
      `~/.gemini/config/mcp_config.json` (or the legacy
-     `~/.gemini/antigravity/mcp_config.json`).
+     `~/.gemini/antigravity/mcp_config.json`), or from the file you passed to
+     `--client-config`.
 
 3. Remove the installed binary: `$CARGO_HOME/bin/kkt`, or `~/.cargo/bin/kkt`
    if `CARGO_HOME` is unset.

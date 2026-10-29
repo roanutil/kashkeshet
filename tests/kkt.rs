@@ -32,7 +32,13 @@ async fn version_names_the_app_and_matches_the_package_version() {
 
 #[tokio::test]
 async fn kkt_alone_prints_help() {
-    let out = Command::new(KKT).output().await.expect("run kkt");
+    let home = std::env::temp_dir().join(format!("kkt-alone-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("home");
+    let out = Command::new(KKT)
+        .own_home(&home)
+        .output()
+        .await
+        .expect("run kkt");
     assert!(!out.status.success());
     let text = format!(
         "{}{}",

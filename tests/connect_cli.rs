@@ -92,15 +92,29 @@ if failure == 'after':
 
 #[test]
 fn client_config_overrides_select_file_client_previews_writes_and_backups() {
-    for (client, default, group, url_field) in [
-        ("codex", ".codex/config.toml", "mcp_servers", "url"),
+    // Codex reads only a file named config.toml; the others take any name.
+    for (client, default, name, group, url_field) in [
+        (
+            "codex",
+            ".codex/config.toml",
+            "config.toml",
+            "mcp_servers",
+            "url",
+        ),
         (
             "agy",
             ".gemini/config/mcp_config.json",
+            "client.conf",
             "mcpServers",
             "serverUrl",
         ),
-        ("opencode", ".config/opencode/opencode.json", "mcp", "url"),
+        (
+            "opencode",
+            ".config/opencode/opencode.json",
+            "client.conf",
+            "mcp",
+            "url",
+        ),
     ] {
         for (relative, existing, has_home) in [
             (true, true, true),
@@ -112,9 +126,9 @@ fn client_config_overrides_select_file_client_previews_writes_and_backups() {
             let untouched = "default config must not be read or modified";
             let default_file = home.put(default, untouched);
             let key = home.put("key", KEY);
-            let file = home.0.join("custom profile/client.conf");
+            let file = home.0.join("custom profile").join(name);
             let selected = if relative {
-                PathBuf::from("custom profile/client.conf")
+                PathBuf::from("custom profile").join(name)
             } else {
                 file.clone()
             };
@@ -126,7 +140,7 @@ fn client_config_overrides_select_file_client_previews_writes_and_backups() {
                     .to_string()
             };
             if existing {
-                home.put("custom profile/client.conf", &original);
+                home.put(&format!("custom profile/{name}"), &original);
             }
             let run = |write| {
                 let mut command = home.command();
@@ -144,7 +158,7 @@ fn client_config_overrides_select_file_client_previews_writes_and_backups() {
                 }
                 command.output().expect("kkt")
             };
-            let backup = file.with_file_name("client.conf.bak");
+            let backup = file.with_file_name(format!("{name}.bak"));
             let preview = run(false);
             assert!(preview.status.success(), "{client}: {}", text(&preview));
             assert!(text(&preview).contains(&format!("Config: {}", selected.display())));
@@ -194,7 +208,7 @@ fn client_config_overrides_select_file_client_previews_writes_and_backups() {
             assert!(again.status.success(), "{client}: {}", text(&again));
             assert!(text(&again).contains("Already configured"));
             assert_eq!(std::fs::read_to_string(&file).expect("unchanged"), contents);
-            assert!(!file.with_file_name("client.conf.bak.1").exists());
+            assert!(!file.with_file_name(format!("{name}.bak.1")).exists());
             assert_eq!(
                 std::fs::read_to_string(&default_file).expect("default"),
                 untouched

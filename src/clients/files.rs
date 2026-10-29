@@ -115,25 +115,19 @@ fn claude(args: &[&str], config_dir: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 
+/// Apply a Claude Code change through its CLI. `client_config` is absolute.
 pub(super) fn apply_claude(
-    path: &Path,
+    client_config: &Path,
     original: Option<&str>,
     updated: &str,
     config_dir: Option<&Path>,
 ) -> Result<(), String> {
-    let client_config = std::path::absolute(path)
-        .map_err(|e| {
-            format!(
-                "could not resolve the Claude Code config path {} (from --client-config, CLAUDE_CONFIG_DIR or HOME): {e}",
-                path.display()
-            )
-        })?;
     let entry = super::formats::claude_entry(updated)?;
     let replacing = match original {
         Some(text) => super::formats::has_claude_entry(text)?,
         None => false,
     };
-    backup(&client_config, original)?;
+    backup(client_config, original)?;
 
     let applied = (|| {
         if replacing {
@@ -146,8 +140,8 @@ pub(super) fn apply_claude(
     })();
     if let Err(error) = applied {
         match original {
-            Some(text) => atomic(&client_config, text)?,
-            None if client_config.exists() => fs::remove_file(&client_config).map_err(|e| {
+            Some(text) => atomic(client_config, text)?,
+            None if client_config.exists() => fs::remove_file(client_config).map_err(|e| {
                 format!(
                     "{error}; could not restore {}: {e}",
                     client_config.display()
