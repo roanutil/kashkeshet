@@ -273,7 +273,7 @@ fn legacy_antigravity_path_is_used_when_it_is_the_existing_file() {
         executable: Path::new("/opt/kkt"),
         key_file: None,
         client_config: &client_config,
-        source: "--client-config",
+        source: Client::Agy.source(&env),
     };
     clients::configure(Client::Agy, &setup, true).expect("write");
     assert!(
@@ -430,6 +430,24 @@ fn codex_and_opencode_follow_their_own_variables() {
 }
 
 #[test]
+fn the_source_names_the_setting_that_chose_the_default_file() {
+    let home = Home::new();
+    let mut env = home.env();
+    for client in Client::ALL {
+        assert_eq!(client.source(&env), "HOME", "{client:?}");
+    }
+    env.claude_config_dir = Some(PathBuf::from("/profiles/claude"));
+    env.codex_home = Some(PathBuf::from("/profiles/codex"));
+    env.xdg_config_home = Some(PathBuf::from("relative"));
+    assert_eq!(Client::ClaudeCode.source(&env), "CLAUDE_CONFIG_DIR");
+    assert_eq!(Client::Codex.source(&env), "CODEX_HOME");
+    assert_eq!(Client::OpenCode.source(&env), "HOME");
+    env.xdg_config_home = Some(PathBuf::from("/profiles/xdg"));
+    assert_eq!(Client::OpenCode.source(&env), "XDG_CONFIG_HOME");
+    assert_eq!(Client::Agy.source(&env), "HOME");
+}
+
+#[test]
 fn opencode_ignores_a_relative_xdg_config_home() {
     let home = Home::new();
     let mut env = home.env();
@@ -455,11 +473,12 @@ fn claude_reports_a_selected_profile_directory_it_cannot_resolve() {
         executable: Path::new("/opt/kkt"),
         key_file: None,
         client_config: &file,
-        source: "--client-config",
+        source: Client::ClaudeCode.source(&env),
     };
     let error = clients::configure(Client::ClaudeCode, &setup, false)
         .expect_err("unresolvable profile directory");
     assert!(error.contains(&file.display().to_string()), "{error}");
+    assert!(error.contains("(from CLAUDE_CONFIG_DIR)"), "{error}");
 }
 
 #[cfg(unix)]

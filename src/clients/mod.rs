@@ -226,7 +226,9 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
         Client::ClaudeCode => claude_config_dir(setup)?,
         _ => None,
     };
-    let original = files::read(setup.client_config)?;
+    // File errors name the setting that chose the path.
+    let from = |error: String| format!("{error} (from {})", setup.source);
+    let original = files::read(setup.client_config).map_err(from)?;
     if !write {
         let entry = formats::preview(client, setup, claude_config_dir.as_deref())?;
         let mut out = format!("Config: {}\n{entry}\n", setup.client_config.display());
@@ -245,7 +247,7 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
     })?;
     if updated.is_none() {
         if client == Client::Agy {
-            files::restrict(setup.client_config)?;
+            files::restrict(setup.client_config).map_err(from)?;
         }
         return Ok(format!(
             "Already configured: {}",
@@ -266,9 +268,10 @@ pub fn configure(client: Client, setup: &Setup<'_>, write: bool) -> Result<Strin
             original.as_deref(),
             &updated,
             claude_config_dir.as_deref(),
+            setup.source,
         )?;
     } else {
-        files::replace(setup.client_config, original.as_deref(), &updated)?;
+        files::replace(setup.client_config, original.as_deref(), &updated).map_err(from)?;
     }
     let mut out = format!("Configured: {}", setup.client_config.display());
     if client == Client::Agy && setup.key_file.is_some() {

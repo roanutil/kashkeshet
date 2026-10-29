@@ -262,6 +262,31 @@ fn connect_writes_where_codex_home_and_xdg_config_home_point() {
 }
 
 #[test]
+fn file_errors_name_the_variable_that_chose_the_path() {
+    let home = Home::new();
+    let codex_home = home.0.join("codex-profile");
+    let xdg = home.0.join("xdg");
+    // A directory where the config file should be cannot be read.
+    std::fs::create_dir_all(codex_home.join("config.toml")).expect("codex dir");
+    std::fs::create_dir_all(xdg.join("opencode/opencode.json")).expect("opencode dir");
+    for (client, variable) in [("codex", "CODEX_HOME"), ("opencode", "XDG_CONFIG_HOME")] {
+        let out = home
+            .command()
+            .args(["connect", client])
+            .env("CODEX_HOME", &codex_home)
+            .env("XDG_CONFIG_HOME", &xdg)
+            .output()
+            .expect("run kkt");
+        assert!(!out.status.success(), "{client}: {}", text(&out));
+        assert!(
+            text(&out).contains(&format!("(from {variable})")),
+            "{client}: {}",
+            text(&out)
+        );
+    }
+}
+
+#[test]
 fn connecting_creates_the_default_key_but_preview_does_not_write_client_config() {
     let home = Home::new();
     let out = home.run(&["connect", "codex"]);

@@ -115,19 +115,22 @@ fn claude(args: &[&str], config_dir: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 
-/// Apply a Claude Code change through its CLI. `client_config` is absolute.
+/// Apply a Claude Code change through its CLI. `client_config` is absolute;
+/// `source` is the setting that chose it, named in file errors.
 pub(super) fn apply_claude(
     client_config: &Path,
     original: Option<&str>,
     updated: &str,
     config_dir: Option<&Path>,
+    source: &str,
 ) -> Result<(), String> {
+    let from = |error: String| format!("{error} (from {source})");
     let entry = super::formats::claude_entry(updated)?;
     let replacing = match original {
         Some(text) => super::formats::has_claude_entry(text)?,
         None => false,
     };
-    backup(client_config, original)?;
+    backup(client_config, original).map_err(from)?;
 
     let applied = (|| {
         if replacing {
@@ -140,12 +143,12 @@ pub(super) fn apply_claude(
     })();
     if let Err(error) = applied {
         match original {
-            Some(text) => atomic(client_config, text)?,
+            Some(text) => atomic(client_config, text).map_err(from)?,
             None if client_config.exists() => fs::remove_file(client_config).map_err(|e| {
-                format!(
+                from(format!(
                     "{error}; could not restore {}: {e}",
                     client_config.display()
-                )
+                ))
             })?,
             None => (),
         }
