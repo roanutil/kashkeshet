@@ -577,6 +577,11 @@ fn backup_failures_name_the_variable_that_chose_the_path() {
         writable(&profile);
         assert!(!out.status.success(), "{client}: {}", text(&out));
         assert!(
+            text(&out).contains("could not back up"),
+            "{client}: {}",
+            text(&out)
+        );
+        assert!(
             text(&out).contains(&format!("(from {variable})")),
             "{client}: {}",
             text(&out)
